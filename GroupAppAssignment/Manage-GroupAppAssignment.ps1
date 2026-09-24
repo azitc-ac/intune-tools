@@ -1,37 +1,44 @@
 ﻿<#
 .SYNOPSIS
-    Intune app assignments seen from a group: which apps are assigned to the group, in which
-    mode - and add, change or remove those assignments.
+    Intune assignments seen from a group: which apps, configuration profiles, compliance policies
+    and app configuration policies are assigned to the group, in which mode - and add, change or
+    remove those assignments.
 
 .DESCRIPTION
-    Pick an Entra ID group (or All Users / All Devices). The left list shows every Intune app
-    that is NOT assigned to that target, the right grid every app that IS assigned, with its
-    intent (Required / Available / Uninstall / Available without enrollment), whether it is
-    an exclusion and its assignment filter. Arrow buttons move apps across, the mode can be
-    changed in the grid; Save writes the difference to Intune and reads the result back.
+    Pick an Entra ID group (or All Users / All Devices) and a category on the left. The middle list
+    shows every object of that category that is NOT assigned to the target, the grid on the right
+    every object that IS assigned: for apps with their intent (Required / Available / Uninstall /
+    Available without enrollment), for all objects whether it is an exclusion and the assignment
+    filter. Buttons move objects across, mode and exclusion can be changed in the grid; Save writes
+    the difference to Intune and reads the result back.
 
-    Only the assignment for the chosen target is touched; every other assignment of an app
-    stays as it is. Needs the Microsoft.Graph.Authentication module (Connect-MgGraph /
-    Invoke-MgGraphRequest), Windows PowerShell 5.1 or later.
+    Only the assignment for the chosen target is touched; every other assignment of an object stays
+    as it is. Apps need DeviceManagementApps.ReadWrite.All; the other categories additionally
+    DeviceManagementConfiguration.ReadWrite.All, requested only when such a category is opened.
+    Needs the Microsoft.Graph.Authentication module, Windows PowerShell 5.1 or later.
 
 .PARAMETER GroupId
     Group object ID to open directly, or 'AllUsers' / 'AllDevices'.
 .PARAMETER TenantId
     Tenant for Connect-MgGraph (optional).
+.PARAMETER Platform
+    Show only objects for this platform: iOS (default), macOS, Android, Windows or All.
+    Objects without a platform (web apps, policy sets, ...) are always shown. Also a list in the window.
 .PARAMETER VppDeviceLicensing
     License type for NEW assignments of Apple VPP apps (iosVppApp / macOsVppApp):
     $true = device licensing (default), $false = user licensing. Also a checkbox in the window.
 .PARAMETER LoadFilterNames
     Show the names of assignment filters instead of their IDs. Needs the additional delegated
-    permission DeviceManagementConfiguration.Read.All (a consent prompt, once). Off by default,
-    so the tool asks for no more than DeviceManagementApps.ReadWrite.All and Group.Read.All.
-    Also a checkbox in the window.
+    permission DeviceManagementConfiguration.Read.All (a consent prompt, once) unless a category
+    beyond apps is open anyway. Also a checkbox in the window.
 .PARAMETER Language
     auto (UI culture) | de | en
 #>
 param(
     [string]$GroupId            = "",
     [string]$TenantId           = "",
+    [ValidateSet('iOS','macOS','Android','Windows','All')]
+    [string]$Platform           = 'iOS',
     [bool]  $VppDeviceLicensing = $true,
     [switch]$LoadFilterNames,
     [ValidateSet('auto','de','en')]
@@ -41,8 +48,8 @@ param(
 #region Localization
 $strings = @{
     de = @{
-        FormTitle          = 'App-Zuweisungen der Gruppe: {0}'
-        FormTitleNoGroup   = 'App-Zuweisungen einer Gruppe verwalten'
+        FormTitle          = 'Zuweisungen der Gruppe: {0}'
+        FormTitleNoGroup   = 'Intune-Zuweisungen einer Gruppe verwalten'
         BtnConnect         = 'Verbinden'
         BtnReconnect       = 'Neu verbinden'
         NotConnected       = '(nicht verbunden)'
@@ -51,20 +58,33 @@ $strings = @{
         NoGroupSelected    = '(kein Ziel gewählt)'
         BtnLoad            = 'Laden'
         LblSearch          = 'Suche:'
-        LblType            = 'App-Typ:'
+        LblType            = 'Typ:'
+        LblPlatform        = 'Plattform:'
         AllTypes           = '(alle Typen)'
+        PlatformAll        = 'Alle'
         ChkVpp             = 'VPP neu: Gerätelizenz'
         ChkFilterNames     = 'Filternamen laden'
         FilterNamesFailed  = "Filternamen konnten nicht geladen werden (Berechtigung DeviceManagementConfiguration.Read.All):`n{0}"
+        HdrCategory        = 'Kategorie'
         HdrNotAssigned     = 'Nicht zugewiesen'
         HdrAssigned        = 'Zugewiesen'
+        CatAll             = 'Alle'
+        CatApps            = 'Apps'
+        CatConfig          = 'Konfigurationsprofile'
+        CatCompliance      = 'Compliance'
+        CatAppConfig       = 'App-Konfiguration'
+        CatNotLoaded       = '{0}  (...)'
+        CatCounts          = '{0}  ({1} / {2})'
+        TypeSettingsCatalog = 'Einstellungskatalog'
         BtnRequired        = 'Erforderlich >'
         BtnAvailable       = 'Verfügbar >'
         BtnUninstall       = 'Deinstallieren >'
+        BtnAssign          = 'Zuweisen >'
         BtnExclude         = 'Ausschließen >'
         BtnRemove          = '< Entfernen'
         BtnSave            = 'Speichern'
-        ColApp             = 'App'
+        ColName            = 'Name'
+        ColCategory        = 'Kategorie'
         ColType            = 'Typ'
         ColIntent          = 'Modus'
         ColExclude         = 'Ausschluss'
@@ -74,6 +94,8 @@ $strings = @{
         IntentAvailable    = 'Verfügbar'
         IntentUninstall    = 'Deinstallieren'
         IntentAvailNoEnr   = 'Verfügbar ohne Registrierung'
+        NoIntent           = '-'
+        StateIncluded      = 'eingeschlossen'
         ChangeNew          = 'neu'
         ChangeChanged      = 'geändert'
         PendingRemove      = '(wird entfernt)  '
@@ -96,28 +118,30 @@ $strings = @{
         NoGroupMsg         = "Kein Ziel gewählt.`nBitte über '...' eine Gruppe oder Alle Benutzer / Alle Geräte wählen."
         SearchFailed       = "Suche fehlgeschlagen:`n{0}"
         StatusConnecting   = 'Verbinde mit Microsoft Graph...'
-        StatusLoadingApps  = 'Lade Apps und Zuweisungen... ({0})'
-        StatusLoaded       = '{0} Apps geladen  --  {1} dem Ziel zugewiesen'
-        StatusPending      = '{0} Apps  --  {1} zugewiesen  --  {2} ungespeicherte Änderung(en)'
+        StatusLoadingCat   = 'Lade {0}... ({1})'
+        StatusLoaded       = '{0} Objekte geladen  --  {1} dem Ziel zugewiesen'
+        StatusPending      = '{0} Objekte  --  {1} zugewiesen  --  {2} ungespeicherte Änderung(en)'
         LoadFailed         = "Fehler beim Laden:`n{0}"
+        CategoryLoadFailed = "'{0}' konnte nicht geladen werden (Berechtigung DeviceManagementConfiguration.ReadWrite.All?):`n{1}"
         NoChanges          = 'Keine Änderungen erkannt.'
         SaveConfirm        = "Änderungen für '{0}' speichern?`n`n{1}"
         SaveMore           = '... und {0} weitere'
-        OpAdd              = '+ {0}  [{1}]'
-        OpRemove           = '- {0}  [{1}]'
-        OpChange           = '~ {0}  [{1}  ->  {2}]'
+        OpAdd              = '+ [{0}] {1}  [{2}]'
+        OpRemove           = '- [{0}] {1}  [{2}]'
+        OpChange           = '~ [{0}] {1}  [{2}  ->  {3}]'
         InvalidTitle       = 'Nicht speicherbar'
         Invalid            = "Diese Zuweisungen sind so nicht möglich:`n`n{0}"
         ErrExcludeSpecial  = 'Ausschluss geht nur für Gruppen, nicht für Alle Benutzer / Alle Geräte'
         ErrAvailAllDevices = "'Verfügbar' kann nicht an Alle Geräte zugewiesen werden"
+        ErrUsersOnly       = 'geht nur an Benutzer (Gruppen mit Benutzern oder Alle Benutzer), nicht an Alle Geräte'
         StatusSaving       = 'Speichere ({0} / {1}): {2}'
         StatusVerifying    = 'Prüfe Ergebnis in Intune ({0} / {1})...'
         SaveErrors         = "Abgeschlossen mit Fehlern:`n`n{0}"
         VerifyFailedHint   = "`n`n'?' = gespeichert, aber das Ergebnis konnte nicht aus Intune gelesen werden - die Anzeige kann veraltet sein, bitte 'Laden' klicken."
         SaveOk             = '{0} Änderung(en) gespeichert und in Intune bestätigt.'
-        VerifyMismatch     = "Nach dem Speichern weicht Intune bei diesen Apps ab (Anzeige zeigt jetzt den Ist-Stand):`n`n{0}"
+        VerifyMismatch     = "Nach dem Speichern weicht Intune bei diesen Objekten ab (Anzeige zeigt jetzt den Ist-Stand):`n`n{0}"
         Restored           = 'alte Zuweisung wiederhergestellt'
-        RestoreFailed      = 'WIEDERHERSTELLUNG FEHLGESCHLAGEN - App hat jetzt KEINE Zuweisung für dieses Ziel'
+        RestoreFailed      = 'WIEDERHERSTELLUNG FEHLGESCHLAGEN - das Objekt hat jetzt KEINE Zuweisung für dieses Ziel'
         StatusSaved        = 'Gespeichert  --  {0} Änderung(en), {1} Fehler'
         DiscardChanges     = "Es gibt {0} ungespeicherte Änderung(en). Verwerfen?"
         IsExcluded         = 'ausgeschlossen'
@@ -125,8 +149,8 @@ $strings = @{
         ErrPolicySet       = 'Zuweisung stammt aus einem Richtliniensatz (Policy Set) - dort ändern'
     }
     en = @{
-        FormTitle          = 'App assignments of group: {0}'
-        FormTitleNoGroup   = 'Manage app assignments of a group'
+        FormTitle          = 'Assignments of group: {0}'
+        FormTitleNoGroup   = 'Manage the Intune assignments of a group'
         BtnConnect         = 'Connect'
         BtnReconnect       = 'Reconnect'
         NotConnected       = '(not connected)'
@@ -135,20 +159,33 @@ $strings = @{
         NoGroupSelected    = '(no target selected)'
         BtnLoad            = 'Load'
         LblSearch          = 'Search:'
-        LblType            = 'App type:'
+        LblType            = 'Type:'
+        LblPlatform        = 'Platform:'
         AllTypes           = '(all types)'
+        PlatformAll        = 'All'
         ChkVpp             = 'New VPP: device license'
         ChkFilterNames     = 'Load filter names'
         FilterNamesFailed  = "Could not load filter names (permission DeviceManagementConfiguration.Read.All):`n{0}"
+        HdrCategory        = 'Category'
         HdrNotAssigned     = 'Not assigned'
         HdrAssigned        = 'Assigned'
+        CatAll             = 'All'
+        CatApps            = 'Apps'
+        CatConfig          = 'Configuration profiles'
+        CatCompliance      = 'Compliance'
+        CatAppConfig       = 'App configuration'
+        CatNotLoaded       = '{0}  (...)'
+        CatCounts          = '{0}  ({1} / {2})'
+        TypeSettingsCatalog = 'Settings catalog'
         BtnRequired        = 'Required >'
         BtnAvailable       = 'Available >'
         BtnUninstall       = 'Uninstall >'
+        BtnAssign          = 'Assign >'
         BtnExclude         = 'Exclude >'
         BtnRemove          = '< Remove'
         BtnSave            = 'Save'
-        ColApp             = 'App'
+        ColName            = 'Name'
+        ColCategory        = 'Category'
         ColType            = 'Type'
         ColIntent          = 'Mode'
         ColExclude         = 'Exclusion'
@@ -158,6 +195,8 @@ $strings = @{
         IntentAvailable    = 'Available'
         IntentUninstall    = 'Uninstall'
         IntentAvailNoEnr   = 'Available without enrollment'
+        NoIntent           = '-'
+        StateIncluded      = 'included'
         ChangeNew          = 'new'
         ChangeChanged      = 'changed'
         PendingRemove      = '(to be removed)  '
@@ -180,28 +219,30 @@ $strings = @{
         NoGroupMsg         = "No target selected.`nUse '...' to choose a group or All users / All devices."
         SearchFailed       = "Search failed:`n{0}"
         StatusConnecting   = 'Connecting to Microsoft Graph...'
-        StatusLoadingApps  = 'Loading apps and assignments... ({0})'
-        StatusLoaded       = '{0} apps loaded  --  {1} assigned to the target'
-        StatusPending      = '{0} apps  --  {1} assigned  --  {2} unsaved change(s)'
+        StatusLoadingCat   = 'Loading {0}... ({1})'
+        StatusLoaded       = '{0} objects loaded  --  {1} assigned to the target'
+        StatusPending      = '{0} objects  --  {1} assigned  --  {2} unsaved change(s)'
         LoadFailed         = "Error while loading:`n{0}"
+        CategoryLoadFailed = "Could not load '{0}' (permission DeviceManagementConfiguration.ReadWrite.All?):`n{1}"
         NoChanges          = 'No changes detected.'
         SaveConfirm        = "Save changes for '{0}'?`n`n{1}"
         SaveMore           = '... and {0} more'
-        OpAdd              = '+ {0}  [{1}]'
-        OpRemove           = '- {0}  [{1}]'
-        OpChange           = '~ {0}  [{1}  ->  {2}]'
+        OpAdd              = '+ [{0}] {1}  [{2}]'
+        OpRemove           = '- [{0}] {1}  [{2}]'
+        OpChange           = '~ [{0}] {1}  [{2}  ->  {3}]'
         InvalidTitle       = 'Cannot save'
         Invalid            = "These assignments are not possible:`n`n{0}"
         ErrExcludeSpecial  = 'Exclusions work only for groups, not for All users / All devices'
         ErrAvailAllDevices = "'Available' cannot be assigned to All devices"
+        ErrUsersOnly       = 'can only be assigned to users (groups of users or All users), not to All devices'
         StatusSaving       = 'Saving ({0} / {1}): {2}'
         StatusVerifying    = 'Checking the result in Intune ({0} / {1})...'
         SaveErrors         = "Completed with errors:`n`n{0}"
         VerifyFailedHint   = "`n`n'?' = saved, but the result could not be read back from Intune - the view may be out of date, please click 'Load'."
         SaveOk             = '{0} change(s) saved and confirmed by Intune.'
-        VerifyMismatch     = "After saving, Intune differs for these apps (the view now shows the live state):`n`n{0}"
+        VerifyMismatch     = "After saving, Intune differs for these objects (the view now shows the live state):`n`n{0}"
         Restored           = 'previous assignment restored'
-        RestoreFailed      = 'RESTORE FAILED - the app now has NO assignment for this target'
+        RestoreFailed      = 'RESTORE FAILED - the object now has NO assignment for this target'
         StatusSaved        = 'Saved  --  {0} change(s), {1} error(s)'
         DiscardChanges     = "There are {0} unsaved change(s). Discard them?"
         IsExcluded         = 'excluded'
@@ -219,23 +260,152 @@ $L = if ($useDe) { $strings.de } else { $strings.en }
 #endregion
 
 #region Assignment logic (no GUI, no Graph - covered by Test-GroupAppAssignment.ps1)
-$script:GraphBase = 'https://graph.microsoft.com/beta'
+$script:GraphBase   = 'https://graph.microsoft.com/beta'
 $script:BaseScopes  = @('DeviceManagementApps.ReadWrite.All', 'Group.Read.All')
-$script:FilterScope = 'DeviceManagementConfiguration.Read.All'   # only for filter names, only on request
-$script:Intents   = @('required', 'available', 'uninstall', 'availableWithoutEnrollment')
+$script:FilterScope = 'DeviceManagementConfiguration.Read.All'        # only for filter names, only on request
+$script:ConfigScope = 'DeviceManagementConfiguration.ReadWrite.All'   # every category beyond apps, only when opened
+$script:Intents     = @('required', 'available', 'uninstall', 'availableWithoutEnrollment')
+$script:Platforms   = @('iOS', 'macOS', 'Android', 'Windows', 'All')
 
 $script:OdGroup      = '#microsoft.graph.groupAssignmentTarget'
 $script:OdExclGroup  = '#microsoft.graph.exclusionGroupAssignmentTarget'
 $script:OdAllUsers   = '#microsoft.graph.allLicensedUsersAssignmentTarget'
 $script:OdAllDevices = '#microsoft.graph.allDevicesAssignmentTarget'
 
+function New-Source {
+    # One Graph collection that feeds a category.
+    #   List           collection URI below /beta, with $select (the tool appends &$expand=assignments)
+    #   ItemPath       path of one object, {0} = its id; its assignments are ItemPath/assignments
+    #   Write          Single  = POST ItemPath/assignments + DELETE ItemPath/assignments/{id} per assignment
+    #                  Replace = POST AssignAction with the object's complete assignment list
+    #   AssignmentType @odata.type of an assignment object in the request body
+    #   UsersOnly      the objects apply to users only (MAM): All devices is rejected
+    #   TypeName       shown as type instead of the @odata.type (settings catalog has one type)
+    param([string]$List, [string]$ItemPath, [string]$Write, [string]$AssignmentType,
+          [string]$AssignAction = '', [string]$NameProp = 'displayName', [bool]$UsersOnly = $false, [string]$TypeName = '')
+    [PSCustomObject]@{
+        List = $List; ItemPath = $ItemPath; Write = $Write; AssignmentType = $AssignmentType
+        AssignAction = $AssignAction; NameProp = $NameProp; UsersOnly = $UsersOnly; TypeName = $TypeName
+    }
+}
+
+function Get-CategoryTable {
+    # Every category the tool can show: one shared load / plan / write / verify path for all of them.
+    $t = [ordered]@{}
+    $t['apps'] = [PSCustomObject]@{
+        Key = 'apps'; Label = $L.CatApps; HasIntent = $true; NeedsConfigScope = $false
+        Sources = @(
+            (New-Source -List 'deviceAppManagement/mobileApps?$select=id,displayName,publisher' `
+                        -ItemPath 'deviceAppManagement/mobileApps/{0}' -Write 'Single' `
+                        -AssignmentType '#microsoft.graph.mobileAppAssignment')
+        )
+    }
+    $t['config'] = [PSCustomObject]@{
+        Key = 'config'; Label = $L.CatConfig; HasIntent = $false; NeedsConfigScope = $true
+        Sources = @(
+            (New-Source -List 'deviceManagement/deviceConfigurations?$select=id,displayName' `
+                        -ItemPath 'deviceManagement/deviceConfigurations/{0}' -Write 'Single' `
+                        -AssignmentType '#microsoft.graph.deviceConfigurationAssignment'),
+            # settings catalog: /assign is the documented write path (single create/delete are listed on
+            # the resource page, but their method pages do not exist)
+            (New-Source -List 'deviceManagement/configurationPolicies?$select=id,name,platforms,technologies' `
+                        -ItemPath 'deviceManagement/configurationPolicies/{0}' -Write 'Replace' `
+                        -AssignAction 'deviceManagement/configurationPolicies/{0}/assign' -NameProp 'name' `
+                        -AssignmentType '#microsoft.graph.deviceManagementConfigurationPolicyAssignment' `
+                        -TypeName $L.TypeSettingsCatalog)
+        )
+    }
+    $t['compliance'] = [PSCustomObject]@{
+        Key = 'compliance'; Label = $L.CatCompliance; HasIntent = $false; NeedsConfigScope = $true
+        Sources = @(
+            (New-Source -List 'deviceManagement/deviceCompliancePolicies?$select=id,displayName' `
+                        -ItemPath 'deviceManagement/deviceCompliancePolicies/{0}' -Write 'Single' `
+                        -AssignmentType '#microsoft.graph.deviceCompliancePolicyAssignment')
+        )
+    }
+    $t['appConfig'] = [PSCustomObject]@{
+        Key = 'appConfig'; Label = $L.CatAppConfig; HasIntent = $false; NeedsConfigScope = $true
+        Sources = @(
+            (New-Source -List 'deviceAppManagement/mobileAppConfigurations?$select=id,displayName' `
+                        -ItemPath 'deviceAppManagement/mobileAppConfigurations/{0}' -Write 'Single' `
+                        -AssignmentType '#microsoft.graph.managedDeviceMobileAppConfigurationAssignment')
+        )
+    }
+    return $t
+}
+
 function Get-RequestedScopes {
     # Delegated permissions for Connect-MgGraph. By default the same two as app-centric bulk tools,
-    # so no new consent prompt; the filter-names permission is added only when asked for.
-    param([bool]$WithFilterNames = $false)
+    # so no new consent prompt; more only when asked for (filter names) or a category needs it.
+    param([bool]$WithFilterNames = $false, [bool]$WithConfig = $false)
     $s = @($script:BaseScopes)
-    if ($WithFilterNames) { $s += $script:FilterScope }
+    if ($WithConfig) { $s += $script:ConfigScope }
+    elseif ($WithFilterNames) { $s += $script:FilterScope }   # ReadWrite covers reading the filters
     return ,$s
+}
+
+function Get-ItemPlatforms {
+    # Platforms of an object from its @odata.type (without '#microsoft.graph.') or, for the settings
+    # catalog, its 'platforms' value. '*' = no platform of its own: shown for every platform.
+    param([string]$OdataType, [string]$PlatformsValue = '')
+    $p = @()
+    if ($PlatformsValue) {
+        foreach ($v in ($PlatformsValue -split '[,\s]+')) {
+            if ($v -match '^(?i)ios$')      { $p += 'iOS' }
+            if ($v -match '^(?i)macos$')    { $p += 'macOS' }
+            if ($v -match '^(?i)android')   { $p += 'Android' }
+            if ($v -match '^(?i)windows')   { $p += 'Windows' }
+        }
+    } else {
+        $t = $OdataType
+        if ($t -match '^(?i)(managed)?ios')     { $p += 'iOS' }
+        if ($t -match '^(?i)(managed)?macos')   { $p += 'macOS' }
+        if ($t -match '^(?i)((managed)?android|aosp)') { $p += 'Android' }
+        if ($t -match '^(?i)(windows|win32|win10|microsoftStore|officeSuite|sharedPC|editionUpgrade)') { $p += 'Windows' }
+    }
+    if ($p.Count -eq 0) { $p = @('*') }
+    return ,$p
+}
+
+function Get-PlatformIndex {
+    # Position of a platform in $script:Platforms, case-insensitive (the parameter accepts 'all' too)
+    param([string]$Name)
+    for ($i = 0; $i -lt $script:Platforms.Count; $i++) { if ($script:Platforms[$i] -eq $Name) { return $i } }
+    return 0
+}
+
+function Test-PlatformMatch {
+    param([string[]]$ItemPlatforms, [string]$Platform)
+    if (-not $Platform -or $Platform -eq 'All') { return $true }
+    return ($ItemPlatforms -contains '*' -or $ItemPlatforms -contains $Platform)
+}
+
+function ConvertTo-Item {
+    # One Graph object of a category -> the object the tool works with.
+    param($Raw, $Category, $Source)
+    $id    = [string]$Raw.id
+    $odata = ([string]$Raw.'@odata.type') -replace '^#microsoft\.graph\.', ''
+    $type  = $odata
+    if ($Source.TypeName) { $type = $Source.TypeName }
+    $action = ''
+    if ($Source.AssignAction) { $action = $Source.AssignAction -f $id }
+    [PSCustomObject]@{
+        Key           = "$($Category.Key)|$id"
+        Category      = $Category.Key
+        CategoryLabel = $Category.Label
+        Id            = $id
+        Name          = [string]$Raw.($Source.NameProp)
+        Type          = $type
+        Platforms     = (Get-ItemPlatforms -OdataType $odata -PlatformsValue ([string]$Raw.platforms))
+        Publisher     = [string]$Raw.publisher
+        HasIntent     = [bool]$Category.HasIntent
+        UsersOnly     = [bool]$Source.UsersOnly
+        Write         = $Source.Write
+        AssignmentType = $Source.AssignmentType
+        AssignPath    = ($Source.ItemPath -f $id) + '/assignments'
+        AssignAction  = $action
+        Assignments   = $Raw.assignments
+    }
 }
 
 function Get-IntentText {
@@ -245,14 +415,19 @@ function Get-IntentText {
         'available'                  { return $L.IntentAvailable }
         'uninstall'                  { return $L.IntentUninstall }
         'availableWithoutEnrollment' { return $L.IntentAvailNoEnr }
+        ''                           { return $L.NoIntent }
         default                      { return $Intent }
     }
 }
 
 function Get-StateText {
-    # "Required" / "Required, excluded"
-    param($State)
+    # Apps: "Required" / "Required, excluded". Everything else: "included" / "excluded".
+    param($State, [bool]$HasIntent = $true)
     if (-not $State) { return '' }
+    if (-not $HasIntent) {
+        if ($State.Exclude) { return $L.IsExcluded }
+        return $L.StateIncluded
+    }
     $t = Get-IntentText $State.Intent
     if ($State.Exclude) { $t = "$t, $($L.IsExcluded)" }
     return $t
@@ -264,21 +439,26 @@ function New-Selection {
     [PSCustomObject]@{ Kind = $Kind; Id = $Id; Name = $Name }
 }
 
+function Test-AssignmentForSelection {
+    # Does this assignment (include or exclude) belong to the selected target?
+    param($Assignment, $Selection)
+    if (-not $Assignment) { return $false }
+    $type = [string]$Assignment.target.'@odata.type'
+    switch ($Selection.Kind) {
+        'group'      { return (($type -eq $script:OdGroup -or $type -eq $script:OdExclGroup) -and [string]$Assignment.target.groupId -eq $Selection.Id) }
+        'allUsers'   { return ($type -eq $script:OdAllUsers) }
+        'allDevices' { return ($type -eq $script:OdAllDevices) }
+    }
+    return $false
+}
+
 function Find-AssignmentForSelection {
-    # The assignment of an app that belongs to the selected target (include or exclude), or $null.
+    # The assignment of an object that belongs to the selected target (include or exclude), or $null.
     # A direct assignment wins over one that comes from a policy set.
     param($Assignments, $Selection)
     $hit = $null
     foreach ($a in $Assignments) {        # no @(): any collection type, $null iterates zero times
-        if (-not $a) { continue }
-        $type  = [string]$a.target.'@odata.type'
-        $match = switch ($Selection.Kind) {
-            'group'      { ($type -eq $script:OdGroup -or $type -eq $script:OdExclGroup) -and [string]$a.target.groupId -eq $Selection.Id }
-            'allUsers'   { $type -eq $script:OdAllUsers }
-            'allDevices' { $type -eq $script:OdAllDevices }
-            default      { $false }
-        }
-        if (-not $match) { continue }
+        if (-not (Test-AssignmentForSelection $a $Selection)) { continue }
         if ([string]$a.source -ne 'policySets') { return $a }
         if (-not $hit) { $hit = $a }
     }
@@ -287,11 +467,15 @@ function Find-AssignmentForSelection {
 
 function ConvertTo-AssignmentState {
     # Graph assignment -> the state the tool works with; $null stays $null.
-    param($Assignment)
+    # Intent only for categories that have one (apps); elsewhere '' so the plan compares exclusion only.
+    param($Assignment, [bool]$HasIntent = $true)
     if (-not $Assignment) { return $null }
     $t = $Assignment.target
+    $intent = ''
+    if ($HasIntent) { $intent = [string]$Assignment.intent }
     [PSCustomObject]@{
-        Intent       = [string]$Assignment.intent
+        Intent       = $intent
+        RawIntent    = [string]$Assignment.intent     # e.g. apply / remove of a device configuration
         Exclude      = ([string]$t.'@odata.type' -eq $script:OdExclGroup)
         AssignmentId = [string]$Assignment.id
         FilterId     = [string]$t.deviceAndAppManagementAssignmentFilterId
@@ -303,15 +487,16 @@ function ConvertTo-AssignmentState {
 
 function Test-DesiredAssignment {
     # $null when Intune accepts the combination, otherwise the reason.
-    param($Selection, [string]$Intent, [bool]$Exclude)
+    param($Selection, [string]$Intent, [bool]$Exclude, [bool]$UsersOnly = $false)
     if ($Exclude -and $Selection.Kind -ne 'group') { return $L.ErrExcludeSpecial }
+    if ($UsersOnly -and $Selection.Kind -eq 'allDevices') { return $L.ErrUsersOnly }
     if (-not $Exclude -and $Selection.Kind -eq 'allDevices' -and
         ($Intent -eq 'available' -or $Intent -eq 'availableWithoutEnrollment')) { return $L.ErrAvailAllDevices }
     return $null
 }
 
 function Get-ChangeText {
-    # Text of the grid's change column for one app: new / changed / from a policy set / ''
+    # Text of the grid's change column for one object: new / changed / from a policy set / ''
     param($Original, $Desired)
     if (-not $Original) { return $L.ChangeNew }
     if ($Desired -and ($Original.Intent -ne $Desired.Intent -or [bool]$Original.Exclude -ne [bool]$Desired.Exclude)) { return $L.ChangeChanged }
@@ -320,28 +505,25 @@ function Get-ChangeText {
 }
 
 function Sort-GridRows {
-    # Rows carry one property per grid column (App, Type, Intent = display text, Exclude, Filter, Change).
-    # Sorted by the clicked column, then by app name.
-    param($Rows, [string]$Column = 'App', [bool]$Descending = $false)
+    # Rows carry one property per grid column (Name, Category, Type, Intent = display text, Exclude,
+    # Filter, Change). Sorted by the clicked column, then by name.
+    param($Rows, [string]$Column = 'Name', [bool]$Descending = $false)
     $by = @(@{ Expression = $Column; Descending = $Descending })
-    if ($Column -ne 'App') { $by += @{ Expression = 'App'; Descending = $false } }
+    if ($Column -ne 'Name') { $by += @{ Expression = 'Name'; Descending = $false } }
     $Rows | Sort-Object -Property $by     # streamed: no rows = no output
 }
 
 function Get-PlanProblem {
     # $null when the operation can be written, otherwise the reason.
-    param($Operation, $Selection)
+    param($Operation, $Selection, [bool]$UsersOnly = $false)
     if ($Operation.From -and $Operation.From.PolicySet) { return $L.ErrPolicySet }
-    if ($Operation.To) { return (Test-DesiredAssignment $Selection $Operation.To.Intent ([bool]$Operation.To.Exclude)) }
+    if ($Operation.To) { return (Test-DesiredAssignment $Selection $Operation.To.Intent ([bool]$Operation.To.Exclude) $UsersOnly) }
     return $null
 }
 
-function New-AssignmentBody {
-    # POST body for .../mobileApps/{id}/assignments.
-    # $Carry = the previous state of the same target: its filter and settings are kept as long as
-    # the assignment stays an include (an exclusion has neither).
-    param($Selection, [string]$Intent, [bool]$Exclude, [string]$AppType, [bool]$VppDeviceLicensing, $Carry = $null)
-
+function New-AssignmentTarget {
+    # target of an assignment; an include keeps the filter of $Carry (an exclusion has none)
+    param($Selection, [bool]$Exclude, $Carry = $null)
     $target = [ordered]@{}
     switch ($Selection.Kind) {
         'group' {
@@ -352,39 +534,66 @@ function New-AssignmentBody {
         'allDevices' { $target['@odata.type'] = $script:OdAllDevices }
         default      { throw "Unknown target kind '$($Selection.Kind)'" }
     }
-
     $keep = ($Carry -and -not $Carry.Exclude -and -not $Exclude)
     if ($keep -and $Carry.FilterId -and $Carry.FilterType -and $Carry.FilterType -ne 'none') {
         $target['deviceAndAppManagementAssignmentFilterId']   = $Carry.FilterId
         $target['deviceAndAppManagementAssignmentFilterType'] = $Carry.FilterType
     }
+    return $target
+}
 
-    $body = [ordered]@{
-        '@odata.type' = '#microsoft.graph.mobileAppAssignment'
-        intent        = $Intent
-        target        = $target
-    }
-    if (-not $Exclude) {
-        if ($keep -and $Carry.Settings) {
-            $body['settings'] = $Carry.Settings
-        } elseif ($AppType -eq 'iosVppApp') {
-            $body['settings'] = [ordered]@{
-                '@odata.type'      = '#microsoft.graph.iosVppAppAssignmentSettings'
-                useDeviceLicensing = $VppDeviceLicensing
-            }
-        } elseif ($AppType -eq 'macOsVppApp') {
-            $body['settings'] = [ordered]@{
-                '@odata.type'      = '#microsoft.graph.macOsVppAppAssignmentSettings'
-                useDeviceLicensing = $VppDeviceLicensing
-            }
+function New-AssignmentBody {
+    # One assignment object: the POST body of a Single write, an entry of a Replace list.
+    # $Carry = the previous state of the same target: its filter and settings are kept as long as the
+    # assignment stays an include. Apps carry an intent; a device configuration keeps its apply/remove.
+    param($Selection, [string]$Intent, [bool]$Exclude, [string]$AppType, [bool]$VppDeviceLicensing, $Carry = $null,
+          [string]$AssignmentType = '#microsoft.graph.mobileAppAssignment', [bool]$HasIntent = $true)
+
+    $body = [ordered]@{ '@odata.type' = $AssignmentType }
+    if ($HasIntent) { $body['intent'] = $Intent }
+    elseif ($Carry -and $Carry.RawIntent) { $body['intent'] = $Carry.RawIntent }
+    $body['target'] = New-AssignmentTarget $Selection $Exclude $Carry
+    if (-not $HasIntent -or $Exclude) { return $body }
+
+    $keep = ($Carry -and -not $Carry.Exclude)
+    if ($keep -and $Carry.Settings) {
+        $body['settings'] = $Carry.Settings
+    } elseif ($AppType -eq 'iosVppApp') {
+        $body['settings'] = [ordered]@{
+            '@odata.type'      = '#microsoft.graph.iosVppAppAssignmentSettings'
+            useDeviceLicensing = $VppDeviceLicensing
+        }
+    } elseif ($AppType -eq 'macOsVppApp') {
+        $body['settings'] = [ordered]@{
+            '@odata.type'      = '#microsoft.graph.macOsVppAppAssignmentSettings'
+            useDeviceLicensing = $VppDeviceLicensing
         }
     }
     return $body
 }
 
+function New-ReplaceAssignmentList {
+    # The complete assignment list for a Replace write (/assign): every current direct assignment of
+    # OTHER targets unchanged (target incl. filter), the selected target as desired ($null = removed).
+    # Assignments that come from a policy set are left to the policy set and not sent back.
+    param($Current, $Selection, $Desired, [string]$AssignmentType, $Carry = $null)
+    $list = @()
+    foreach ($a in $Current) {
+        if (-not $a) { continue }
+        if ([string]$a.source -eq 'policySets') { continue }
+        if (Test-AssignmentForSelection $a $Selection) { continue }
+        $list += [ordered]@{ '@odata.type' = $AssignmentType; target = $a.target }
+    }
+    if ($Desired) {
+        $list += (New-AssignmentBody -Selection $Selection -Intent '' -Exclude ([bool]$Desired.Exclude) -AppType '' `
+                      -VppDeviceLicensing $false -Carry $Carry -AssignmentType $AssignmentType -HasIntent $false)
+    }
+    return ,$list
+}
+
 function Get-AssignmentPlan {
-    # Original / Desired: hashtable appId -> state (Intent, Exclude). Missing key = not assigned.
-    # Returns one operation per app that differs: Add | Remove | Change.
+    # Original / Desired: hashtable item key -> state (Intent, Exclude). Missing key = not assigned.
+    # Returns one operation per object that differs: Add | Remove | Change.
     param([hashtable]$Original, [hashtable]$Desired)
     $ops = New-Object System.Collections.Generic.List[object]
     $ids = New-Object System.Collections.Generic.HashSet[string]
@@ -393,13 +602,13 @@ function Get-AssignmentPlan {
     foreach ($id in ($ids | Sort-Object)) {
         $o = $Original[$id]; $d = $Desired[$id]
         if (-not $o -and -not $d) { continue }
-        if (-not $o) { $ops.Add([PSCustomObject]@{ AppId = $id; Action = 'Add';    From = $null; To = $d    }); continue }
-        if (-not $d) { $ops.Add([PSCustomObject]@{ AppId = $id; Action = 'Remove'; From = $o;    To = $null }); continue }
+        if (-not $o) { $ops.Add([PSCustomObject]@{ Key = $id; Action = 'Add';    From = $null; To = $d    }); continue }
+        if (-not $d) { $ops.Add([PSCustomObject]@{ Key = $id; Action = 'Remove'; From = $o;    To = $null }); continue }
         if ($o.Intent -ne $d.Intent -or [bool]$o.Exclude -ne [bool]$d.Exclude) {
-            $ops.Add([PSCustomObject]@{ AppId = $id; Action = 'Change'; From = $o; To = $d })
+            $ops.Add([PSCustomObject]@{ Key = $id; Action = 'Change'; From = $o; To = $d })
         }
     }
-    return ,$ops
+    return ,$ops.ToArray()
 }
 #endregion
 
@@ -431,10 +640,10 @@ function Invoke-GraphPaged {
 }
 
 function Connect-Graph {
-    param([bool]$WithFilterNames = $false)
+    param([bool]$WithFilterNames = $false, [bool]$WithConfig = $false)
     if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) { throw $L.ModuleMissing }
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-    $p = @{ Scopes = (Get-RequestedScopes $WithFilterNames); ErrorAction = 'Stop' }
+    $p = @{ Scopes = (Get-RequestedScopes $WithFilterNames $WithConfig); ErrorAction = 'Stop' }
     if ($TenantId) { $p['TenantId'] = $TenantId }
     if ((Get-Command Connect-MgGraph).Parameters.ContainsKey('NoWelcome')) { $p['NoWelcome'] = $true }
     Connect-MgGraph @p | Out-Null
@@ -455,9 +664,80 @@ function Search-Groups {
     return @(@($resp.value) | Where-Object { $_ } | Sort-Object { $_.displayName })
 }
 
-function Get-AppAssignments {
-    param([string]$AppId)
-    return ,(Invoke-GraphPaged -Uri "$($script:GraphBase)/deviceAppManagement/mobileApps/$AppId/assignments")
+function Get-ItemAssignments {
+    param($Item)
+    return ,(Invoke-GraphPaged -Uri "$($script:GraphBase)/$($Item.AssignPath)")
+}
+
+function Get-CategoryItems {
+    # All objects of a category with their assignments. $expand=assignments is not in the documented
+    # query options of the list calls: when it fails or comes back without the property, the
+    # assignments are read object by object instead of showing "nothing assigned".
+    param($Category, [scriptblock]$OnPage = $null)
+    $items = New-Object System.Collections.Generic.List[object]
+    foreach ($src in $Category.Sources) {
+        $uri = "$($script:GraphBase)/$($src.List)"
+        $raw = $null
+        try { $raw = Invoke-GraphPaged -Uri "$uri&`$expand=assignments" -OnPage $OnPage } catch { $raw = $null }
+        $expanded = $false
+        foreach ($r in $raw) { if ($r -is [System.Collections.IDictionary] -and $r.Contains('assignments')) { $expanded = $true; break } }
+        if (-not $expanded) {
+            $raw = Invoke-GraphPaged -Uri $uri -OnPage $OnPage
+            foreach ($r in $raw) {
+                $r['assignments'] = Invoke-GraphPaged -Uri ("$($script:GraphBase)/" + ($src.ItemPath -f [string]$r.id) + '/assignments')
+            }
+        }
+        foreach ($r in $raw) { $items.Add((ConvertTo-Item $r $Category $src)) }
+    }
+    return ,$items.ToArray()
+}
+
+function Invoke-ItemWrite {
+    # Writes one plan operation of one object to Intune; throws a readable message on failure.
+    param($Item, $Operation, $Selection, [bool]$VppDeviceLicensing)
+    $base = "$($script:GraphBase)/$($Item.AssignPath)"
+
+    if ($Item.Write -eq 'Replace') {
+        # read the list fresh right before writing it back, so no other target gets lost
+        $current = Get-ItemAssignments $Item
+        $list = New-ReplaceAssignmentList -Current $current -Selection $Selection -Desired $Operation.To `
+                    -AssignmentType $Item.AssignmentType -Carry $Operation.From
+        $json = @{ assignments = $list } | ConvertTo-Json -Depth 20
+        try {
+            Invoke-MgGraphRequest -Method POST -Uri "$($script:GraphBase)/$($Item.AssignAction)" -Body $json `
+                -ContentType 'application/json' -ErrorAction Stop | Out-Null
+        } catch { throw (Get-GraphErrorText $_) }
+        return
+    }
+
+    if ($Operation.Action -eq 'Remove' -or $Operation.Action -eq 'Change') {
+        try {
+            Invoke-MgGraphRequest -Method DELETE -Uri "$base/$($Operation.From.AssignmentId)" -ErrorAction Stop | Out-Null
+        } catch { throw (Get-GraphErrorText $_) }
+    }
+    if ($Operation.Action -eq 'Add' -or $Operation.Action -eq 'Change') {
+        $body = New-AssignmentBody -Selection $Selection -Intent $Operation.To.Intent -Exclude ([bool]$Operation.To.Exclude) `
+                    -AppType $Item.Type -VppDeviceLicensing $VppDeviceLicensing -Carry $Operation.From `
+                    -AssignmentType $Item.AssignmentType -HasIntent $Item.HasIntent
+        try {
+            Invoke-MgGraphRequest -Method POST -Uri $base -Body ($body | ConvertTo-Json -Depth 20) `
+                -ContentType 'application/json' -ErrorAction Stop | Out-Null
+        } catch {
+            $msg = Get-GraphErrorText $_
+            if ($Operation.Action -eq 'Change') {
+                # the old assignment is already gone: put it back as it was
+                $restore = New-AssignmentBody -Selection $Selection -Intent $Operation.From.Intent -Exclude ([bool]$Operation.From.Exclude) `
+                               -AppType $Item.Type -VppDeviceLicensing $VppDeviceLicensing -Carry $Operation.From `
+                               -AssignmentType $Item.AssignmentType -HasIntent $Item.HasIntent
+                try {
+                    Invoke-MgGraphRequest -Method POST -Uri $base -Body ($restore | ConvertTo-Json -Depth 20) `
+                        -ContentType 'application/json' -ErrorAction Stop | Out-Null
+                    $msg = "$msg ($($L.Restored))"
+                } catch { $msg = "$msg ($($L.RestoreFailed))" }
+            }
+            throw $msg
+        }
+    }
 }
 #endregion
 
@@ -471,12 +751,17 @@ Add-Type -AssemblyName System.Drawing
 #region State
 $script:Selection   = $null
 $script:Connected   = $false
-$script:Apps        = New-Object System.Collections.Generic.List[object]   # Id, Name, Type, Publisher, Assignments
-$script:AppById     = @{}
-$script:Original    = @{}   # appId -> state (live, for the selected target)
-$script:Desired     = @{}   # appId -> state (what the user wants)
+$script:Categories  = Get-CategoryTable
+$script:CurrentCat  = 'apps'
+$script:LoadedCats  = @{}   # category key -> $true once loaded for the current target
+$script:NeedConfig  = $false   # a category needing DeviceManagementConfiguration.ReadWrite.All was opened
+$script:ItemByKey   = @{}   # item key -> item (Key, Category, Id, Name, Type, Platforms, Assignments, ...)
+$script:Original    = @{}   # item key -> state (live, for the selected target)
+$script:Desired     = @{}   # item key -> state (what the user wants)
 $script:FilterNames = @{}
 $script:Rebuilding  = $false
+$script:ConnectedAs = ''      # "account|tenant" of the current connection
+$script:NeedReload  = $false
 
 switch -Regex ($GroupId) {
     '^\s*$'          { break }
@@ -494,13 +779,21 @@ function Confirm-Discard {
     if ($n -eq 0) { return $true }
     return ([System.Windows.Forms.MessageBox]::Show(($L.DiscardChanges -f $n), $L.TitleConfirm, 'YesNo', 'Question') -eq 'Yes')
 }
+
+function Test-HasScope {
+    param([string[]]$Names)
+    $ctx = Get-MgContext
+    if (-not $ctx) { return $false }
+    foreach ($n in $Names) { if (@($ctx.Scopes) -contains $n) { return $true } }
+    return $false
+}
 #endregion
 
 #region Form
 $form = New-Object System.Windows.Forms.Form
 $form.Text          = $L.FormTitleNoGroup
-$form.Size          = New-Object System.Drawing.Size(1180, 760)
-$form.MinimumSize   = New-Object System.Drawing.Size(900, 560)
+$form.Size          = New-Object System.Drawing.Size(1320, 780)
+$form.MinimumSize   = New-Object System.Drawing.Size(1000, 560)
 $form.StartPosition = 'CenterScreen'
 $form.Font          = New-Object System.Drawing.Font('Segoe UI', 9)
 
@@ -535,6 +828,18 @@ $btnLoad = New-Object System.Windows.Forms.Button
 $btnLoad.Text = $L.BtnLoad; $btnLoad.Location = New-Object System.Drawing.Point(690, 42)
 $btnLoad.Size = New-Object System.Drawing.Size(80, 26)
 
+$lblPlatform = New-Object System.Windows.Forms.Label
+$lblPlatform.Text = $L.LblPlatform; $lblPlatform.AutoSize = $true
+$lblPlatform.Location = New-Object System.Drawing.Point(792, 46)
+
+$cmbPlatform = New-Object System.Windows.Forms.ComboBox
+$cmbPlatform.DropDownStyle = 'DropDownList'
+$cmbPlatform.Location = New-Object System.Drawing.Point(868, 43); $cmbPlatform.Width = 120
+foreach ($p in $script:Platforms) {
+    if ($p -eq 'All') { [void]$cmbPlatform.Items.Add($L.PlatformAll) } else { [void]$cmbPlatform.Items.Add($p) }
+}
+$cmbPlatform.SelectedIndex = Get-PlatformIndex $Platform
+
 $lblSearch = New-Object System.Windows.Forms.Label
 $lblSearch.Text = $L.LblSearch; $lblSearch.AutoSize = $true
 $lblSearch.Location = New-Object System.Drawing.Point(10, 81)
@@ -548,7 +853,7 @@ $lblType.Location = New-Object System.Drawing.Point(392, 81)
 
 $cmbType = New-Object System.Windows.Forms.ComboBox
 $cmbType.DropDownStyle = 'DropDownList'
-$cmbType.Location = New-Object System.Drawing.Point(460, 78); $cmbType.Width = 220
+$cmbType.Location = New-Object System.Drawing.Point(440, 78); $cmbType.Width = 240
 [void]$cmbType.Items.Add($L.AllTypes); $cmbType.SelectedIndex = 0
 
 $chkVpp = New-Object System.Windows.Forms.CheckBox
@@ -561,7 +866,7 @@ $chkFilterNames.Text = $L.ChkFilterNames; $chkFilterNames.AutoSize = $true
 $chkFilterNames.Location = New-Object System.Drawing.Point(870, 80)
 $chkFilterNames.Checked = [bool]$LoadFilterNames
 
-$stripTop.Controls.AddRange(@($btnConnect, $lblAccount, $lblGroup, $txtGroup, $btnPick, $btnLoad,
+$stripTop.Controls.AddRange(@($btnConnect, $lblAccount, $lblGroup, $txtGroup, $btnPick, $btnLoad, $lblPlatform, $cmbPlatform,
                               $lblSearch, $txtSearch, $lblType, $cmbType, $chkVpp, $chkFilterNames))
 
 # --- Bottom strip ---
@@ -587,14 +892,20 @@ $separator = New-Object System.Windows.Forms.Panel
 $separator.Dock = 'Bottom'; $separator.Height = 1
 $separator.BackColor = [System.Drawing.SystemColors]::ControlDark
 
-# --- Center: list | buttons | grid ---
+# --- Center: categories | not assigned | buttons | assigned ---
 $boldFont = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+
+$lblCat = New-Object System.Windows.Forms.Label
+$lblCat.Text = $L.HdrCategory; $lblCat.Dock = 'Fill'; $lblCat.Font = $boldFont; $lblCat.TextAlign = 'MiddleLeft'
 
 $lblLeft = New-Object System.Windows.Forms.Label
 $lblLeft.Text = $L.HdrNotAssigned; $lblLeft.Dock = 'Fill'; $lblLeft.Font = $boldFont; $lblLeft.TextAlign = 'MiddleLeft'
 
 $lblRight = New-Object System.Windows.Forms.Label
 $lblRight.Text = $L.HdrAssigned; $lblRight.Dock = 'Fill'; $lblRight.Font = $boldFont; $lblRight.TextAlign = 'MiddleLeft'
+
+$lbCat = New-Object System.Windows.Forms.ListBox
+$lbCat.Dock = 'Fill'; $lbCat.IntegralHeight = $false; $lbCat.BorderStyle = 'FixedSingle'
 
 $lbLeft = New-Object System.Windows.Forms.ListBox
 $lbLeft.Dock = 'Fill'; $lbLeft.SelectionMode = 'MultiExtended'
@@ -614,27 +925,29 @@ $grid.SelectionMode = 'FullRowSelect'; $grid.MultiSelect = $true
 $grid.AutoSizeColumnsMode = 'Fill'; $grid.BackgroundColor = [System.Drawing.SystemColors]::Window
 $grid.BorderStyle = 'FixedSingle'; $grid.EditMode = 'EditOnEnter'
 
-$colApp = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$colApp.Name = 'App'; $colApp.HeaderText = $L.ColApp; $colApp.ReadOnly = $true; $colApp.FillWeight = 40
+$colName = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$colName.Name = 'Name'; $colName.HeaderText = $L.ColName; $colName.ReadOnly = $true; $colName.FillWeight = 36
+$colCategory = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$colCategory.Name = 'Category'; $colCategory.HeaderText = $L.ColCategory; $colCategory.ReadOnly = $true; $colCategory.FillWeight = 16
 $colType = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colType.Name = 'Type'; $colType.HeaderText = $L.ColType; $colType.ReadOnly = $true; $colType.FillWeight = 16
 $colIntent = New-Object System.Windows.Forms.DataGridViewComboBoxColumn
-$colIntent.Name = 'Intent'; $colIntent.HeaderText = $L.ColIntent; $colIntent.FillWeight = 20
+$colIntent.Name = 'Intent'; $colIntent.HeaderText = $L.ColIntent; $colIntent.FillWeight = 18
 $colIntent.DataSource = $intentTable; $colIntent.ValueMember = 'Value'; $colIntent.DisplayMember = 'Text'
 $colIntent.FlatStyle = 'Flat'
 $colExcl = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
 $colExcl.Name = 'Exclude'; $colExcl.HeaderText = $L.ColExclude; $colExcl.FillWeight = 9
 $colFilter = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$colFilter.Name = 'Filter'; $colFilter.HeaderText = $L.ColFilter; $colFilter.ReadOnly = $true; $colFilter.FillWeight = 16
+$colFilter.Name = 'Filter'; $colFilter.HeaderText = $L.ColFilter; $colFilter.ReadOnly = $true; $colFilter.FillWeight = 14
 $colChange = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colChange.Name = 'Change'; $colChange.HeaderText = $L.ColChange; $colChange.ReadOnly = $true; $colChange.FillWeight = 9
 # One by one: Columns.AddRange takes a params array, and Windows PowerShell 5.1 does not bind an
 # object[] to it (Controls.AddRange has no params and works with @(...)).
-foreach ($c in @($colApp, $colType, $colIntent, $colExcl, $colFilter, $colChange)) {
+foreach ($c in @($colName, $colCategory, $colType, $colIntent, $colExcl, $colFilter, $colChange)) {
     $c.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::Programmatic   # sorted by Update-Views
     [void]$grid.Columns.Add($c)
 }
-$script:SortColumn = 'App'
+$script:SortColumn = 'Name'
 $script:SortDesc   = $false
 
 function New-MoveButton {
@@ -647,33 +960,40 @@ function New-MoveButton {
 $btnReq    = New-MoveButton $L.BtnRequired
 $btnAvl    = New-MoveButton $L.BtnAvailable
 $btnUni    = New-MoveButton $L.BtnUninstall
+$btnAssign = New-MoveButton $L.BtnAssign
 $btnExcl   = New-MoveButton $L.BtnExclude
 $btnRemove = New-MoveButton $L.BtnRemove
-$script:MoveButtons = @($btnReq, $btnAvl, $btnUni, $btnExcl, $btnRemove)
+$script:MoveButtons = @($btnReq, $btnAvl, $btnUni, $btnAssign, $btnExcl, $btnRemove)
 
 $arrowPanel = New-Object System.Windows.Forms.FlowLayoutPanel
 $arrowPanel.Dock = 'Fill'; $arrowPanel.FlowDirection = 'TopDown'; $arrowPanel.WrapContents = $false
 $arrowPanel.Controls.AddRange($script:MoveButtons)
-$arrowPanel.Add_Resize({
-    $total  = (28 + 8) * 5 + 16
+function Update-ArrowPadding {
+    # centre the visible buttons vertically (their number depends on the category)
+    $visible = @($script:MoveButtons | Where-Object { $_.Visible }).Count
+    $total  = (28 + 8) * $visible + 16
     $topPad = [Math]::Max(0, [int](($arrowPanel.ClientSize.Height - $total) / 2))
     $arrowPanel.Padding = New-Object System.Windows.Forms.Padding(2, $topPad, 2, 0)
-})
+}
+$arrowPanel.Add_Resize({ Update-ArrowPadding })
 $btnRemove.Margin = New-Object System.Windows.Forms.Padding(8, 20, 8, 4)
 
 $table = New-Object System.Windows.Forms.TableLayoutPanel
-$table.Dock = 'Fill'; $table.ColumnCount = 3; $table.RowCount = 2
+$table.Dock = 'Fill'; $table.ColumnCount = 4; $table.RowCount = 2
 $table.Padding = New-Object System.Windows.Forms.Padding(6)
-[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 36)))
+[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 230)))
+[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 34)))
 [void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 150)))
-[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 64)))
+[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 66)))
 [void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 22)))
 [void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-$table.Controls.Add($lblLeft,    0, 0)
-$table.Controls.Add($lblRight,   2, 0)
-$table.Controls.Add($lbLeft,     0, 1)
-$table.Controls.Add($arrowPanel, 1, 1)
-$table.Controls.Add($grid,       2, 1)
+$table.Controls.Add($lblCat,     0, 0)
+$table.Controls.Add($lblLeft,    1, 0)
+$table.Controls.Add($lblRight,   3, 0)
+$table.Controls.Add($lbCat,      0, 1)
+$table.Controls.Add($lbLeft,     1, 1)
+$table.Controls.Add($arrowPanel, 2, 1)
+$table.Controls.Add($grid,       3, 1)
 
 $form.Controls.Add($table)
 $form.Controls.Add($separator)
@@ -682,12 +1002,24 @@ $form.Controls.Add($stripTop)
 #endregion
 
 #region View
-function Test-AppVisible {
-    param($App)
+function Get-SelectedPlatform {
+    return $script:Platforms[[Math]::Max(0, $cmbPlatform.SelectedIndex)]
+}
+
+function Test-InCurrentCategory {
+    param($Item)
+    return ($script:CurrentCat -eq 'all' -or $Item.Category -eq $script:CurrentCat)
+}
+
+function Test-ItemVisible {
+    # category, platform, search text and type filter
+    param($Item)
+    if (-not (Test-InCurrentCategory $Item)) { return $false }
+    if (-not (Test-PlatformMatch $Item.Platforms (Get-SelectedPlatform))) { return $false }
     $q = $txtSearch.Text.Trim()
-    if ($q -and $App.Name.IndexOf($q, [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -and
-        ([string]$App.Publisher).IndexOf($q, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }
-    if ($cmbType.SelectedIndex -gt 0 -and $App.Type -ne [string]$cmbType.SelectedItem) { return $false }
+    if ($q -and $Item.Name.IndexOf($q, [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -and
+        ([string]$Item.Publisher).IndexOf($q, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }
+    if ($cmbType.SelectedIndex -gt 0 -and $Item.Type -ne [string]$cmbType.SelectedItem) { return $false }
     return $true
 }
 
@@ -701,8 +1033,8 @@ function Get-FilterText {
 
 function Update-GridRow {
     param($Row)
-    $id = [string]$Row.Tag
-    $change = Get-ChangeText $script:Original[$id] $script:Desired[$id]
+    $key = [string]$Row.Tag
+    $change = Get-ChangeText $script:Original[$key] $script:Desired[$key]
     $color  = [System.Drawing.SystemColors]::Window
     if ($change -eq $L.ChangeNew)         { $color = [System.Drawing.Color]::Honeydew }
     elseif ($change -eq $L.ChangeChanged) { $color = [System.Drawing.Color]::LightYellow }
@@ -710,24 +1042,83 @@ function Update-GridRow {
     $Row.DefaultCellStyle.BackColor = $color
 }
 
+function Update-CategoryList {
+    # "Apps  (assigned / total)" per category for the selected platform; "(...)" = not loaded yet
+    $platform = Get-SelectedPlatform
+    $texts = @()
+    $sumA = 0; $sumT = 0
+    foreach ($cat in $script:Categories.Values) {
+        if (-not $script:LoadedCats[$cat.Key]) { $texts += ($L.CatNotLoaded -f $cat.Label); continue }
+        $a = 0; $t = 0
+        foreach ($it in $script:ItemByKey.Values) {
+            if ($it.Category -ne $cat.Key -or -not (Test-PlatformMatch $it.Platforms $platform)) { continue }
+            $t++
+            if ($script:Desired.ContainsKey($it.Key)) { $a++ }
+        }
+        $sumA += $a; $sumT += $t
+        $texts += ($L.CatCounts -f $cat.Label, $a, $t)
+    }
+    $all = @($L.CatCounts -f $L.CatAll, $sumA, $sumT) + $texts
+    $script:Rebuilding = $true
+    try {
+        $sel = $lbCat.SelectedIndex
+        $lbCat.BeginUpdate()
+        if ($lbCat.Items.Count -ne $all.Count) {
+            $lbCat.Items.Clear()
+            foreach ($x in $all) { [void]$lbCat.Items.Add($x) }
+        } else {
+            for ($i = 0; $i -lt $all.Count; $i++) { if ([string]$lbCat.Items[$i] -ne $all[$i]) { $lbCat.Items[$i] = $all[$i] } }
+        }
+        $lbCat.EndUpdate()
+        $want = 0
+        if ($script:CurrentCat -ne 'all') { $want = 1 + [array]::IndexOf(@($script:Categories.Keys), $script:CurrentCat) }
+        if ($sel -ne $want -or $lbCat.SelectedIndex -ne $want) { $lbCat.SelectedIndex = $want }
+    } finally { $script:Rebuilding = $false }
+}
+
+function Update-ButtonMode {
+    # Apps: Required / Available / Uninstall / Exclude. Other categories: Assign / Exclude.
+    # "All" only shows and removes - what "assign" means differs per category.
+    [void]$grid.EndEdit(); $grid.CurrentCell = $null   # no cell in edit mode while columns are hidden
+    $cat = $script:CurrentCat
+    $btnReq.Visible    = ($cat -eq 'apps')
+    $btnAvl.Visible    = ($cat -eq 'apps')
+    $btnUni.Visible    = ($cat -eq 'apps')
+    $btnAssign.Visible = ($cat -ne 'apps' -and $cat -ne 'all')
+    $btnExcl.Visible   = ($cat -ne 'all')
+    $colCategory.Visible = ($cat -eq 'all')
+    $colIntent.Visible   = ($cat -eq 'apps' -or $cat -eq 'all')
+    Update-ArrowPadding
+    $script:Rebuilding = $true
+    try {
+        $keep = [string]$cmbType.SelectedItem
+        $cmbType.Items.Clear(); [void]$cmbType.Items.Add($L.AllTypes)
+        $types = @($script:ItemByKey.Values | Where-Object { Test-InCurrentCategory $_ } | ForEach-Object { $_.Type } | Sort-Object -Unique)
+        foreach ($t in $types) { [void]$cmbType.Items.Add($t) }
+        $cmbType.SelectedIndex = [Math]::Max(0, $cmbType.Items.IndexOf($keep))
+    } finally { $script:Rebuilding = $false }
+}
+
 function Update-Status {
     $pending = Get-PendingCount
-    $lblStatus.Text = $L.StatusPending -f $script:Apps.Count, $script:Desired.Count, $pending
+    $lblStatus.Text = $L.StatusPending -f $script:ItemByKey.Count, $script:Desired.Count, $pending
     $btnSave.Enabled = ($pending -gt 0)
 }
 
 function Update-Views {
     $script:Rebuilding = $true
     try {
-        $sorted = @($script:Apps | Sort-Object Name)
+        $sorted = @($script:ItemByKey.Values | Where-Object { Test-ItemVisible $_ } | Sort-Object Name)
 
         $lbLeft.BeginUpdate()
         $lbLeft.Items.Clear()
-        foreach ($a in $sorted) {
-            if ($script:Desired.ContainsKey($a.Id) -or -not (Test-AppVisible $a)) { continue }
+        foreach ($it in $sorted) {
+            if ($script:Desired.ContainsKey($it.Key)) { continue }
             $prefix = ''
-            if ($script:Original.ContainsKey($a.Id)) { $prefix = $L.PendingRemove }
-            $entry = [PSCustomObject]@{ Id = $a.Id; Text = "$prefix$($a.Name)   [$($a.Type)]" }
+            if ($script:Original.ContainsKey($it.Key)) { $prefix = $L.PendingRemove }
+            $label = $it.Type
+            if ($script:CurrentCat -eq 'all') { $label = "$($it.CategoryLabel) - $($it.Type)" }
+            $entry = [PSCustomObject]@{ Key = $it.Key; Text = "$prefix$($it.Name)   [$label]" }
             $entry | Add-Member -MemberType ScriptMethod -Name ToString -Value { $this.Text } -Force
             [void]$lbLeft.Items.Add($entry)
         }
@@ -738,27 +1129,44 @@ function Update-Views {
         $grid.SuspendLayout()
         $grid.Rows.Clear()
         $gridRows = @()
-        foreach ($a in $sorted) {
-            if (-not $script:Desired.ContainsKey($a.Id) -or -not (Test-AppVisible $a)) { continue }
-            $d = $script:Desired[$a.Id]
+        foreach ($it in $sorted) {
+            if (-not $script:Desired.ContainsKey($it.Key)) { continue }
+            $d = $script:Desired[$it.Key]
             $gridRows += [PSCustomObject]@{
-                Id = $a.Id; App = $a.Name; Type = $a.Type; IntentKey = $d.Intent
+                Key = $it.Key; Name = $it.Name; Category = $it.CategoryLabel; Type = $it.Type; IntentKey = $d.Intent
                 Intent  = (Get-IntentText $d.Intent)
                 Exclude = [bool]$d.Exclude
-                Filter  = (Get-FilterText $script:Original[$a.Id])
-                Change  = (Get-ChangeText $script:Original[$a.Id] $d)
+                Filter  = (Get-FilterText $script:Original[$it.Key])
+                Change  = (Get-ChangeText $script:Original[$it.Key] $d)
             }
         }
+        $intentIdx = $colIntent.Index
         foreach ($r in (Sort-GridRows $gridRows $script:SortColumn $script:SortDesc)) {
-            $a = $script:AppById[$r.Id]
-            if ($script:Intents -notcontains $r.IntentKey -and -not $intentTable.Select("Value = '$($r.IntentKey)'")) {
-                [void]$intentTable.Rows.Add($r.IntentKey, $r.IntentKey)   # an intent this tool does not know yet
+            $it  = $script:ItemByKey[$r.Key]
+            $row = New-Object System.Windows.Forms.DataGridViewRow
+            $row.CreateCells($grid)
+            if ($it.HasIntent) {
+                if ($script:Intents -notcontains $r.IntentKey -and -not $intentTable.Select("Value = '$($r.IntentKey)'")) {
+                    [void]$intentTable.Rows.Add($r.IntentKey, $r.IntentKey)   # an intent this tool does not know yet
+                }
+                $row.Cells[$intentIdx].Value = $r.IntentKey
+            } else {
+                # no intent outside apps: a plain read-only text cell instead of the list
+                $tc = New-Object System.Windows.Forms.DataGridViewTextBoxCell
+                $tc.Value = $L.NoIntent
+                $row.Cells[$intentIdx] = $tc
             }
-            $idx = $grid.Rows.Add($r.App, $r.Type, $r.IntentKey, $r.Exclude, $r.Filter, '')
-            $row = $grid.Rows[$idx]
-            $row.Tag = $a.Id
-            if ($script:Selection -and $script:Selection.Kind -ne 'group') { $row.Cells['Exclude'].ReadOnly = $true }
-            $o = $script:Original[$a.Id]
+            $row.Cells[$colName.Index].Value     = $r.Name
+            $row.Cells[$colCategory.Index].Value = $r.Category
+            $row.Cells[$colType.Index].Value     = $r.Type
+            $row.Cells[$colExcl.Index].Value     = $r.Exclude
+            $row.Cells[$colFilter.Index].Value   = $r.Filter
+            $idx = $grid.Rows.Add($row)
+            $row = $grid.Rows[$idx]        # the row as the grid holds it (never a shared row)
+            $row.Tag = $it.Key
+            if (-not $it.HasIntent) { $row.Cells[$intentIdx].ReadOnly = $true }
+            if ($script:Selection -and $script:Selection.Kind -ne 'group') { $row.Cells[$colExcl.Index].ReadOnly = $true }
+            $o = $script:Original[$it.Key]
             if ($o -and $o.PolicySet) {
                 $row.ReadOnly = $true
                 $row.DefaultCellStyle.ForeColor = [System.Drawing.SystemColors]::GrayText
@@ -775,6 +1183,7 @@ function Update-Views {
     } finally {
         $script:Rebuilding = $false
     }
+    Update-CategoryList
     Update-Status
 }
 
@@ -782,8 +1191,9 @@ function Set-Busy {
     param([bool]$Busy)
     $form.Cursor = if ($Busy) { [System.Windows.Forms.Cursors]::WaitCursor } else { [System.Windows.Forms.Cursors]::Default }
     foreach ($c in @($btnConnect, $btnPick, $btnLoad) + $script:MoveButtons) { $c.Enabled = -not $Busy }
+    $lbCat.Enabled = -not $Busy
     if ($Busy) { $btnSave.Enabled = $false }
-    if (-not $Busy -and $script:Apps.Count -eq 0) { foreach ($b in $script:MoveButtons) { $b.Enabled = $false } }
+    if (-not $Busy -and $script:ItemByKey.Count -eq 0) { foreach ($b in $script:MoveButtons) { $b.Enabled = $false } }
     $form.Update()
 }
 
@@ -804,8 +1214,15 @@ function Invoke-Connect {
     Set-Busy $true
     $lblStatus.Text = $L.StatusConnecting; $form.Update()
     try {
-        $ctx = Connect-Graph -WithFilterNames $chkFilterNames.Checked
+        $ctx = Connect-Graph -WithFilterNames $chkFilterNames.Checked -WithConfig $script:NeedConfig
         $script:Connected = $true
+        $who = "$($ctx.Account)|$($ctx.TenantId)"
+        if ($script:ConnectedAs -and $script:ConnectedAs -ne $who) {
+            # other account or tenant: the loaded IDs belong to the old one - never write them to the new one
+            $script:ItemByKey = @{}; $script:Original = @{}; $script:Desired = @{}; $script:LoadedCats = @{}
+            $script:NeedReload = $true
+        }
+        $script:ConnectedAs = $who
         $lblAccount.Text = $L.ConnectedAs -f $ctx.Account, $ctx.TenantId
         $lblAccount.ForeColor = [System.Drawing.SystemColors]::ControlText
         $btnConnect.Text = $L.BtnReconnect
@@ -817,29 +1234,67 @@ function Invoke-Connect {
         $lblStatus.Text = ''
     } finally {
         Set-Busy $false
+        $btnSave.Enabled = ((Get-PendingCount) -gt 0)   # Set-Busy switched it off
+    }
+    if ($script:NeedReload) {
+        $script:NeedReload = $false
+        Update-ButtonMode; Update-Views
+        if ($script:Selection) { Invoke-Load }
     }
 }
 
 function Update-FilterNames {
-    # Filter names need DeviceManagementConfiguration.Read.All: connect again with it when the current
-    # token lacks it (that is the one consent prompt), then read the names. Without names the filter
-    # column shows the filter ID.
+    # Filter names need DeviceManagementConfiguration.Read.All (or ReadWrite, when a category beyond apps
+    # is open): connect again with it when the current token lacks it - that is the one consent prompt.
+    # Without names the filter column shows the filter ID.
     $script:FilterNames = @{}
     if ($chkFilterNames.Checked -and $script:Connected) {
         try {
-            $ctx = Get-MgContext
-            if (@($ctx.Scopes) -notcontains $script:FilterScope) { [void](Connect-Graph -WithFilterNames $true) }
+            if (-not (Test-HasScope @($script:FilterScope, $script:ConfigScope))) {
+                [void](Connect-Graph -WithFilterNames $true -WithConfig $script:NeedConfig)
+            }
             $f = Invoke-GraphPaged -Uri "$($script:GraphBase)/deviceManagement/assignmentFilters?`$select=id,displayName"
             foreach ($x in $f) { $script:FilterNames[[string]$x.id] = [string]$x.displayName }
         } catch {
             [void][System.Windows.Forms.MessageBox]::Show(($L.FilterNamesFailed -f (Get-GraphErrorText $_)), $L.TitleWarning, 'OK', 'Warning')
             $script:FilterNames = @{}
-            $chkFilterNames.Checked = $false   # fires CheckedChanged again, which only clears
+            $script:Rebuilding = $true
+            try { $chkFilterNames.Checked = $false } finally { $script:Rebuilding = $false }   # no nested handler run
         }
     }
 }
 
+function Import-Category {
+    # (Re)load one category for the selected target; its pending edits are replaced by the live state.
+    param([string]$CatKey)
+    $cat = $script:Categories[$CatKey]
+    if ($cat.NeedsConfigScope -and -not (Test-HasScope @($script:ConfigScope))) {
+        $script:NeedConfig = $true
+        [void](Connect-Graph -WithFilterNames $chkFilterNames.Checked -WithConfig $true)   # the one consent prompt
+    }
+    # no GetNewClosure(): a closure no longer sees the script's variables ($lblStatus, $form)
+    $script:LoadingLabel = $cat.Label
+    $onPage = { param($n) $lblStatus.Text = $L.StatusLoadingCat -f $script:LoadingLabel, $n; $form.Update() }
+    $items = Get-CategoryItems -Category $cat -OnPage $onPage
+
+    foreach ($k in @($script:ItemByKey.Keys)) {
+        if ($script:ItemByKey[$k].Category -eq $CatKey) {
+            $script:ItemByKey.Remove($k); $script:Original.Remove($k); $script:Desired.Remove($k)
+        }
+    }
+    foreach ($it in $items) {
+        $script:ItemByKey[$it.Key] = $it
+        $st = ConvertTo-AssignmentState (Find-AssignmentForSelection $it.Assignments $script:Selection) $it.HasIntent
+        if ($st) {
+            $script:Original[$it.Key] = $st
+            $script:Desired[$it.Key]  = [PSCustomObject]@{ Intent = $st.Intent; Exclude = $st.Exclude }
+        }
+    }
+    $script:LoadedCats[$CatKey] = $true
+}
+
 function Invoke-Load {
+    # Reload the target: apps plus every category that was opened before
     if (-not $script:Connected) {
         [void][System.Windows.Forms.MessageBox]::Show($L.NotConnectedMsg, $L.TitleWarning, 'OK', 'Warning'); return
     }
@@ -854,56 +1309,52 @@ function Invoke-Load {
             $sel.Name = [string]$g.displayName
             Set-SelectionText
         }
-
-        $onPage = { param($n) $lblStatus.Text = $L.StatusLoadingApps -f $n; $form.Update() }
-        $appsUri = "$($script:GraphBase)/deviceAppManagement/mobileApps?`$select=id,displayName,publisher"
-        $raw = $null
-        try { $raw = Invoke-GraphPaged -Uri "$appsUri&`$expand=assignments" -OnPage $onPage } catch { $raw = $null }
-        # $expand=assignments is not in the documented query options of the list call: when it fails or
-        # comes back without the property, read the assignments app by app instead of showing "nothing assigned".
-        $expanded = $false
-        if ($raw) { foreach ($r in $raw) { if ($r -is [System.Collections.IDictionary] -and $r.Contains('assignments')) { $expanded = $true; break } } }
-        if (-not $expanded) {
-            $raw = Invoke-GraphPaged -Uri $appsUri -OnPage $onPage
-            $k = 0
-            foreach ($r in $raw) {
-                $k++
-                if ($k % 10 -eq 0 -or $k -eq 1) { $lblStatus.Text = $L.StatusLoadingApps -f "$k / $($raw.Count)"; $form.Update() }
-                $r['assignments'] = Get-AppAssignments ([string]$r.id)
+        $cats = @('apps') + @($script:LoadedCats.Keys | Where-Object { $_ -ne 'apps' })
+        if ($script:CurrentCat -eq 'all') { $cats = @($script:Categories.Keys) }
+        elseif ($cats -notcontains $script:CurrentCat) { $cats += $script:CurrentCat }
+        $script:ItemByKey = @{}; $script:Original = @{}; $script:Desired = @{}; $script:LoadedCats = @{}
+        foreach ($k in $cats) {
+            try { Import-Category $k }
+            catch {
+                if ($k -eq 'apps') { throw }
+                [void][System.Windows.Forms.MessageBox]::Show(($L.CategoryLoadFailed -f $script:Categories[$k].Label, (Get-GraphErrorText $_)), $L.TitleWarning, 'OK', 'Warning')
             }
         }
-
-        $script:Apps.Clear(); $script:AppById = @{}
-        $script:Original = @{}; $script:Desired = @{}
-        foreach ($r in $raw) {
-            $app = [PSCustomObject]@{
-                Id          = [string]$r.id
-                Name        = [string]$r.displayName
-                Type        = ([string]$r.'@odata.type') -replace '^#microsoft\.graph\.', ''
-                Publisher   = [string]$r.publisher
-                Assignments = @($r.assignments)
-            }
-            $script:Apps.Add($app); $script:AppById[$app.Id] = $app
-            $st = ConvertTo-AssignmentState (Find-AssignmentForSelection $app.Assignments $sel)
-            if ($st) {
-                $script:Original[$app.Id] = $st
-                $script:Desired[$app.Id]  = [PSCustomObject]@{ Intent = $st.Intent; Exclude = $st.Exclude }
-            }
-        }
-
-        $keep = [string]$cmbType.SelectedItem
-        $cmbType.Items.Clear(); [void]$cmbType.Items.Add($L.AllTypes)
-        foreach ($t in ($script:Apps | ForEach-Object { $_.Type } | Sort-Object -Unique)) { [void]$cmbType.Items.Add($t) }
-        $cmbType.SelectedIndex = [Math]::Max(0, $cmbType.Items.IndexOf($keep))
-
+        if (-not $script:LoadedCats[$script:CurrentCat] -and $script:CurrentCat -ne 'all') { $script:CurrentCat = 'apps' }
+        Update-ButtonMode
         Update-Views
-        $lblStatus.Text = $L.StatusLoaded -f $script:Apps.Count, $script:Original.Count
+        $lblStatus.Text = $L.StatusLoaded -f $script:ItemByKey.Count, $script:Original.Count
     } catch {
         [void][System.Windows.Forms.MessageBox]::Show(($L.LoadFailed -f (Get-GraphErrorText $_)), $L.TitleError, 'OK', 'Error')
+        Update-ButtonMode; Update-Views   # show what is loaded now, not the previous target
     } finally {
         Set-Busy $false
         $btnSave.Enabled = ((Get-PendingCount) -gt 0)
     }
+}
+
+function Select-Category {
+    # Open a category; loads it (and asks for its permission) the first time
+    param([string]$CatKey)
+    $script:CurrentCat = $CatKey
+    if ($script:Connected -and $script:Selection) {
+        $need = @()
+        if ($CatKey -eq 'all') { $need = @($script:Categories.Keys) } else { $need = @($CatKey) }
+        $need = @($need | Where-Object { -not $script:LoadedCats[$_] })
+        if ($need.Count -gt 0) {
+            Set-Busy $true
+            try {
+                foreach ($k in $need) {
+                    try { Import-Category $k }
+                    catch {
+                        [void][System.Windows.Forms.MessageBox]::Show(($L.CategoryLoadFailed -f $script:Categories[$k].Label, (Get-GraphErrorText $_)), $L.TitleWarning, 'OK', 'Warning')
+                    }
+                }
+            } finally { Set-Busy $false }
+        }
+    }
+    Update-ButtonMode
+    Update-Views
 }
 #endregion
 
@@ -953,6 +1404,8 @@ function Show-GroupPicker {
             if ($script:_pick.Count -eq 2) { [void]$lbRes.Items.Add($L.NoResults) }
             $lbRes.EndUpdate()
         } catch {
+            $lbRes.Items.Clear()
+            foreach ($p in $script:_pick) { [void]$lbRes.Items.Add("* $($p.Name)") }   # only All users / All devices are left
             [void][System.Windows.Forms.MessageBox]::Show(($L.SearchFailed -f (Get-GraphErrorText $_)), $L.TitleError, 'OK', 'Error')
         } finally {
             $dlg.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -976,36 +1429,44 @@ function Show-GroupPicker {
 #endregion
 
 #region Move / edit
-function Add-SelectedApps {
+function Add-SelectedItems {
+    # Move the selected objects of the left list to "assigned". Objects without an intent get ''.
     param([string]$Intent, [bool]$Exclude)
-    $items = @($lbLeft.SelectedItems)
-    if (-not $items) { return }
-    foreach ($it in $items) {
-        $o = $script:Original[$it.Id]
-        if ($o -and $o.Intent -eq $Intent -and [bool]$o.Exclude -eq $Exclude) {
-            $script:Desired[$it.Id] = [PSCustomObject]@{ Intent = $o.Intent; Exclude = $o.Exclude }
+    $entries = @($lbLeft.SelectedItems)
+    if (-not $entries) { return }
+    foreach ($e in $entries) {
+        $it = $script:ItemByKey[$e.Key]
+        $want = $Intent
+        if (-not $it.HasIntent) { $want = '' }
+        $o = $script:Original[$e.Key]
+        if ($o -and $o.Intent -eq $want -and [bool]$o.Exclude -eq $Exclude) {
+            $script:Desired[$e.Key] = [PSCustomObject]@{ Intent = $o.Intent; Exclude = $o.Exclude }
         } else {
-            $script:Desired[$it.Id] = [PSCustomObject]@{ Intent = $Intent; Exclude = $Exclude }
+            $script:Desired[$e.Key] = [PSCustomObject]@{ Intent = $want; Exclude = $Exclude }
         }
     }
     Update-Views
 }
 
-$btnReq.Add_Click({  Add-SelectedApps 'required'  $false })
-$btnAvl.Add_Click({  Add-SelectedApps 'available' $false })
-$btnUni.Add_Click({  Add-SelectedApps 'uninstall' $false })
-$btnExcl.Add_Click({ Add-SelectedApps 'required'  $true  })
+$btnReq.Add_Click({    Add-SelectedItems 'required'  $false })
+$btnAvl.Add_Click({    Add-SelectedItems 'available' $false })
+$btnUni.Add_Click({    Add-SelectedItems 'uninstall' $false })
+$btnAssign.Add_Click({ Add-SelectedItems ''          $false })
+$btnExcl.Add_Click({   Add-SelectedItems 'required'  $true  })   # an app exclusion sits under Required
 $btnRemove.Add_Click({
-    $ids = @($grid.SelectedRows | ForEach-Object { [string]$_.Tag })
-    if (-not $ids) { return }
-    foreach ($id in $ids) {
-        $o = $script:Original[$id]
+    $keys = @($grid.SelectedRows | ForEach-Object { [string]$_.Tag })
+    if (-not $keys) { return }
+    foreach ($k in $keys) {
+        $o = $script:Original[$k]
         if ($o -and $o.PolicySet) { continue }   # only the policy set can remove it
-        $script:Desired.Remove($id)
+        $script:Desired.Remove($k)
     }
     Update-Views
 })
-$lbLeft.Add_DoubleClick({ Add-SelectedApps 'required' $false })
+$lbLeft.Add_DoubleClick({
+    if ($script:CurrentCat -eq 'all') { return }
+    if ($script:CurrentCat -eq 'apps') { Add-SelectedItems 'required' $false } else { Add-SelectedItems '' $false }
+})
 
 # Commit combo / checkbox edits at once instead of when the cell is left
 $grid.Add_CurrentCellDirtyStateChanged({
@@ -1014,12 +1475,16 @@ $grid.Add_CurrentCellDirtyStateChanged({
 $grid.Add_CellValueChanged({
     param($s, $e)
     if ($script:Rebuilding -or $e.RowIndex -lt 0) { return }
+    if ($e.ColumnIndex -ne $colIntent.Index -and $e.ColumnIndex -ne $colExcl.Index) { return }
     $row = $grid.Rows[$e.RowIndex]
-    $id  = [string]$row.Tag
-    if (-not $script:Desired.ContainsKey($id)) { return }
-    $script:Desired[$id] = [PSCustomObject]@{
-        Intent  = [string]$row.Cells['Intent'].Value
-        Exclude = [bool]$row.Cells['Exclude'].Value
+    $key = [string]$row.Tag
+    if (-not $script:Desired.ContainsKey($key)) { return }
+    $it = $script:ItemByKey[$key]
+    $intent = ''
+    if ($it.HasIntent) { $intent = [string]$row.Cells[$colIntent.Index].Value }
+    $script:Desired[$key] = [PSCustomObject]@{
+        Intent  = $intent
+        Exclude = [bool]$row.Cells[$colExcl.Index].Value
     }
     Update-GridRow $row
     Update-Status
@@ -1034,8 +1499,18 @@ $grid.Add_ColumnHeaderMouseClick({
     Update-Views
 })
 
+$lbCat.Add_SelectedIndexChanged({
+    if ($script:Rebuilding -or $lbCat.SelectedIndex -lt 0) { return }
+    $key = 'all'
+    if ($lbCat.SelectedIndex -gt 0) { $key = @($script:Categories.Keys)[$lbCat.SelectedIndex - 1] }
+    $missing = ($key -eq 'all' -and @($script:Categories.Keys | Where-Object { -not $script:LoadedCats[$_] }).Count -gt 0) -or
+               ($key -ne 'all' -and -not $script:LoadedCats[$key])
+    if ($key -ne $script:CurrentCat -or $missing) { Select-Category $key }
+})
 $txtSearch.Add_TextChanged({ Update-Views })
+$cmbPlatform.Add_SelectedIndexChanged({ if (-not $script:Rebuilding) { Update-Views } })
 $chkFilterNames.Add_CheckedChanged({
+    if ($script:Rebuilding) { return }
     if (-not $script:Connected) { return }   # applied at the next connect
     Set-Busy $true
     try { Update-FilterNames } finally { Set-Busy $false }
@@ -1054,8 +1529,9 @@ function Invoke-Save {
 
     $invalid = New-Object System.Collections.Generic.List[string]
     foreach ($op in $plan) {
-        $why = Get-PlanProblem $op $sel
-        if ($why) { $invalid.Add("$($script:AppById[$op.AppId].Name): $why") }
+        $it  = $script:ItemByKey[$op.Key]
+        $why = Get-PlanProblem $op $sel $it.UsersOnly
+        if ($why) { $invalid.Add("[$($it.CategoryLabel)] $($it.Name): $why") }
     }
     if ($invalid.Count -gt 0) {
         [void][System.Windows.Forms.MessageBox]::Show(($L.Invalid -f ($invalid -join "`n")), $L.InvalidTitle, 'OK', 'Warning'); return
@@ -1063,11 +1539,11 @@ function Invoke-Save {
 
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($op in $plan) {
-        $n = $script:AppById[$op.AppId].Name
+        $it = $script:ItemByKey[$op.Key]
         switch ($op.Action) {
-            'Add'    { $lines.Add(($L.OpAdd    -f $n, (Get-StateText $op.To))) }
-            'Remove' { $lines.Add(($L.OpRemove -f $n, (Get-StateText $op.From))) }
-            'Change' { $lines.Add(($L.OpChange -f $n, (Get-StateText $op.From), (Get-StateText $op.To))) }
+            'Add'    { $lines.Add(($L.OpAdd    -f $it.CategoryLabel, $it.Name, (Get-StateText $op.To $it.HasIntent))) }
+            'Remove' { $lines.Add(($L.OpRemove -f $it.CategoryLabel, $it.Name, (Get-StateText $op.From $it.HasIntent))) }
+            'Change' { $lines.Add(($L.OpChange -f $it.CategoryLabel, $it.Name, (Get-StateText $op.From $it.HasIntent), (Get-StateText $op.To $it.HasIntent))) }
         }
     }
     $shown = @($lines | Select-Object -First 25)
@@ -1077,69 +1553,46 @@ function Invoke-Save {
 
     Set-Busy $true
     $errs = New-Object System.Collections.Generic.List[string]
+    $mismatch = New-Object System.Collections.Generic.List[string]
     $vpp  = $chkVpp.Checked
-    $i = 0
     try {
+        $i = 0
         foreach ($op in $plan) {
             $i++
-            $app = $script:AppById[$op.AppId]
-            $lblStatus.Text = $L.StatusSaving -f $i, $plan.Count, $app.Name; $form.Update()
-            $base = "$($script:GraphBase)/deviceAppManagement/mobileApps/$($app.Id)/assignments"
+            $it = $script:ItemByKey[$op.Key]
+            $lblStatus.Text = $L.StatusSaving -f $i, $plan.Count, $it.Name; $form.Update()
             try {
-                if ($op.Action -eq 'Remove' -or $op.Action -eq 'Change') {
-                    Invoke-MgGraphRequest -Method DELETE -Uri "$base/$($op.From.AssignmentId)" -ErrorAction Stop | Out-Null
-                }
-                if ($op.Action -eq 'Add' -or $op.Action -eq 'Change') {
-                    $body = New-AssignmentBody -Selection $sel -Intent $op.To.Intent -Exclude ([bool]$op.To.Exclude) `
-                                -AppType $app.Type -VppDeviceLicensing $vpp -Carry $op.From
-                    try {
-                        Invoke-MgGraphRequest -Method POST -Uri $base -Body ($body | ConvertTo-Json -Depth 10) `
-                            -ContentType 'application/json' -ErrorAction Stop | Out-Null
-                    } catch {
-                        $msg = Get-GraphErrorText $_
-                        if ($op.Action -eq 'Change') {
-                            # the old assignment is already gone: put it back as it was
-                            $restore = New-AssignmentBody -Selection $sel -Intent $op.From.Intent -Exclude ([bool]$op.From.Exclude) `
-                                           -AppType $app.Type -VppDeviceLicensing $vpp -Carry $op.From
-                            try {
-                                Invoke-MgGraphRequest -Method POST -Uri $base -Body ($restore | ConvertTo-Json -Depth 10) `
-                                    -ContentType 'application/json' -ErrorAction Stop | Out-Null
-                                $msg = "$msg ($($L.Restored))"
-                            } catch { $msg = "$msg ($($L.RestoreFailed))" }
-                        }
-                        throw $msg
-                    }
-                }
+                Invoke-ItemWrite -Item $it -Operation $op -Selection $sel -VppDeviceLicensing $vpp
             } catch {
-                $sym = switch ($op.Action) { 'Add' { '+' } 'Remove' { '-' } default { '~' } }
-                $text = if ($_.Exception -and $_.Exception.Message) { $_.Exception.Message } else { "$_" }
-                if ($_.ErrorDetails) { $text = Get-GraphErrorText $_ }
-                $errs.Add("$sym $($app.Name): $text")
+                $sym = '~'
+                if ($op.Action -eq 'Add') { $sym = '+' } elseif ($op.Action -eq 'Remove') { $sym = '-' }
+                $errs.Add("$sym [$($it.CategoryLabel)] $($it.Name): $($_.Exception.Message)")
             }
         }
 
-        # Read back what Intune really has now, per touched app
-        $mismatch = New-Object System.Collections.Generic.List[string]
+        # Read back what Intune really has now, per touched object
         $j = 0
         foreach ($op in $plan) {
             $j++
             $lblStatus.Text = $L.StatusVerifying -f $j, $plan.Count; $form.Update()
-            $app = $script:AppById[$op.AppId]
+            $it = $script:ItemByKey[$op.Key]
             try {
-                $app.Assignments = Get-AppAssignments $app.Id
+                $it.Assignments = Get-ItemAssignments $it
             } catch {
-                $errs.Add("? $($app.Name): $(Get-GraphErrorText $_)"); continue
+                $errs.Add("? [$($it.CategoryLabel)] $($it.Name): $(Get-GraphErrorText $_)"); continue
             }
-            $live = ConvertTo-AssignmentState (Find-AssignmentForSelection $app.Assignments $sel)
+            $live = ConvertTo-AssignmentState (Find-AssignmentForSelection $it.Assignments $sel) $it.HasIntent
             if ($live) {
-                $script:Original[$app.Id] = $live
-                $script:Desired[$app.Id]  = [PSCustomObject]@{ Intent = $live.Intent; Exclude = $live.Exclude }
+                $script:Original[$it.Key] = $live
+                $script:Desired[$it.Key]  = [PSCustomObject]@{ Intent = $live.Intent; Exclude = $live.Exclude }
             } else {
-                $script:Original.Remove($app.Id); $script:Desired.Remove($app.Id)
+                $script:Original.Remove($it.Key); $script:Desired.Remove($it.Key)
             }
             $want = $op.To
-            $ok = if (-not $want) { -not $live } else { $live -and $live.Intent -eq $want.Intent -and [bool]$live.Exclude -eq [bool]$want.Exclude }
-            if (-not $ok) { $mismatch.Add("$($app.Name): $(Get-StateText $want)  <>  $(Get-StateText $live)") }
+            $ok = $false
+            if (-not $want) { $ok = (-not $live) }
+            else { $ok = ($live -and $live.Intent -eq $want.Intent -and [bool]$live.Exclude -eq [bool]$want.Exclude) }
+            if (-not $ok) { $mismatch.Add("[$($it.CategoryLabel)] $($it.Name): $(Get-StateText $want $it.HasIntent)  <>  $(Get-StateText $live $it.HasIntent)") }
         }
     } finally {
         Set-Busy $false
@@ -1179,6 +1632,8 @@ $btnPick.Add_Click({
 $form.Add_FormClosing({ param($s, $e) if (-not (Confirm-Discard)) { $e.Cancel = $true } })
 $form.Add_Shown({
     Set-SelectionText
+    Update-ButtonMode
+    Update-CategoryList
     if ($script:Selection) {
         Invoke-Connect
         if ($script:Connected) { Invoke-Load }

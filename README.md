@@ -4,7 +4,7 @@ Werkzeuge für Microsoft Intune, ein Ordner pro Tool. Windows PowerShell 5.1, Mi
 
 | Tool | Was es macht |
 | --- | --- |
-| [**GroupAppAssignment**](GroupAppAssignment/README.md) | App-Zuweisungen aus Sicht einer Gruppe (oder Alle Benutzer / Alle Geräte): welche Apps in welchem Modus zugewiesen sind, dazu hinzufügen, Modus ändern, entfernen. Gegenstück zu app-zentrierten Bulk-Tools. |
+| [**GroupAppAssignment**](GroupAppAssignment/README.md) | Intune-Zuweisungen aus Sicht einer Gruppe (oder Alle Benutzer / Alle Geräte): Apps, Konfigurationsprofile (Vorlagen und Einstellungskatalog), Compliance, App-Konfiguration – was in welchem Modus zugewiesen ist, dazu hinzufügen, ändern, entfernen. Plattform-Filter (Standard iOS). |
 
 ## Repository-Konventionen
 
