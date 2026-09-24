@@ -226,6 +226,18 @@ foreach ($c in $cats.Values) {
     }
 }
 Assert ($cats.Contains('apps') -and $cats.Contains('config') -and $cats.Contains('compliance') -and $cats.Contains('appConfig')) 'phase 1 categories exist'
+# phase 2: MAM - users only, complete list through /assign
+$mamCfg = @($cats['appConfig'].Sources | Where-Object { $_.List -like 'deviceAppManagement/targetedManagedAppConfigurations*' })
+Assert ($mamCfg.Count -eq 1 -and $mamCfg[0].UsersOnly -and $mamCfg[0].Write -eq 'Replace' -and $mamCfg[0].AssignAction -eq 'deviceAppManagement/targetedManagedAppConfigurations/{0}/assign') 'MAM app configuration: users only, /assign'
+Assert (@($cats['appConfig'].Sources | Where-Object { $_.List -like 'deviceAppManagement/mobileAppConfigurations*' -and -not $_.UsersOnly }).Count -eq 1) 'device app configuration: not users-only'
+Assert ($cats.Contains('appProtection') -and @($cats['appProtection'].Sources).Count -eq 3) 'app protection: iOS, Android, Windows collections'
+foreach ($src in $cats['appProtection'].Sources) {
+    Assert ($src.UsersOnly -and $src.Write -eq 'Replace' -and $src.AssignAction -eq 'deviceAppManagement/managedAppPolicies/{0}/assign' -and $src.AssignmentType -eq '#microsoft.graph.targetedManagedAppPolicyAssignment') "app protection source $($src.List): users only, managedAppPolicies/{id}/assign"
+}
+$itemAp = ConvertTo-Item @{ id = 'ap1'; displayName = 'iOS MAM'; '@odata.type' = '#microsoft.graph.iosManagedAppProtection' } $cats['appProtection'] $cats['appProtection'].Sources[0]
+Assert ($itemAp.AssignPath -eq 'deviceAppManagement/iosManagedAppProtections/ap1/assignments' -and $itemAp.AssignAction -eq 'deviceAppManagement/managedAppPolicies/ap1/assign') 'app protection item: read per collection, write through managedAppPolicies'
+Assert (($itemAp.Platforms -join ',') -eq 'iOS' -and $itemAp.UsersOnly) 'app protection item: platform iOS, users only'
+Assert (($cats['appProtection'].Sources[1].List) -eq 'deviceAppManagement/androidManagedAppProtections?$select=id,displayName') 'app protection list path built correctly'
 
 # ---- Platforms ----
 function P([string]$t, [string]$v = '') { (Get-ItemPlatforms -OdataType $t -PlatformsValue $v) -join ',' }

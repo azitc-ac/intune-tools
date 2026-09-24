@@ -1,8 +1,8 @@
 ﻿<#
 .SYNOPSIS
-    Intune assignments seen from a group: which apps, configuration profiles, compliance policies
-    and app configuration policies are assigned to the group, in which mode - and add, change or
-    remove those assignments.
+    Intune assignments seen from a group: which apps, configuration profiles, compliance policies,
+    app configuration and app protection policies are assigned to the group, in which mode - and
+    add, change or remove those assignments.
 
 .DESCRIPTION
     Pick an Entra ID group (or All Users / All Devices) and a category on the left. The middle list
@@ -73,6 +73,8 @@ $strings = @{
         CatConfig          = 'Konfigurationsprofile'
         CatCompliance      = 'Compliance'
         CatAppConfig       = 'App-Konfiguration'
+        CatAppProtection   = 'App-Schutz'
+        TypeMamAppConfig   = 'verwaltete Apps (MAM)'
         CatNotLoaded       = '{0}  (...)'
         CatCounts          = '{0}  ({1} / {2})'
         TypeSettingsCatalog = 'Einstellungskatalog'
@@ -174,6 +176,8 @@ $strings = @{
         CatConfig          = 'Configuration profiles'
         CatCompliance      = 'Compliance'
         CatAppConfig       = 'App configuration'
+        CatAppProtection   = 'App protection'
+        TypeMamAppConfig   = 'managed apps (MAM)'
         CatNotLoaded       = '{0}  (...)'
         CatCounts          = '{0}  ({1} / {2})'
         TypeSettingsCatalog = 'Settings catalog'
@@ -328,7 +332,25 @@ function Get-CategoryTable {
         Sources = @(
             (New-Source -List 'deviceAppManagement/mobileAppConfigurations?$select=id,displayName' `
                         -ItemPath 'deviceAppManagement/mobileAppConfigurations/{0}' -Write 'Single' `
-                        -AssignmentType '#microsoft.graph.managedDeviceMobileAppConfigurationAssignment')
+                        -AssignmentType '#microsoft.graph.managedDeviceMobileAppConfigurationAssignment'),
+            # managed apps (MAM): users only, written as a complete list through /assign
+            (New-Source -List 'deviceAppManagement/targetedManagedAppConfigurations?$select=id,displayName' `
+                        -ItemPath 'deviceAppManagement/targetedManagedAppConfigurations/{0}' -Write 'Replace' `
+                        -AssignAction 'deviceAppManagement/targetedManagedAppConfigurations/{0}/assign' `
+                        -AssignmentType '#microsoft.graph.targetedManagedAppPolicyAssignment' -UsersOnly $true `
+                        -TypeName $L.TypeMamAppConfig)
+        )
+    }
+    # app protection: users only; read per platform collection, written through managedAppPolicies/{id}/assign
+    $t['appProtection'] = [PSCustomObject]@{
+        Key = 'appProtection'; Label = $L.CatAppProtection; HasIntent = $false; NeedsConfigScope = $true
+        Sources = @(
+            foreach ($coll in @('iosManagedAppProtections', 'androidManagedAppProtections', 'windowsManagedAppProtections')) {
+                New-Source -List "deviceAppManagement/$coll`?`$select=id,displayName" `
+                           -ItemPath "deviceAppManagement/$coll/{0}" -Write 'Replace' `
+                           -AssignAction 'deviceAppManagement/managedAppPolicies/{0}/assign' `
+                           -AssignmentType '#microsoft.graph.targetedManagedAppPolicyAssignment' -UsersOnly $true
+            }
         )
     }
     return $t

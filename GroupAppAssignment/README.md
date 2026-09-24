@@ -43,6 +43,8 @@ bleiben unverändert. Oberfläche zweisprachig (Deutsch/Englisch nach UI-Kultur)
 | Konfigurationsprofile – Einstellungskatalog (inkl. Declarative Software Update) | `deviceManagement/configurationPolicies` | Gesamtliste (`/assign`) |
 | Compliance | `deviceManagement/deviceCompliancePolicies` | einzeln |
 | App-Konfiguration (verwaltete Geräte) | `deviceAppManagement/mobileAppConfigurations` | einzeln |
+| App-Konfiguration (verwaltete Apps, MAM) – nur Benutzer | `deviceAppManagement/targetedManagedAppConfigurations` | Gesamtliste (`…/assign`) |
+| App-Schutz (iOS, Android, Windows) – nur Benutzer | `deviceAppManagement/{ios,android,windows}ManagedAppProtections` | Gesamtliste (`managedAppPolicies/{id}/assign`) |
 
 **Gesamtliste** heißt: Das Tool liest die Zuweisungsliste des Objekts unmittelbar vor dem Schreiben frisch,
 ändert nur den Eintrag des gewählten Ziels und schickt die Liste zurück. Alle anderen Ziele gehen mit
@@ -91,7 +93,9 @@ oder `Start-GroupAppAssignment.bat` doppelklicken (Parameter werden durchgereich
   schreibgeschützt angezeigt („Richtliniensatz"); das Tool ändert oder löscht sie nicht und schickt sie bei
   einer Gesamtliste auch nicht mit. Gibt es für dasselbe Ziel eine direkte und eine Policy-Set-Zuweisung,
   zeigt es die direkte.
-- **Vorab abgelehnt:** Ausschluss für Alle Benutzer/Alle Geräte, „Verfügbar" an Alle Geräte.
+- **Vorab abgelehnt:** Ausschluss für Alle Benutzer/Alle Geräte, „Verfügbar" an Alle Geräte,
+  App-Schutz und MAM-App-Konfiguration an Alle Geräte (gelten nur für Benutzer; ob eine *Gruppe* Benutzer
+  oder Geräte enthält, prüft Intune beim Speichern).
   Alles andere prüft Intune selbst (z. B. „Verfügbar" an eine Gerätegruppe) – die Fehlermeldung von
   Graph wird pro Objekt angezeigt.
 - **Neue App-Ausschlüsse** bekommen den Modus „Erforderlich"; im Grid änderbar.
