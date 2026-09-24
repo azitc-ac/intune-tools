@@ -162,3 +162,29 @@ Das Skript lädt nur den GUI-freien Teil von `Manage-GroupAppAssignment.ps1` bis
 `# ---- end of the GUI-free part`.
 
 Alle `.ps1` sind UTF-8 mit BOM, CRLF per `.gitattributes` im Repo-Wurzelverzeichnis.
+
+## Ausblick: plattformübergreifende Oberfläche (Idee, noch nicht umgesetzt)
+
+Die Oberfläche ist WinForms und läuft daher nur unter Windows. Alles oberhalb der Markerzeile ist frei von
+WinForms und lief bereits unter PowerShell 7 auf Linux live gegen einen Tenant.
+
+**Vorschlag:** eine lokale Web-Oberfläche statt WinForms.
+- Das Skript startet einen kleinen HTTP-Server nur auf `127.0.0.1` mit zufälligem Port und öffnet den Browser.
+  Das funktioniert unter Windows, macOS und Linux.
+- Die Seite hat denselben Aufbau wie jetzt und ruft nur wenige JSON-Endpunkte auf, die direkt die vorhandenen
+  Funktionen nutzen. Die Intune-Logik bleibt in PowerShell, nichts davon wird in JavaScript nachgebaut.
+- Die Anmeldung läuft wie bisher über `Connect-MgGraph`, ohne Desktop-Browser über den Gerätecode.
+  Das Graph-Token bleibt im PowerShell-Prozess.
+- Absicherung: Einmal-Token in der Start-URL, Anfragen ohne Token oder von fremdem Origin werden abgelehnt.
+- Für Windows PowerShell 5.1 ohne Adminrechte einen einfachen TCP-Listener statt `HttpListener` nehmen.
+  Ob `HttpListener` unter 5.1 ohne URL-Reservierung läuft, ist ungeprüft.
+- Den Kern in eine gemeinsame Datei auslagern, die WinForms- und Web-Oberfläche beide nutzen. So gibt es nur
+  einen Schreibweg. WinForms behalten, bis die Web-Oberfläche erprobt ist.
+
+**Warum:** Neben der Plattformfrage lässt sich eine Web-Oberfläche automatisch mit Playwright durchklicken,
+mit nachgebildetem Graph oder live. Die bisherigen Laufzeitfehler (`Columns.AddRange` unter 5.1, `@()` auf
+`List[object]`) saßen genau in der Oberfläche, die sich bisher nicht automatisch testen ließ.
+
+**Verworfen:** Avalonia für PowerShell (Anbindung zu unreif), Konsolen-Oberfläche mit Terminal.Gui (zu eng für
+vier Listen mit Grid), reine Browser-App mit MSAL.js (bräuchte eine eigene App-Registrierung, und die Logik
+müsste in JavaScript ohne die vorhandenen Tests neu entstehen).
