@@ -138,7 +138,7 @@ $strings = @{
         ErrAvailAllDevices = "'Verfügbar' kann nicht an Alle Geräte zugewiesen werden"
         ErrUsersOnly       = 'geht nur an Benutzer (Gruppen mit Benutzern oder Alle Benutzer), nicht an Alle Geräte'
         StatusSaving       = 'Speichere ({0} / {1}): {2}'
-        StatusVerifying    = 'Prüfe Ergebnis in Intune ({0} / {1})...'
+        StatusVerifying    = 'Prüfe Ergebnis in Intune ({0} / {1})... (App-Schutz / MAM: Intune braucht dafür bis zu einer Minute)'
         SaveErrors         = "Abgeschlossen mit Fehlern:`n`n{0}"
         VerifyFailedHint   = "`n`n'?' = gespeichert, aber das Ergebnis konnte nicht aus Intune gelesen werden - die Anzeige kann veraltet sein, bitte 'Laden' klicken."
         SaveOk             = '{0} Änderung(en) gespeichert und in Intune bestätigt.'
@@ -242,7 +242,7 @@ $strings = @{
         ErrAvailAllDevices = "'Available' cannot be assigned to All devices"
         ErrUsersOnly       = 'can only be assigned to users (groups of users or All users), not to All devices'
         StatusSaving       = 'Saving ({0} / {1}): {2}'
-        StatusVerifying    = 'Checking the result in Intune ({0} / {1})...'
+        StatusVerifying    = 'Checking the result in Intune ({0} / {1})... (app protection / MAM: Intune needs up to a minute)'
         SaveErrors         = "Completed with errors:`n`n{0}"
         VerifyFailedHint   = "`n`n'?' = saved, but the result could not be read back from Intune - the view may be out of date, please click 'Load'."
         SaveOk             = '{0} change(s) saved and confirmed by Intune.'
@@ -287,11 +287,20 @@ function New-Source {
     #   AssignmentType @odata.type of an assignment object in the request body
     #   UsersOnly      the objects apply to users only (MAM): All devices is rejected
     #   TypeName       shown as type instead of the @odata.type (settings catalog has one type)
+    #   ReadVia        Collection = GET ItemPath/assignments; Expand = GET ItemPath?$expand=assignments
+    #                  (policy sets have no assignments collection to GET)
+    # Write modes and paths are the ones that worked against a live tenant (2026-09), which differ from
+    # the documentation for compliance, app configuration, app protection and policy sets.
     param([string]$List, [string]$ItemPath, [string]$Write, [string]$AssignmentType,
-          [string]$AssignAction = '', [string]$NameProp = 'displayName', [bool]$UsersOnly = $false, [string]$TypeName = '')
+          [string]$AssignAction = '', [string]$NameProp = 'displayName', [bool]$UsersOnly = $false, [string]$TypeName = '',
+          [ValidateSet('Collection', 'Expand')][string]$ReadVia = 'Collection', [bool]$Eventual = $false)
+    #   Eventual       reads lag behind writes and may flip between old and new for 20 s and more, writes
+    #                  shortly after a change fail with ConditionNotMet / ResourceNotFound (MAM, measured
+    #                  live): read until stable, retry the write, wait for the result
     [PSCustomObject]@{
         List = $List; ItemPath = $ItemPath; Write = $Write; AssignmentType = $AssignmentType
-        AssignAction = $AssignAction; NameProp = $NameProp; UsersOnly = $UsersOnly; TypeName = $TypeName
+        AssignAction = $AssignAction; NameProp = $NameProp; UsersOnly = $UsersOnly; TypeName = $TypeName; ReadVia = $ReadVia
+        Eventual = $Eventual
     }
 }
 
@@ -324,43 +333,51 @@ function Get-CategoryTable {
     $t['compliance'] = [PSCustomObject]@{
         Key = 'compliance'; Label = $L.CatCompliance; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
+            # POST .../assignments is documented but has no route in the service: /assign
             (New-Source -List 'deviceManagement/deviceCompliancePolicies?$select=id,displayName' `
-                        -ItemPath 'deviceManagement/deviceCompliancePolicies/{0}' -Write 'Single' `
+                        -ItemPath 'deviceManagement/deviceCompliancePolicies/{0}' -Write 'Replace' `
+                        -AssignAction 'deviceManagement/deviceCompliancePolicies/{0}/assign' `
                         -AssignmentType '#microsoft.graph.deviceCompliancePolicyAssignment')
         )
     }
     $t['appConfig'] = [PSCustomObject]@{
         Key = 'appConfig'; Label = $L.CatAppConfig; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
+            # POST .../assignments is documented but has no route in the service: /assign
             (New-Source -List 'deviceAppManagement/mobileAppConfigurations?$select=id,displayName' `
-                        -ItemPath 'deviceAppManagement/mobileAppConfigurations/{0}' -Write 'Single' `
+                        -ItemPath 'deviceAppManagement/mobileAppConfigurations/{0}' -Write 'Replace' `
+                        -AssignAction 'deviceAppManagement/mobileAppConfigurations/{0}/assign' `
                         -AssignmentType '#microsoft.graph.managedDeviceMobileAppConfigurationAssignment'),
             # managed apps (MAM): users only, written as a complete list through /assign
             (New-Source -List 'deviceAppManagement/targetedManagedAppConfigurations?$select=id,displayName' `
                         -ItemPath 'deviceAppManagement/targetedManagedAppConfigurations/{0}' -Write 'Replace' `
                         -AssignAction 'deviceAppManagement/targetedManagedAppConfigurations/{0}/assign' `
                         -AssignmentType '#microsoft.graph.targetedManagedAppPolicyAssignment' -UsersOnly $true `
-                        -TypeName $L.TypeMamAppConfig)
+                        -TypeName $L.TypeMamAppConfig -Eventual $true)
         )
     }
-    # app protection: users only; read per platform collection, written through managedAppPolicies/{id}/assign
+    # app protection: users only; read and written per platform collection (the documented
+    # managedAppPolicies/{id}/assign answers "Resource not found for the segment 'assign'")
     $t['appProtection'] = [PSCustomObject]@{
         Key = 'appProtection'; Label = $L.CatAppProtection; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
             foreach ($coll in @('iosManagedAppProtections', 'androidManagedAppProtections', 'windowsManagedAppProtections')) {
                 New-Source -List "deviceAppManagement/$coll`?`$select=id,displayName" `
                            -ItemPath "deviceAppManagement/$coll/{0}" -Write 'Replace' `
-                           -AssignAction 'deviceAppManagement/managedAppPolicies/{0}/assign' `
-                           -AssignmentType '#microsoft.graph.targetedManagedAppPolicyAssignment' -UsersOnly $true
+                           -AssignAction "deviceAppManagement/$coll/{0}/assign" `
+                           -AssignmentType '#microsoft.graph.targetedManagedAppPolicyAssignment' -UsersOnly $true -Eventual $true
             }
         )
     }
-    # policy sets: the set itself is assigned; what it contains shows up read-only in the other categories
+    # policy sets: the set itself is assigned; what it contains shows up read-only in the other categories.
+    # No GET/POST on .../assignments and no $expand on the list: read per set with $expand, write the
+    # complete list through /update.
     $t['policySets'] = [PSCustomObject]@{
         Key = 'policySets'; Label = $L.CatPolicySets; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
             (New-Source -List 'deviceAppManagement/policySets?$select=id,displayName' `
-                        -ItemPath 'deviceAppManagement/policySets/{0}' -Write 'Single' `
+                        -ItemPath 'deviceAppManagement/policySets/{0}' -Write 'Replace' `
+                        -AssignAction 'deviceAppManagement/policySets/{0}/update' -ReadVia 'Expand' `
                         -AssignmentType '#microsoft.graph.policySetAssignment')
         )
     }
@@ -435,6 +452,9 @@ function ConvertTo-Item {
         UsersOnly     = [bool]$Source.UsersOnly
         Write         = $Source.Write
         AssignmentType = $Source.AssignmentType
+        ItemPath      = ($Source.ItemPath -f $id)
+        ReadVia       = $Source.ReadVia
+        Eventual      = [bool]$Source.Eventual
         AssignPath    = ($Source.ItemPath -f $id) + '/assignments'
         AssignAction  = $action
         Assignments   = $Raw.assignments
@@ -697,9 +717,78 @@ function Search-Groups {
     return @(@($resp.value) | Where-Object { $_ } | Sort-Object { $_.displayName })
 }
 
+function Read-Assignments {
+    # the assignments of one object, as object[] - via its assignments collection or via $expand
+    param([string]$ItemPath, [string]$ReadVia = 'Collection')
+    if ($ReadVia -eq 'Expand') {
+        $r = Invoke-MgGraphRequest -Method GET -Uri "$($script:GraphBase)/$ItemPath`?`$expand=assignments" -ErrorAction Stop
+        $list = @()
+        foreach ($a in $r.assignments) { if ($null -ne $a) { $list += $a } }
+        return ,$list
+    }
+    return ,(Invoke-GraphPaged -Uri "$($script:GraphBase)/$ItemPath/assignments")
+}
+
 function Get-ItemAssignments {
     param($Item)
-    return ,(Invoke-GraphPaged -Uri "$($script:GraphBase)/$($Item.AssignPath)")
+    return ,(Read-Assignments $Item.ItemPath $Item.ReadVia)
+}
+
+$script:Sleep       = { param([int]$Seconds) Start-Sleep -Seconds $Seconds }   # replaced by the tests
+$script:PollSeconds = 5
+
+function Get-GraphErrorCode {
+    param($ErrorRecord)
+    try { return [string](($ErrorRecord.ErrorDetails.Message | ConvertFrom-Json -ErrorAction Stop).error.code) } catch { return '' }
+}
+
+function Get-AssignmentSignature {
+    # order-independent fingerprint of an assignment list: target type, group, filter
+    param($Assignments)
+    $parts = foreach ($a in $Assignments) {
+        if (-not $a) { continue }
+        "$($a.target.'@odata.type')|$($a.target.groupId)|$($a.target.deviceAndAppManagementAssignmentFilterId)|$($a.target.deviceAndAppManagementAssignmentFilterType)|$($a.intent)"
+    }
+    return ((@($parts) | Sort-Object) -join ';')
+}
+
+function Read-StableAssignments {
+    # For eventually consistent objects: read until two reads $script:PollSeconds apart agree
+    # (at most $MaxSeconds); everything else is read once.
+    param($Item, [int]$MaxSeconds = 40)
+    $a = Get-ItemAssignments $Item
+    if (-not $Item.Eventual) { return ,$a }
+    $waited = 0
+    while ($waited -lt $MaxSeconds) {
+        & $script:Sleep $script:PollSeconds; $waited += $script:PollSeconds
+        $b = Get-ItemAssignments $Item
+        if ((Get-AssignmentSignature $a) -eq (Get-AssignmentSignature $b)) { return ,$b }
+        $a = $b
+    }
+    return ,$a
+}
+
+function Test-StateMatches {
+    # does the live state of the target match what was wanted ($null = not assigned)?
+    param($Live, $Want)
+    if (-not $Want) { return (-not $Live) }
+    return ([bool]$Live -and $Live.Intent -eq $Want.Intent -and [bool]$Live.Exclude -eq [bool]$Want.Exclude)
+}
+
+function Wait-ItemState {
+    # Read the object's assignments after a write. Eventually consistent objects are polled until the
+    # target shows the wanted state in two reads in a row (at most $MaxSeconds); returns the last read.
+    param($Item, $Selection, $Want, [int]$MaxSeconds = 60)
+    $list = Get-ItemAssignments $Item
+    if (-not $Item.Eventual) { return ,$list }
+    $hits = 0; $waited = 0
+    while ($true) {
+        $live = ConvertTo-AssignmentState (Find-AssignmentForSelection $list $Selection) $Item.HasIntent
+        if (Test-StateMatches $live $Want) { $hits++ } else { $hits = 0 }
+        if ($hits -ge 2 -or $waited -ge $MaxSeconds) { return ,$list }
+        & $script:Sleep $script:PollSeconds; $waited += $script:PollSeconds
+        $list = Get-ItemAssignments $Item
+    }
 }
 
 function Get-CategoryItems {
@@ -717,7 +806,7 @@ function Get-CategoryItems {
         if (-not $expanded) {
             $raw = Invoke-GraphPaged -Uri $uri -OnPage $OnPage
             foreach ($r in $raw) {
-                $r['assignments'] = Invoke-GraphPaged -Uri ("$($script:GraphBase)/" + ($src.ItemPath -f [string]$r.id) + '/assignments')
+                $r['assignments'] = Read-Assignments ($src.ItemPath -f [string]$r.id) $src.ReadVia
             }
         }
         foreach ($r in $raw) { $items.Add((ConvertTo-Item $r $Category $src)) }
@@ -731,16 +820,24 @@ function Invoke-ItemWrite {
     $base = "$($script:GraphBase)/$($Item.AssignPath)"
 
     if ($Item.Write -eq 'Replace') {
-        # read the list fresh right before writing it back, so no other target gets lost
-        $current = Get-ItemAssignments $Item
+        # read the list fresh (and, where reads lag, stable) right before writing it back, so no other
+        # target gets lost; resending the same complete list is harmless, so transient errors are retried
+        $current = Read-StableAssignments $Item
         $list = New-ReplaceAssignmentList -Current $current -Selection $Selection -Desired $Operation.To `
                     -AssignmentType $Item.AssignmentType -Carry $Operation.From
         $json = @{ assignments = $list } | ConvertTo-Json -Depth 20
-        try {
-            Invoke-MgGraphRequest -Method POST -Uri "$($script:GraphBase)/$($Item.AssignAction)" -Body $json `
-                -ContentType 'application/json' -ErrorAction Stop | Out-Null
-        } catch { throw (Get-GraphErrorText $_) }
-        return
+        $transient = @('ConditionNotMet', 'TooManyRequests', 'ServiceUnavailable')
+        if ($Item.Eventual) { $transient += 'ResourceNotFound' }
+        for ($try = 1; $true; $try++) {
+            try {
+                Invoke-MgGraphRequest -Method POST -Uri "$($script:GraphBase)/$($Item.AssignAction)" -Body $json `
+                    -ContentType 'application/json' -ErrorAction Stop | Out-Null
+                return
+            } catch {
+                if ($try -ge 5 -or $transient -notcontains (Get-GraphErrorCode $_)) { throw (Get-GraphErrorText $_) }
+                & $script:Sleep $script:PollSeconds
+            }
+        }
     }
 
     if ($Operation.Action -eq 'Remove' -or $Operation.Action -eq 'Change') {
@@ -1610,7 +1707,7 @@ function Invoke-Save {
             $lblStatus.Text = $L.StatusVerifying -f $j, $plan.Count; $form.Update()
             $it = $script:ItemByKey[$op.Key]
             try {
-                $it.Assignments = Get-ItemAssignments $it
+                $it.Assignments = Wait-ItemState $it $sel $op.To
             } catch {
                 $errs.Add("? [$($it.CategoryLabel)] $($it.Name): $(Get-GraphErrorText $_)"); continue
             }
@@ -1622,9 +1719,7 @@ function Invoke-Save {
                 $script:Original.Remove($it.Key); $script:Desired.Remove($it.Key)
             }
             $want = $op.To
-            $ok = $false
-            if (-not $want) { $ok = (-not $live) }
-            else { $ok = ($live -and $live.Intent -eq $want.Intent -and [bool]$live.Exclude -eq [bool]$want.Exclude) }
+            $ok = Test-StateMatches $live $want
             if (-not $ok) { $mismatch.Add("[$($it.CategoryLabel)] $($it.Name): $(Get-StateText $want $it.HasIntent)  <>  $(Get-StateText $live $it.HasIntent)") }
         }
     } finally {

@@ -221,7 +221,8 @@ foreach ($c in $cats.Values) {
         Assert ($src.List -match '^[A-Za-z/]+\?\$select=') "category $($c.Key): list '$($src.List)' is a path with `$select"
         Assert ($src.ItemPath -match '\{0\}$') "category $($c.Key): item path '$($src.ItemPath)' ends in {0}"
         Assert (@('Single', 'Replace') -contains $src.Write) "category $($c.Key): write mode '$($src.Write)' is Single or Replace"
-        if ($src.Write -eq 'Replace') { Assert ($src.AssignAction -match '\{0\}.*/assign$|/assign$') "category $($c.Key): Replace source has an /assign action" }
+        if ($src.Write -eq 'Replace') { Assert ($src.AssignAction -match '\{0\}/(assign|update)$') "category $($c.Key): Replace source has an /assign or /update action" }
+        Assert (@('Collection', 'Expand') -contains $src.ReadVia) "category $($c.Key): read path '$($src.ReadVia)'" 
         Assert ($src.AssignmentType -match '^#microsoft\.graph\..+Assignment$') "category $($c.Key): assignment type '$($src.AssignmentType)'"
     }
 }
@@ -232,14 +233,18 @@ Assert ($mamCfg.Count -eq 1 -and $mamCfg[0].UsersOnly -and $mamCfg[0].Write -eq 
 Assert (@($cats['appConfig'].Sources | Where-Object { $_.List -like 'deviceAppManagement/mobileAppConfigurations*' -and -not $_.UsersOnly }).Count -eq 1) 'device app configuration: not users-only'
 Assert ($cats.Contains('appProtection') -and @($cats['appProtection'].Sources).Count -eq 3) 'app protection: iOS, Android, Windows collections'
 foreach ($src in $cats['appProtection'].Sources) {
-    Assert ($src.UsersOnly -and $src.Write -eq 'Replace' -and $src.AssignAction -eq 'deviceAppManagement/managedAppPolicies/{0}/assign' -and $src.AssignmentType -eq '#microsoft.graph.targetedManagedAppPolicyAssignment') "app protection source $($src.List): users only, managedAppPolicies/{id}/assign"
+    Assert ($src.UsersOnly -and $src.Write -eq 'Replace' -and $src.AssignAction -eq "$($src.ItemPath)/assign" -and $src.AssignmentType -eq '#microsoft.graph.targetedManagedAppPolicyAssignment') "app protection source $($src.List): users only, <collection>/{id}/assign (live-verified)"
 }
 $itemAp = ConvertTo-Item @{ id = 'ap1'; displayName = 'iOS MAM'; '@odata.type' = '#microsoft.graph.iosManagedAppProtection' } $cats['appProtection'] $cats['appProtection'].Sources[0]
-Assert ($itemAp.AssignPath -eq 'deviceAppManagement/iosManagedAppProtections/ap1/assignments' -and $itemAp.AssignAction -eq 'deviceAppManagement/managedAppPolicies/ap1/assign') 'app protection item: read per collection, write through managedAppPolicies'
+Assert ($itemAp.AssignPath -eq 'deviceAppManagement/iosManagedAppProtections/ap1/assignments' -and $itemAp.AssignAction -eq 'deviceAppManagement/iosManagedAppProtections/ap1/assign') 'app protection item: read and write per platform collection'
 Assert (($itemAp.Platforms -join ',') -eq 'iOS' -and $itemAp.UsersOnly) 'app protection item: platform iOS, users only'
 Assert (($cats['appProtection'].Sources[1].List) -eq 'deviceAppManagement/androidManagedAppProtections?$select=id,displayName') 'app protection list path built correctly'
 # phase 3: policy sets - assigned one by one like apps, no intent
-Assert ($cats.Contains('policySets') -and $cats['policySets'].Sources[0].Write -eq 'Single' -and $cats['policySets'].Sources[0].AssignmentType -eq '#microsoft.graph.policySetAssignment') 'policy sets: single writes, policySetAssignment'
+Assert ($cats.Contains('policySets') -and $cats['policySets'].Sources[0].Write -eq 'Replace' -and $cats['policySets'].Sources[0].AssignAction -eq 'deviceAppManagement/policySets/{0}/update' -and $cats['policySets'].Sources[0].ReadVia -eq 'Expand' -and $cats['policySets'].Sources[0].AssignmentType -eq '#microsoft.graph.policySetAssignment') 'policy sets: read via $expand, complete list through /update (live-verified)'
+# live-verified write paths (2026-09): the documented POST .../assignments has no route for these
+Assert ($cats['compliance'].Sources[0].Write -eq 'Replace' -and $cats['compliance'].Sources[0].AssignAction -eq 'deviceManagement/deviceCompliancePolicies/{0}/assign') 'compliance: /assign (live-verified)'
+Assert (@($cats['appConfig'].Sources | Where-Object { $_.List -like 'deviceAppManagement/mobileAppConfigurations*' -and $_.Write -eq 'Replace' -and $_.AssignAction -eq 'deviceAppManagement/mobileAppConfigurations/{0}/assign' }).Count -eq 1) 'device app configuration: /assign (live-verified)'
+Assert (@($cats['config'].Sources | Where-Object { $_.List -like 'deviceManagement/deviceConfigurations*' -and $_.Write -eq 'Single' }).Count -eq 1) 'device configurations: single writes (live-verified)'
 $itemPs = ConvertTo-Item @{ id = 'ps1'; displayName = 'iOS Baseline'; '@odata.type' = '#microsoft.graph.policySet' } $cats['policySets'] $cats['policySets'].Sources[0]
 Assert ($itemPs.AssignPath -eq 'deviceAppManagement/policySets/ps1/assignments' -and ($itemPs.Platforms -join ',') -eq '*' -and -not $itemPs.HasIntent) 'policy set item: path, no platform of its own, no intent'
 $bPs = New-AssignmentBody -Selection $selG1 -Intent '' -Exclude $false -AppType 'policySet' -VppDeviceLicensing $true -AssignmentType '#microsoft.graph.policySetAssignment' -HasIntent $false
@@ -341,6 +346,22 @@ $items = Get-CategoryItems -Category $cc
 Assert ($items.Count -eq 1 -and @($items[0].Assignments).Count -eq 2) 'load without $expand: assignments read per object'
 Assert ((ConvertTo-AssignmentState (Find-AssignmentForSelection $items[0].Assignments $selG1) $false).FilterId -eq 'f-1') 'load without $expand: the group is found'
 
+# read via $expand (policy sets): no list $expand, per set GET ?$expand=assignments
+$script:calls = @()
+$srcPs = $cats['policySets'].Sources[0]
+# ordered, and '[?]' because '?' is a one-character wildcard for -like
+$script:responses = [ordered]@{
+    '*/policySets/ps1[?]$expand=assignments'         = @{ id = 'ps1'; assignments = @($cur[0]) }
+    '*/policySets[?]$select=*&$expand=assignments'   = { throw 'Query option Expand is not allowed' }
+    '*/policySets[?]$select=id,displayName'          = @{ value = @(@{ id = 'ps1'; displayName = 'Set' }) }
+}
+$psItems = Get-CategoryItems -Category ([PSCustomObject]@{ Key = 'policySets'; Label = 'P'; HasIntent = $false; Sources = @($srcPs) })
+Assert ($psItems.Count -eq 1 -and @($psItems[0].Assignments).Count -eq 1 -and $psItems[0].Assignments[0].target.groupId -eq $g2) 'policy sets: assignments read per set via $expand'
+Assert (@(Get-Calls 'GET' | Where-Object { $_.Uri -like '*/assignments' }).Count -eq 0) 'policy sets: never GET .../assignments'
+$script:responses = [ordered]@{ '*/policySets/ps1[?]$expand=assignments' = @{ id = 'ps1' } }
+$pa = Get-ItemAssignments $psItems[0]    # used by assignment, like the tool does
+Assert ($pa -is [object[]] -and $pa.Count -eq 0) 'policy sets: a set without assignments reads as an empty array'
+
 # write, Replace: fresh read, then one POST to /assign that keeps the other targets
 $script:calls = @()
 $script:responses = @{ '*configurationPolicies/sc1/assignments' = @{ value = $cur } }
@@ -370,6 +391,68 @@ $err = $null
 try { Invoke-ItemWrite -Item $itemDc -Operation $opC -Selection $selG1 -VppDeviceLicensing $true } catch { $err = $_.Exception.Message }
 $restorePost = @(Get-Calls 'POST')
 Assert ($err -and $err -like "*$($L.Restored)*" -and $restorePost.Count -eq 2 -and ($restorePost[1].Body | ConvertFrom-Json).target.'@odata.type' -eq '#microsoft.graph.groupAssignmentTarget') 'write Single/change: failed POST -> old assignment restored and reported'
+
+# ---- eventually consistent objects (MAM, measured live): stable read, retry, wait for the result ----
+$script:slept = 0
+$script:Sleep = { param($s) $script:slept += $s }
+$srcAp  = $cats['appProtection'].Sources[0]
+Assert ($srcAp.Eventual -and (@($cats['appConfig'].Sources | Where-Object { $_.Eventual }).Count -eq 1)) 'MAM sources are marked eventually consistent'
+Assert (-not ($cats['config'].Sources | Where-Object { $_.Eventual }) -and -not $cats['apps'].Sources[0].Eventual) 'other sources are not'
+$itemEv = ConvertTo-Item @{ id = 'ev1'; displayName = 'MAM'; '@odata.type' = '#microsoft.graph.iosManagedAppProtection' } $cats['appProtection'] $srcAp
+$aC  = @{ id = 'c'; target = @{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = 'gC' } }
+$aAx = @{ id = 'a'; target = @{ '@odata.type' = '#microsoft.graph.exclusionGroupAssignmentTarget'; groupId = $g1 } }
+
+# stable read: stale, new, new -> the new list after the second agreeing read
+$script:seq = @( @{ value = @($aC, $aAx) }, @{ value = @($aC) }, @{ value = @($aC) } ); $script:n = 0
+$script:responses = [ordered]@{ '*/iosManagedAppProtections/ev1/assignments' = { $r = $script:seq[[Math]::Min($script:n, $script:seq.Count - 1)]; $script:n++; $r } }
+$script:calls = @(); $script:slept = 0
+$st = Read-StableAssignments $itemEv
+Assert ($st.Count -eq 1 -and $script:n -eq 3 -and $script:slept -eq 10) 'stable read: waits until two reads agree'
+Assert ((Get-AssignmentSignature @($aC, $aAx)) -eq (Get-AssignmentSignature @($aAx, $aC))) 'signature ignores the order'
+$script:n = 0; $script:slept = 0
+[void](Read-StableAssignments $itemDc)
+Assert ($script:slept -eq 0) 'stable read: other objects are read once, no waiting'
+
+# the write builds its list from the STABLE read: a stale first read still showing a just-removed
+# exclusion must not bring it back
+$gB2 = 'aaaaaaaa-0000-0000-0000-00000000000b'
+$script:seq = @( @{ value = @($aC, $aAx) }, @{ value = @($aC) }, @{ value = @($aC) } ); $script:n = 0; $script:slept = 0
+$script:responses = [ordered]@{
+    '*/iosManagedAppProtections/ev1/assignments' = { $r = $script:seq[[Math]::Min($script:n, $script:seq.Count - 1)]; $script:n++; $r }
+    '*/iosManagedAppProtections/ev1/assign'      = @{}
+}
+$script:calls = @()
+Invoke-ItemWrite -Item $itemEv -Operation ([PSCustomObject]@{ Key = 'k'; Action = 'Add'; From = $null; To = (S '' $false) }) -Selection (New-Selection 'group' $gB2 'B') -VppDeviceLicensing $true
+$sentEv = @((Get-Calls 'POST')[0].Body | ConvertFrom-Json).assignments
+Assert (@($sentEv).Count -eq 2 -and @($sentEv | Where-Object { $_.target.groupId -eq $g1 }).Count -eq 0) 'write: a stale read does not bring back a removed assignment'
+
+# retry: ConditionNotMet twice, then accepted - one list, sent three times
+$script:post = 0
+$script:responses = [ordered]@{
+    '*/iosManagedAppProtections/ev1/assignments' = @{ value = @($aC) }
+    '*/iosManagedAppProtections/ev1/assign'      = { $script:post++; if ($script:post -le 2) { $e = [System.Management.Automation.ErrorRecord]::new([Exception]::new('412'), 'x', 'NotSpecified', $null); $e.ErrorDetails = [System.Management.Automation.ErrorDetails]::new('{"error":{"code":"ConditionNotMet","message":"busy"}}'); throw $e }; @{} }
+}
+$script:calls = @(); $err = $null
+try { Invoke-ItemWrite -Item $itemEv -Operation ([PSCustomObject]@{ Key = 'k'; Action = 'Add'; From = $null; To = (S '' $false) }) -Selection $selG1 -VppDeviceLicensing $true } catch { $err = $_.Exception.Message }
+Assert (-not $err -and $script:post -eq 3) "retry: ConditionNotMet is retried until accepted ($err)"
+# no retry for a real error
+$script:post = 0
+$script:responses['*/iosManagedAppProtections/ev1/assign'] = { $script:post++; $e = [System.Management.Automation.ErrorRecord]::new([Exception]::new('400'), 'x', 'NotSpecified', $null); $e.ErrorDetails = [System.Management.Automation.ErrorDetails]::new('{"error":{"code":"BadRequest","message":"invalid"}}'); throw $e }
+$err = $null
+try { Invoke-ItemWrite -Item $itemEv -Operation ([PSCustomObject]@{ Key = 'k'; Action = 'Add'; From = $null; To = (S '' $false) }) -Selection $selG1 -VppDeviceLicensing $true } catch { $err = $_.Exception.Message }
+Assert ($err -eq 'invalid' -and $script:post -eq 1) 'retry: a real error is reported at once'
+
+# wait for the result: stale twice, then the wanted state twice
+$script:seq = @( @{ value = @($aC) }, @{ value = @($aC) }, @{ value = @($aC, $aAx) }, @{ value = @($aC, $aAx) } ); $script:n = 0; $script:slept = 0
+$script:responses = [ordered]@{ '*/iosManagedAppProtections/ev1/assignments' = { $r = $script:seq[[Math]::Min($script:n, $script:seq.Count - 1)]; $script:n++; $r } }
+$fin = Wait-ItemState $itemEv $selG1 (S '' $true)
+$live = ConvertTo-AssignmentState (Find-AssignmentForSelection $fin $selG1) $false
+Assert ((Test-StateMatches $live (S '' $true)) -and $script:n -eq 4) 'wait: polls until the wanted state shows twice'
+# never reaches the state: gives up after the limit with the last read
+$script:seq = @( @{ value = @($aC) } ); $script:n = 0; $script:slept = 0
+$fin = Wait-ItemState $itemEv $selG1 (S '' $true) -MaxSeconds 20
+Assert ($script:slept -eq 20 -and -not (Test-StateMatches (ConvertTo-AssignmentState (Find-AssignmentForSelection $fin $selG1) $false) (S '' $true))) 'wait: gives up after the limit and reports the real state'
+$script:Sleep = { param($s) Start-Sleep -Seconds $s }
 Remove-Item Function:\Invoke-MgGraphRequest
 #endregion
 

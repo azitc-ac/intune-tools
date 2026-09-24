@@ -40,16 +40,30 @@ bleiben unverändert. Oberfläche zweisprachig (Deutsch/Englisch nach UI-Kultur)
 |---|---|---|
 | Apps | `deviceAppManagement/mobileApps` | einzeln (`POST`/`DELETE …/assignments`) |
 | Konfigurationsprofile – Vorlagen (Geräteeinschränkungen, WLAN, VPN, Zertifikate, iOS-Update, …) | `deviceManagement/deviceConfigurations` | einzeln |
-| Konfigurationsprofile – Einstellungskatalog (inkl. Declarative Software Update) | `deviceManagement/configurationPolicies` | Gesamtliste (`/assign`) |
-| Compliance | `deviceManagement/deviceCompliancePolicies` | einzeln |
-| App-Konfiguration (verwaltete Geräte) | `deviceAppManagement/mobileAppConfigurations` | einzeln |
+| Konfigurationsprofile – Einstellungskatalog (inkl. Declarative Software Update) | `deviceManagement/configurationPolicies` | Gesamtliste (`…/assign`) |
+| Compliance | `deviceManagement/deviceCompliancePolicies` | Gesamtliste (`…/assign`) |
+| App-Konfiguration (verwaltete Geräte) | `deviceAppManagement/mobileAppConfigurations` | Gesamtliste (`…/assign`) |
 | App-Konfiguration (verwaltete Apps, MAM) – nur Benutzer | `deviceAppManagement/targetedManagedAppConfigurations` | Gesamtliste (`…/assign`) |
-| App-Schutz (iOS, Android, Windows) – nur Benutzer | `deviceAppManagement/{ios,android,windows}ManagedAppProtections` | Gesamtliste (`managedAppPolicies/{id}/assign`) |
-| Richtliniensätze (der Satz selbst; sein Inhalt erscheint schreibgeschützt in den anderen Kategorien) | `deviceAppManagement/policySets` | einzeln |
+| App-Schutz (iOS, Android, Windows) – nur Benutzer | `deviceAppManagement/{ios,android,windows}ManagedAppProtections` | Gesamtliste (`…/{id}/assign`) |
+| Richtliniensätze (der Satz selbst; sein Inhalt erscheint schreibgeschützt in den anderen Kategorien) | `deviceAppManagement/policySets` | Gesamtliste (`…/update`), gelesen per `?$expand=assignments` |
 
 **Gesamtliste** heißt: Das Tool liest die Zuweisungsliste des Objekts unmittelbar vor dem Schreiben frisch,
 ändert nur den Eintrag des gewählten Ziels und schickt die Liste zurück. Alle anderen Ziele gehen mit
-ihrem Filter unverändert mit; das prüft das Testskript ausdrücklich.
+ihrem Filter unverändert mit; das prüft das Testskript ausdrücklich und es ist live bestätigt (siehe unten).
+
+**Live geprüft** (Test-Tenant, 2026-09) – und dabei von der Graph-Doku abweichend:
+- Compliance und App-Konfiguration (Geräte): das dokumentierte `POST …/assignments` hat im Dienst keine
+  Route („No OData route exists“) – nur `/assign` funktioniert.
+- App-Schutz: das dokumentierte `managedAppPolicies/{id}/assign` antwortet „Resource not found for the
+  segment 'assign'“ – `iosManagedAppProtections/{id}/assign` (bzw. android/windows) funktioniert.
+- Richtliniensätze: weder `GET` noch `POST …/assignments` existieren, die Liste erlaubt kein `$expand` –
+  gelesen wird je Satz über `?$expand=assignments`, geschrieben über `/update`.
+- **MAM (App-Schutz, MAM-App-Konfiguration) ist nur verzögert konsistent:** Nach `/assign` zeigen Lesezugriffe
+  20 s und länger den alten Stand oder springen zwischen alt und neu; ein Schreiben kurz nach einer Änderung
+  scheitert vorübergehend mit `ConditionNotMet`/`ResourceNotFound`. Das Tool liest diese Objekte daher erst,
+  wenn zwei Lesungen im Abstand von 5 s übereinstimmen, wiederholt den Gesamtlisten-Schreibvorgang bei diesen
+  Fehlern (bis zu 5 Versuche) und wartet beim Zurücklesen bis zu 60 s auf den gewünschten Stand. Speichern von
+  MAM-Objekten dauert deshalb spürbar länger.
 
 ## Voraussetzungen
 
@@ -109,15 +123,14 @@ oder `Start-GroupAppAssignment.bat` doppelklicken (Parameter werden durchgereich
   einer zugewiesenen Gruppe) werden **nicht** aufgelöst.
 - `$expand=assignments` auf den Listen steht nicht in den dokumentierten Abfrageoptionen; fehlt die
   Erweiterung in der Antwort, liest das Tool die Zuweisungen Objekt für Objekt (langsamer, aber korrekt).
-- **Einstellungskatalog:** Die Ressourcenseite nennt Einzel-Anlegen/-Löschen und `/assign`, die
-  Methodenseiten dazu fehlen in der Doku. Das Tool nutzt `/assign` (Gesamtliste, wie das Portal) – Annahme.
+- **Einstellungskatalog:** `/assign` (Gesamtliste, wie das Portal) – live bestätigt.
 - **Gesamtliste ohne Richtliniensatz-Einträge:** Dass `/assign` Zuweisungen aus Richtliniensätzen unberührt
   lässt, wenn sie nicht mitgeschickt werden, ist eine Annahme (die Doku sagt dazu nichts).
-- **Richtliniensätze:** Das Zuweisungsobjekt hat nur `target`; ob Intune dort Ausschlüsse annimmt, ist
-  ungeprüft – lehnt Intune ab, steht die Meldung pro Objekt im Speichern-Ergebnis.
+- **Richtliniensätze:** Ausschlüsse nimmt Intune an – live bestätigt.
 - Pfade, Zuweisungstypen, `intent`-Werte, Ziel-Typen, `source` und `useDeviceLicensing` sind gegen die
-  Graph-beta-Doku (Quelle: `microsoftgraph/microsoft-graph-docs-contrib`) geprüft. Die Oberfläche lief bei
-  der Entwicklung nicht (kein Windows); geprüft ist die Logik über das Testskript.
+  Graph-beta-Doku (Quelle: `microsoftgraph/microsoft-graph-docs-contrib`) geprüft und – wo sie abweicht –
+  nach dem Live-Test korrigiert. Die Graph-Logik (Laden, Schreiben einzeln und als Gesamtliste, Zurücklesen)
+  lief live gegen einen Test-Tenant; die WinForms-Oberfläche selbst lief bei der Entwicklung nicht (kein Windows).
 
 ## Tests
 
