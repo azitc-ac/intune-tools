@@ -5,7 +5,7 @@
 
     1. Static: every .ps1 in this folder is UTF-8 with BOM and uses no syntax that Windows
        PowerShell 5.1 cannot parse (?? ?. ?: && || ??=).
-    2. Logic: target matching, request bodies and the add / change / remove plan.
+    2. Logic: requested permissions, target matching, request bodies and the add / change / remove plan.
 #>
 $ErrorActionPreference = 'Stop'
 $here   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -53,6 +53,12 @@ $assignments = @(
                                                      deviceAndAppManagementAssignmentFilterId = 'f-1'; deviceAndAppManagementAssignmentFilterType = 'include' };
        settings = @{ '@odata.type' = '#microsoft.graph.win32LobAppAssignmentSettings'; notifications = 'hideAll' } }
 )
+
+# Permissions: by default only the two scopes an app-centric bulk tool asks for too (no new consent)
+$def = Get-RequestedScopes
+Assert (@($def).Count -eq 2 -and $def -contains 'DeviceManagementApps.ReadWrite.All' -and $def -contains 'Group.Read.All') 'default scopes: exactly DeviceManagementApps.ReadWrite.All + Group.Read.All'
+Assert ($def -notcontains 'DeviceManagementConfiguration.Read.All') 'default scopes: no filter-names permission'
+Assert ((Get-RequestedScopes $true) -contains 'DeviceManagementConfiguration.Read.All') 'filter names on request add DeviceManagementConfiguration.Read.All'
 
 # Matching: the exclusion of G1 belongs to G1, the include of G2 does not
 $m = Find-AssignmentForSelection $assignments $selG1

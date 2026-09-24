@@ -21,6 +21,11 @@
 .PARAMETER VppDeviceLicensing
     License type for NEW assignments of Apple VPP apps (iosVppApp / macOsVppApp):
     $true = device licensing (default), $false = user licensing. Also a checkbox in the window.
+.PARAMETER LoadFilterNames
+    Show the names of assignment filters instead of their IDs. Needs the additional delegated
+    permission DeviceManagementConfiguration.Read.All (a consent prompt, once). Off by default,
+    so the tool asks for no more than DeviceManagementApps.ReadWrite.All and Group.Read.All.
+    Also a checkbox in the window.
 .PARAMETER Language
     auto (UI culture) | de | en
 #>
@@ -28,6 +33,7 @@ param(
     [string]$GroupId            = "",
     [string]$TenantId           = "",
     [bool]  $VppDeviceLicensing = $true,
+    [switch]$LoadFilterNames,
     [ValidateSet('auto','de','en')]
     [string]$Language           = 'auto'
 )
@@ -48,6 +54,8 @@ $strings = @{
         LblType            = 'App-Typ:'
         AllTypes           = '(alle Typen)'
         ChkVpp             = 'VPP neu: Gerätelizenz'
+        ChkFilterNames     = 'Filternamen laden'
+        FilterNamesFailed  = "Filternamen konnten nicht geladen werden (Berechtigung DeviceManagementConfiguration.Read.All):`n{0}"
         HdrNotAssigned     = 'Nicht zugewiesen'
         HdrAssigned        = 'Zugewiesen'
         BtnRequired        = 'Erforderlich >'
@@ -129,6 +137,8 @@ $strings = @{
         LblType            = 'App type:'
         AllTypes           = '(all types)'
         ChkVpp             = 'New VPP: device license'
+        ChkFilterNames     = 'Load filter names'
+        FilterNamesFailed  = "Could not load filter names (permission DeviceManagementConfiguration.Read.All):`n{0}"
         HdrNotAssigned     = 'Not assigned'
         HdrAssigned        = 'Assigned'
         BtnRequired        = 'Required >'
@@ -208,13 +218,23 @@ $L = if ($useDe) { $strings.de } else { $strings.en }
 
 #region Assignment logic (no GUI, no Graph - covered by Test-GroupAppAssignment.ps1)
 $script:GraphBase = 'https://graph.microsoft.com/beta'
-$script:Scopes    = @('DeviceManagementApps.ReadWrite.All', 'Group.Read.All', 'DeviceManagementConfiguration.Read.All')
+$script:BaseScopes  = @('DeviceManagementApps.ReadWrite.All', 'Group.Read.All')
+$script:FilterScope = 'DeviceManagementConfiguration.Read.All'   # only for filter names, only on request
 $script:Intents   = @('required', 'available', 'uninstall', 'availableWithoutEnrollment')
 
 $script:OdGroup      = '#microsoft.graph.groupAssignmentTarget'
 $script:OdExclGroup  = '#microsoft.graph.exclusionGroupAssignmentTarget'
 $script:OdAllUsers   = '#microsoft.graph.allLicensedUsersAssignmentTarget'
 $script:OdAllDevices = '#microsoft.graph.allDevicesAssignmentTarget'
+
+function Get-RequestedScopes {
+    # Delegated permissions for Connect-MgGraph. By default the same two as app-centric bulk tools,
+    # so no new consent prompt; the filter-names permission is added only when asked for.
+    param([bool]$WithFilterNames = $false)
+    $s = @($script:BaseScopes)
+    if ($WithFilterNames) { $s += $script:FilterScope }
+    return ,$s
+}
 
 function Get-IntentText {
     param([string]$Intent)
@@ -395,9 +415,10 @@ function Invoke-GraphPaged {
 }
 
 function Connect-Graph {
+    param([bool]$WithFilterNames = $false)
     if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) { throw $L.ModuleMissing }
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-    $p = @{ Scopes = $script:Scopes; ErrorAction = 'Stop' }
+    $p = @{ Scopes = (Get-RequestedScopes $WithFilterNames); ErrorAction = 'Stop' }
     if ($TenantId) { $p['TenantId'] = $TenantId }
     if ((Get-Command Connect-MgGraph).Parameters.ContainsKey('NoWelcome')) { $p['NoWelcome'] = $true }
     Connect-MgGraph @p | Out-Null
@@ -512,8 +533,13 @@ $chkVpp.Text = $L.ChkVpp; $chkVpp.AutoSize = $true
 $chkVpp.Location = New-Object System.Drawing.Point(692, 80)
 $chkVpp.Checked = $VppDeviceLicensing
 
+$chkFilterNames = New-Object System.Windows.Forms.CheckBox
+$chkFilterNames.Text = $L.ChkFilterNames; $chkFilterNames.AutoSize = $true
+$chkFilterNames.Location = New-Object System.Drawing.Point(870, 80)
+$chkFilterNames.Checked = [bool]$LoadFilterNames
+
 $stripTop.Controls.AddRange(@($btnConnect, $lblAccount, $lblGroup, $txtGroup, $btnPick, $btnLoad,
-                              $lblSearch, $txtSearch, $lblType, $cmbType, $chkVpp))
+                              $lblSearch, $txtSearch, $lblType, $cmbType, $chkVpp, $chkFilterNames))
 
 # --- Bottom strip ---
 $stripBottom = New-Object System.Windows.Forms.Panel
@@ -737,23 +763,38 @@ function Invoke-Connect {
     Set-Busy $true
     $lblStatus.Text = $L.StatusConnecting; $form.Update()
     try {
-        $ctx = Connect-Graph
+        $ctx = Connect-Graph -WithFilterNames $chkFilterNames.Checked
         $script:Connected = $true
         $lblAccount.Text = $L.ConnectedAs -f $ctx.Account, $ctx.TenantId
         $lblAccount.ForeColor = [System.Drawing.SystemColors]::ControlText
         $btnConnect.Text = $L.BtnReconnect
         $lblStatus.Text = ''
-        try {
-            $f = Invoke-GraphPaged -Uri "$($script:GraphBase)/deviceManagement/assignmentFilters?`$select=id,displayName"
-            $script:FilterNames = @{}
-            foreach ($x in $f) { $script:FilterNames[[string]$x.id] = [string]$x.displayName }
-        } catch { }   # without the right, the filter column shows the filter ID
+        if ($chkFilterNames.Checked) { Update-FilterNames }
     } catch {
         $script:Connected = $false
         [void][System.Windows.Forms.MessageBox]::Show(($L.ConnectFailed -f (Get-GraphErrorText $_)), $L.TitleError, 'OK', 'Error')
         $lblStatus.Text = ''
     } finally {
         Set-Busy $false
+    }
+}
+
+function Update-FilterNames {
+    # Filter names need DeviceManagementConfiguration.Read.All: connect again with it when the current
+    # token lacks it (that is the one consent prompt), then read the names. Without names the filter
+    # column shows the filter ID.
+    $script:FilterNames = @{}
+    if ($chkFilterNames.Checked -and $script:Connected) {
+        try {
+            $ctx = Get-MgContext
+            if (@($ctx.Scopes) -notcontains $script:FilterScope) { [void](Connect-Graph -WithFilterNames $true) }
+            $f = Invoke-GraphPaged -Uri "$($script:GraphBase)/deviceManagement/assignmentFilters?`$select=id,displayName"
+            foreach ($x in $f) { $script:FilterNames[[string]$x.id] = [string]$x.displayName }
+        } catch {
+            [void][System.Windows.Forms.MessageBox]::Show(($L.FilterNamesFailed -f (Get-GraphErrorText $_)), $L.TitleWarning, 'OK', 'Warning')
+            $script:FilterNames = @{}
+            $chkFilterNames.Checked = $false   # fires CheckedChanged again, which only clears
+        }
     }
 }
 
@@ -945,6 +986,12 @@ $grid.Add_CellValueChanged({
 $grid.Add_DataError({ param($s, $e) $e.ThrowException = $false })
 
 $txtSearch.Add_TextChanged({ Update-Views })
+$chkFilterNames.Add_CheckedChanged({
+    if (-not $script:Connected) { return }   # applied at the next connect
+    Set-Busy $true
+    try { Update-FilterNames } finally { Set-Busy $false }
+    Update-Views
+})
 $cmbType.Add_SelectedIndexChanged({ if (-not $script:Rebuilding) { Update-Views } })
 #endregion
 

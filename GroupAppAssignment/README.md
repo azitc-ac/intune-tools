@@ -24,7 +24,7 @@ bleiben unverändert. Oberfläche zweisprachig (Deutsch/Englisch nach UI-Kultur)
 |---|---|
 | OS / PowerShell | Windows, Windows PowerShell 5.1 (oder 7.x) – WinForms |
 | Modul | `Microsoft.Graph.Authentication` (`Install-Module Microsoft.Graph.Authentication -Scope CurrentUser`) |
-| Graph-Rechte (delegiert) | `DeviceManagementApps.ReadWrite.All`, `Group.Read.All`, `DeviceManagementConfiguration.Read.All` (nur für Filternamen – fehlt es, steht dort die Filter-ID) |
+| Graph-Rechte (delegiert) | `DeviceManagementApps.ReadWrite.All`, `Group.Read.All` – dieselben wie beim Bulk App Assignment Tool, also kein neuer Zustimmungsdialog. Nur mit „Filternamen laden" zusätzlich `DeviceManagementConfiguration.Read.All` |
 
 Anmeldung interaktiv mit dem eigenen Konto (`Connect-MgGraph`), keine App-Registrierung.
 
@@ -44,6 +44,7 @@ oder `Start-GroupAppAssignment.bat` doppelklicken (Parameter werden durchgereich
 | `-GroupId` | – | Gruppen-Objekt-ID, `AllUsers` oder `AllDevices` | `...`-Button |
 | `-TenantId` | – | Tenant für `Connect-MgGraph` | – (Anmeldedialog) |
 | `-VppDeviceLicensing` | `$true` | Lizenztyp für **neue** VPP-Zuweisungen (`iosVppApp`, `macOsVppApp`): Gerät / Benutzer | Checkbox „VPP neu: Gerätelizenz" |
+| `-LoadFilterNames` | aus | Namen der Zuweisungsfilter statt ihrer IDs anzeigen. Fordert `DeviceManagementConfiguration.Read.All` an (einmaliger Zustimmungsdialog); ist das Häkchen beim Verbinden noch nicht gesetzt, wird beim Anhaken neu verbunden | Checkbox „Filternamen laden" |
 | `-Language` | `auto` | `auto` \| `de` \| `en` | – |
 
 ## Verhalten im Detail
@@ -81,6 +82,7 @@ oder `Start-GroupAppAssignment.bat` doppelklicken (Parameter werden durchgereich
 ```
 
 Prüft: UTF-8-BOM jeder `.ps1`, keine PS-7-only-Operatoren (`??`, `?.`, `?:`, `&&`, `||`),
+angeforderte Graph-Rechte (Standard genau die zwei ohne Filter-Recht),
 Parsbarkeit, Ziel-Zuordnung inkl. Policy-Set-Vorrang, Request-Bodies (Ein-/Ausschluss, VPP-Lizenz,
 Filter/Settings-Übernahme), Zielregeln und den Hinzufügen/Ändern/Entfernen-Plan. Das Skript lädt nur
 den GUI-freien Teil von `Manage-GroupAppAssignment.ps1` bis zur Markerzeile
