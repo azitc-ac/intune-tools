@@ -142,6 +142,7 @@ $strings = @{
         SaveErrors         = "Abgeschlossen mit Fehlern:`n`n{0}"
         VerifyFailedHint   = "`n`n'?' = gespeichert, aber das Ergebnis konnte nicht aus Intune gelesen werden - die Anzeige kann veraltet sein, bitte 'Laden' klicken."
         SaveOk             = '{0} Änderung(en) gespeichert und in Intune bestätigt.'
+        MamPending         = "`n`nNoch nicht überall sichtbar (App-Schutz / MAM - Intune zeigt Ausschlüsse teils erst nach Minuten an; das Tool arbeitet 10 Minuten lang mit dem gesendeten Stand weiter):`n{0}"
         VerifyMismatch     = "Nach dem Speichern weicht Intune bei diesen Objekten ab (Anzeige zeigt jetzt den Ist-Stand):`n`n{0}"
         Restored           = 'alte Zuweisung wiederhergestellt'
         RestoreFailed      = 'WIEDERHERSTELLUNG FEHLGESCHLAGEN - das Objekt hat jetzt KEINE Zuweisung für dieses Ziel'
@@ -246,6 +247,7 @@ $strings = @{
         SaveErrors         = "Completed with errors:`n`n{0}"
         VerifyFailedHint   = "`n`n'?' = saved, but the result could not be read back from Intune - the view may be out of date, please click 'Load'."
         SaveOk             = '{0} change(s) saved and confirmed by Intune.'
+        MamPending         = "`n`nNot visible everywhere yet (app protection / MAM - Intune shows exclusions only after minutes at times; for 10 minutes the tool keeps working with the state it sent):`n{0}"
         VerifyMismatch     = "After saving, Intune differs for these objects (the view now shows the live state):`n`n{0}"
         Restored           = 'previous assignment restored'
         RestoreFailed      = 'RESTORE FAILED - the object now has NO assignment for this target'
@@ -736,6 +738,22 @@ function Get-ItemAssignments {
 
 $script:Sleep       = { param([int]$Seconds) Start-Sleep -Seconds $Seconds }   # replaced by the tests
 $script:PollSeconds = 5
+# MAM (measured live): after /assign, exclusions show up only now and then for minutes - even two reads in
+# a row can both be stale. For these objects the list the tool itself sent last is the truth for
+# $script:SentTrustMinutes: the next write builds on it, loading and read-back show it.
+$script:LastSent         = @{}   # item key -> @{ Time; List }
+$script:SentTrustMinutes = 10
+$script:Now              = { Get-Date }   # replaced by the tests
+
+function Get-LastSent {
+    # the list last sent for an eventually consistent object, while it is still trusted; else $null
+    param($Item)
+    if (-not $Item.Eventual) { return $null }
+    $e = $script:LastSent[$Item.Key]
+    if (-not $e) { return $null }
+    if (((& $script:Now) - $e.Time).TotalMinutes -gt $script:SentTrustMinutes) { return $null }
+    return ,$e.List
+}
 
 function Get-GraphErrorCode {
     param($ErrorRecord)
@@ -778,14 +796,20 @@ function Test-StateMatches {
 function Wait-ItemState {
     # Read the object's assignments after a write. Eventually consistent objects are polled until the
     # target shows the wanted state in two reads in a row (at most $MaxSeconds); returns the last read.
+    # Returns @{ List; Pending }: Pending = Intune does not show the sent state yet, the list is the one sent.
     param($Item, $Selection, $Want, [int]$MaxSeconds = 60)
     $list = Get-ItemAssignments $Item
-    if (-not $Item.Eventual) { return ,$list }
+    if (-not $Item.Eventual) { return @{ List = $list; Pending = $false } }
     $hits = 0; $waited = 0
     while ($true) {
         $live = ConvertTo-AssignmentState (Find-AssignmentForSelection $list $Selection) $Item.HasIntent
         if (Test-StateMatches $live $Want) { $hits++ } else { $hits = 0 }
-        if ($hits -ge 2 -or $waited -ge $MaxSeconds) { return ,$list }
+        if ($hits -ge 2) { return @{ List = $list; Pending = $false } }
+        if ($waited -ge $MaxSeconds) {
+            $sent = Get-LastSent $Item
+            if ($null -ne $sent) { return @{ List = $sent; Pending = $true } }
+            return @{ List = $list; Pending = $false }
+        }
         & $script:Sleep $script:PollSeconds; $waited += $script:PollSeconds
         $list = Get-ItemAssignments $Item
     }
@@ -822,7 +846,8 @@ function Invoke-ItemWrite {
     if ($Item.Write -eq 'Replace') {
         # read the list fresh (and, where reads lag, stable) right before writing it back, so no other
         # target gets lost; resending the same complete list is harmless, so transient errors are retried
-        $current = Read-StableAssignments $Item
+        $current = Get-LastSent $Item
+        if ($null -eq $current) { $current = Read-StableAssignments $Item }
         $list = New-ReplaceAssignmentList -Current $current -Selection $Selection -Desired $Operation.To `
                     -AssignmentType $Item.AssignmentType -Carry $Operation.From
         $json = @{ assignments = $list } | ConvertTo-Json -Depth 20
@@ -832,6 +857,7 @@ function Invoke-ItemWrite {
             try {
                 Invoke-MgGraphRequest -Method POST -Uri "$($script:GraphBase)/$($Item.AssignAction)" -Body $json `
                     -ContentType 'application/json' -ErrorAction Stop | Out-Null
+                if ($Item.Eventual) { $script:LastSent[$Item.Key] = @{ Time = (& $script:Now); List = $list } }
                 return
             } catch {
                 if ($try -ge 5 -or $transient -notcontains (Get-GraphErrorCode $_)) { throw (Get-GraphErrorText $_) }
@@ -1413,6 +1439,8 @@ function Import-Category {
         }
     }
     foreach ($it in $items) {
+        $sent = Get-LastSent $it
+        if ($null -ne $sent) { $it.Assignments = $sent }   # MAM: fresher than what Intune shows yet
         $script:ItemByKey[$it.Key] = $it
         $st = ConvertTo-AssignmentState (Find-AssignmentForSelection $it.Assignments $script:Selection) $it.HasIntent
         if ($st) {
@@ -1684,6 +1712,7 @@ function Invoke-Save {
     Set-Busy $true
     $errs = New-Object System.Collections.Generic.List[string]
     $mismatch = New-Object System.Collections.Generic.List[string]
+    $pendingMam = New-Object System.Collections.Generic.List[string]
     $vpp  = $chkVpp.Checked
     try {
         $i = 0
@@ -1707,7 +1736,9 @@ function Invoke-Save {
             $lblStatus.Text = $L.StatusVerifying -f $j, $plan.Count; $form.Update()
             $it = $script:ItemByKey[$op.Key]
             try {
-                $it.Assignments = Wait-ItemState $it $sel $op.To
+                $res = Wait-ItemState $it $sel $op.To
+                $it.Assignments = $res.List
+                if ($res.Pending) { $pendingMam.Add("[$($it.CategoryLabel)] $($it.Name)") }
             } catch {
                 $errs.Add("? [$($it.CategoryLabel)] $($it.Name): $(Get-GraphErrorText $_)"); continue
             }
@@ -1737,7 +1768,9 @@ function Invoke-Save {
         [void][System.Windows.Forms.MessageBox]::Show(($L.VerifyMismatch -f ($mismatch -join "`n")), $L.TitleWarning, 'OK', 'Warning')
     }
     if ($errs.Count -eq 0 -and $mismatch.Count -eq 0) {
-        [void][System.Windows.Forms.MessageBox]::Show(($L.SaveOk -f $plan.Count), $L.TitleSave, 'OK', 'Information')
+        $msg = $L.SaveOk -f $plan.Count
+        if ($pendingMam.Count -gt 0) { $msg += ($L.MamPending -f ($pendingMam -join "`n")) }
+        [void][System.Windows.Forms.MessageBox]::Show($msg, $L.TitleSave, 'OK', 'Information')
     }
 }
 #endregion

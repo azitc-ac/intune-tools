@@ -58,12 +58,22 @@ ihrem Filter unverändert mit; das prüft das Testskript ausdrücklich und es is
   segment 'assign'“ – `iosManagedAppProtections/{id}/assign` (bzw. android/windows) funktioniert.
 - Richtliniensätze: weder `GET` noch `POST …/assignments` existieren, die Liste erlaubt kein `$expand` –
   gelesen wird je Satz über `?$expand=assignments`, geschrieben über `/update`.
-- **MAM (App-Schutz, MAM-App-Konfiguration) ist nur verzögert konsistent:** Nach `/assign` zeigen Lesezugriffe
-  20 s und länger den alten Stand oder springen zwischen alt und neu; ein Schreiben kurz nach einer Änderung
-  scheitert vorübergehend mit `ConditionNotMet`/`ResourceNotFound`. Das Tool liest diese Objekte daher erst,
-  wenn zwei Lesungen im Abstand von 5 s übereinstimmen, wiederholt den Gesamtlisten-Schreibvorgang bei diesen
-  Fehlern (bis zu 5 Versuche) und wartet beim Zurücklesen bis zu 60 s auf den gewünschten Stand. Speichern von
-  MAM-Objekten dauert deshalb spürbar länger.
+- **MAM (App-Schutz, MAM-App-Konfiguration) ist nur verzögert konsistent:** Nach `/assign` erscheinen
+  Einschlüsse sofort, **Ausschlüsse aber minutenlang nur zeitweise** – gemessen: nach dem Setzen eines
+  Ausschlusses zeigten 11 von 13 Lesungen über 2 Minuten ihn nicht an, auch zwei Lesungen hintereinander waren
+  veraltet. Ein Gesamtlisten-Schreibvorgang auf Basis einer solchen Lesung hat im Test den Ausschluss
+  gelöscht. Ein Schreiben kurz nach einer Änderung scheitert außerdem vorübergehend mit
+  `ConditionNotMet`/`ResourceNotFound`. Das Tool deshalb bei MAM-Objekten:
+  - merkt sich die zuletzt **selbst gesendete** Liste 10 Minuten lang und baut den nächsten Schreibvorgang
+    darauf auf statt auf einer Lesung; Laden und Zurücklesen zeigen in dieser Zeit ebenfalls den gesendeten Stand;
+  - liest sonst erst, wenn zwei Lesungen im Abstand von 5 s übereinstimmen;
+  - wiederholt den Gesamtlisten-Schreibvorgang bei den genannten Fehlern (bis zu 5 Versuche);
+  - wartet beim Zurücklesen bis zu 60 s; zeigt Intune den Stand dann noch nicht, meldet es das als Hinweis
+    („noch nicht überall sichtbar"), nicht als Fehler.
+
+  **Grenze:** Ändert *jemand anderes* (Portal, anderes Tool) Ausschlüsse desselben MAM-Objekts, kann das Tool
+  das in den ersten Minuten danach nicht zuverlässig sehen – und dieselbe Lücke hat jeder Gesamtlisten-Schreiber,
+  auch ein Skript. Zwischen zwei Bearbeitern desselben MAM-Objekts ein paar Minuten Abstand lassen.
 
 ## Voraussetzungen
 

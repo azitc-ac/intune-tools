@@ -446,12 +446,41 @@ Assert ($err -eq 'invalid' -and $script:post -eq 1) 'retry: a real error is repo
 $script:seq = @( @{ value = @($aC) }, @{ value = @($aC) }, @{ value = @($aC, $aAx) }, @{ value = @($aC, $aAx) } ); $script:n = 0; $script:slept = 0
 $script:responses = [ordered]@{ '*/iosManagedAppProtections/ev1/assignments' = { $r = $script:seq[[Math]::Min($script:n, $script:seq.Count - 1)]; $script:n++; $r } }
 $fin = Wait-ItemState $itemEv $selG1 (S '' $true)
-$live = ConvertTo-AssignmentState (Find-AssignmentForSelection $fin $selG1) $false
-Assert ((Test-StateMatches $live (S '' $true)) -and $script:n -eq 4) 'wait: polls until the wanted state shows twice'
+$live = ConvertTo-AssignmentState (Find-AssignmentForSelection $fin.List $selG1) $false
+Assert ((Test-StateMatches $live (S '' $true)) -and $script:n -eq 4 -and -not $fin.Pending) 'wait: polls until the wanted state shows twice'
 # never reaches the state: gives up after the limit with the last read
 $script:seq = @( @{ value = @($aC) } ); $script:n = 0; $script:slept = 0
+$script:LastSent = @{}
 $fin = Wait-ItemState $itemEv $selG1 (S '' $true) -MaxSeconds 20
-Assert ($script:slept -eq 20 -and -not (Test-StateMatches (ConvertTo-AssignmentState (Find-AssignmentForSelection $fin $selG1) $false) (S '' $true))) 'wait: gives up after the limit and reports the real state'
+Assert ($script:slept -eq 20 -and -not $fin.Pending -and -not (Test-StateMatches (ConvertTo-AssignmentState (Find-AssignmentForSelection $fin.List $selG1) $false) (S '' $true))) 'wait: without a sent list, gives up after the limit and reports the real state'
+
+# the sent list wins (measured live: two stale reads in a row happen for minutes after an exclusion change)
+$script:LastSent = @{}
+$script:clock = [datetime]'2026-09-24T12:00:00'
+$script:Now = { $script:clock }
+$script:responses = [ordered]@{
+    '*/iosManagedAppProtections/ev1/assignments' = @{ value = @($aC) }      # stale: the exclusion of G1 is missing
+    '*/iosManagedAppProtections/ev1/assign'      = @{}
+}
+$script:calls = @()
+Invoke-ItemWrite -Item $itemEv -Operation ([PSCustomObject]@{ Key = 'k'; Action = 'Add'; From = $null; To = (S '' $true) }) -Selection $selG1 -VppDeviceLicensing $true
+Assert ($script:LastSent.ContainsKey($itemEv.Key)) 'sent list: remembered after a successful MAM write'
+$script:calls = @()
+Invoke-ItemWrite -Item $itemEv -Operation ([PSCustomObject]@{ Key = 'k'; Action = 'Add'; From = $null; To = (S '' $false) }) -Selection (New-Selection 'group' $gB2 'B') -VppDeviceLicensing $true
+$sent2 = @(((Get-Calls 'POST')[0].Body | ConvertFrom-Json).assignments)
+Assert ($sent2.Count -eq 3 -and @($sent2 | Where-Object { $_.target.groupId -eq $g1 -and $_.target.'@odata.type' -like '*exclusion*' }).Count -eq 1) 'sent list: the next write keeps the exclusion a stale read would drop'
+Assert (@(Get-Calls 'GET').Count -eq 0) 'sent list: the next write does not read at all'
+$script:n = 0; $script:slept = 0
+$fin = Wait-ItemState $itemEv (New-Selection 'group' $gB2 'B') (S '' $false) -MaxSeconds 10
+Assert ($fin.Pending -and $fin.List.Count -eq 3) 'wait: returns the sent list (3 entries) when Intune does not show it yet'
+$script:responses['*/iosManagedAppProtections/ev1/assignments'] = @{ value = @($aC) }
+$fin = Wait-ItemState $itemEv $selG1 (S '' $true) -MaxSeconds 10
+Assert ($fin.Pending -and @($fin.List | Where-Object { $_.target.groupId -eq $g1 }).Count -eq 1) 'wait: stale reads until the limit -> Pending, list = sent list'
+$script:clock = $script:clock.AddMinutes(11)
+Assert ($null -eq (Get-LastSent $itemEv)) 'sent list: no longer trusted after 10 minutes'
+$script:LastSent[$itemDc.Key] = @{ Time = $script:clock; List = @() }
+Assert ($null -eq (Get-LastSent $itemDc)) 'sent list: never used for objects that read back reliably'
+$script:Now = { Get-Date }; $script:LastSent = @{}
 $script:Sleep = { param($s) Start-Sleep -Seconds $s }
 Remove-Item Function:\Invoke-MgGraphRequest
 #endregion
