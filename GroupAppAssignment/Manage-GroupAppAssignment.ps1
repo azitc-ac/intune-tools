@@ -113,6 +113,7 @@ $strings = @{
         StatusSaving       = 'Speichere ({0} / {1}): {2}'
         StatusVerifying    = 'Prüfe Ergebnis in Intune ({0} / {1})...'
         SaveErrors         = "Abgeschlossen mit Fehlern:`n`n{0}"
+        VerifyFailedHint   = "`n`n'?' = gespeichert, aber das Ergebnis konnte nicht aus Intune gelesen werden - die Anzeige kann veraltet sein, bitte 'Laden' klicken."
         SaveOk             = '{0} Änderung(en) gespeichert und in Intune bestätigt.'
         VerifyMismatch     = "Nach dem Speichern weicht Intune bei diesen Apps ab (Anzeige zeigt jetzt den Ist-Stand):`n`n{0}"
         Restored           = 'alte Zuweisung wiederhergestellt'
@@ -196,6 +197,7 @@ $strings = @{
         StatusSaving       = 'Saving ({0} / {1}): {2}'
         StatusVerifying    = 'Checking the result in Intune ({0} / {1})...'
         SaveErrors         = "Completed with errors:`n`n{0}"
+        VerifyFailedHint   = "`n`n'?' = saved, but the result could not be read back from Intune - the view may be out of date, please click 'Load'."
         SaveOk             = '{0} change(s) saved and confirmed by Intune.'
         VerifyMismatch     = "After saving, Intune differs for these apps (the view now shows the live state):`n`n{0}"
         Restored           = 'previous assignment restored'
@@ -267,7 +269,7 @@ function Find-AssignmentForSelection {
     # A direct assignment wins over one that comes from a policy set.
     param($Assignments, $Selection)
     $hit = $null
-    foreach ($a in @($Assignments)) {
+    foreach ($a in $Assignments) {        # no @(): any collection type, $null iterates zero times
         if (-not $a) { continue }
         $type  = [string]$a.target.'@odata.type'
         $match = switch ($Selection.Kind) {
@@ -383,13 +385,7 @@ function Get-AssignmentPlan {
 }
 #endregion
 
-# ---- end of the GUI-free part (Test-GroupAppAssignment.ps1 loads everything above this line) ----
-
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[System.Windows.Forms.Application]::EnableVisualStyles()
-
-#region Graph
+#region Graph (no GUI; Invoke-MgGraphRequest is mocked by Test-GroupAppAssignment.ps1)
 function Get-GraphErrorText {
     param($ErrorRecord)
     $msg = $ErrorRecord.Exception.Message
@@ -411,7 +407,9 @@ function Invoke-GraphPaged {
         if ($OnPage) { & $OnPage $all.Count }
         $Uri = $resp.'@odata.nextLink'
     }
-    return ,$all
+    # object[], never List[object]: @($x) on a List[object] throws "Argument types do not match"
+    # (Windows PowerShell 5.1 and 7). The leading comma keeps an empty or one-item result an array.
+    return ,$all.ToArray()
 }
 
 function Connect-Graph {
@@ -441,9 +439,16 @@ function Search-Groups {
 
 function Get-AppAssignments {
     param([string]$AppId)
-    return @((Invoke-GraphPaged -Uri "$($script:GraphBase)/deviceAppManagement/mobileApps/$AppId/assignments"))
+    return ,(Invoke-GraphPaged -Uri "$($script:GraphBase)/deviceAppManagement/mobileApps/$AppId/assignments")
 }
 #endregion
+
+# ---- end of the GUI-free part (Test-GroupAppAssignment.ps1 loads everything above this line) ----
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
 
 #region State
 $script:Selection   = $null
@@ -1101,7 +1106,9 @@ function Invoke-Save {
     Update-Views
     $lblStatus.Text = $L.StatusSaved -f $plan.Count, $errs.Count
     if ($errs.Count -gt 0) {
-        [void][System.Windows.Forms.MessageBox]::Show(($L.SaveErrors -f ($errs -join "`n")), $L.TitleWarning, 'OK', 'Warning')
+        $msg = $L.SaveErrors -f ($errs -join "`n")
+        if (@($errs | Where-Object { $_.StartsWith('?') }).Count -gt 0) { $msg += $L.VerifyFailedHint }
+        [void][System.Windows.Forms.MessageBox]::Show($msg, $L.TitleWarning, 'OK', 'Warning')
     }
     if ($mismatch.Count -gt 0 -and $errs.Count -eq 0) {
         [void][System.Windows.Forms.MessageBox]::Show(($L.VerifyMismatch -f ($mismatch -join "`n")), $L.TitleWarning, 'OK', 'Warning')

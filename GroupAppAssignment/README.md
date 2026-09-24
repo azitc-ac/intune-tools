@@ -82,7 +82,8 @@ oder `Start-GroupAppAssignment.bat` doppelklicken (Parameter werden durchgereich
 ```
 
 Prüft: UTF-8-BOM jeder `.ps1`, keine PS-7-only-Operatoren (`??`, `?.`, `?:`, `&&`, `||`),
-angeforderte Graph-Rechte (Standard genau die zwei ohne Filter-Recht),
+angeforderte Graph-Rechte (Standard genau die zwei ohne Filter-Recht), `AddRange(@(...))` nur auf
+`.Controls`, Paging und Zurücklesen mit nachgebildetem `Invoke-MgGraphRequest` (0/1/2 Zuweisungen),
 Parsbarkeit, Ziel-Zuordnung inkl. Policy-Set-Vorrang, Request-Bodies (Ein-/Ausschluss, VPP-Lizenz,
 Filter/Settings-Übernahme), Zielregeln und den Hinzufügen/Ändern/Entfernen-Plan. Das Skript lädt nur
 den GUI-freien Teil von `Manage-GroupAppAssignment.ps1` bis zur Markerzeile

@@ -84,6 +84,37 @@ Assert ($st.Exclude -eq $true -and $st.Intent -eq 'available' -and $st.Assignmen
 $stAU = ConvertTo-AssignmentState (Find-AssignmentForSelection $assignments $selAU)
 Assert ($stAU.Exclude -eq $false -and $stAU.FilterId -eq 'f-1' -and $stAU.FilterType -eq 'include') 'state keeps the filter'
 
+# Any collection type: a List[object] once made @($x) throw "Argument types do not match"
+$list = New-Object System.Collections.Generic.List[object]
+foreach ($x in $assignments) { $list.Add($x) }
+$hit = $null; try { $hit = Find-AssignmentForSelection $list $selG1 } catch { }
+Assert ($hit.id -eq 'as-2') 'matching accepts a List[object]'
+
+# Graph paging and read-back, with Invoke-MgGraphRequest mocked: 0 / 1 / 2 assignments, two pages
+function Invoke-MgGraphRequest {
+    param($Method, $Uri, $Headers, $Body, $ContentType, $ErrorAction)
+    $script:mockCalls++
+    if ($Uri -like '*page2') { return @{ value = @(@{ id = 'p2' }) } }
+    $v = @(); for ($k = 1; $k -le $script:mockCount; $k++) { $v += @{ id = "a$k" } }
+    $r = @{ value = $v }
+    if ($script:mockPaged) { $r['@odata.nextLink'] = 'https://x/page2' }
+    return $r
+}
+$script:mockPaged = $false
+foreach ($n in 0, 1, 2) {
+    $script:mockCount = $n
+    $app = [PSCustomObject]@{ Id = 'x'; Assignments = @() }
+    $ok = $true
+    try { $app.Assignments = Get-AppAssignments 'x' } catch { $ok = $false }
+    Assert $ok "read-back with $n assignment(s) does not throw"
+    Assert ($ok -and $app.Assignments -is [object[]] -and $app.Assignments.Count -eq $n) "read-back with $n assignment(s) is an object[] of $n"
+    if ($ok) { Assert ($null -eq (Find-AssignmentForSelection $app.Assignments $selG1) -or $n -gt 0) "matching on the read-back result ($n)" }
+}
+$script:mockCount = 1; $script:mockPaged = $true; $script:mockCalls = 0
+$pg = Invoke-GraphPaged -Uri 'https://x/page1'
+Assert ($script:mockCalls -eq 2 -and $pg.Count -eq 2 -and $pg -is [object[]]) 'paging follows @odata.nextLink and returns object[]'
+Remove-Item Function:\Invoke-MgGraphRequest
+
 # Policy sets: a direct assignment wins, a policy-set one is read-only
 $psDirect = @{ id = 'd'; intent = 'required';  source = 'direct';     target = @{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = $g1 } }
 $psSet    = @{ id = 'p'; intent = 'available'; source = 'policySets'; target = @{ '@odata.type' = '#microsoft.graph.groupAssignmentTarget'; groupId = $g1 } }
