@@ -12,3 +12,7 @@ Alle `.ps1` sind UTF-8 mit BOM (sonst zerlegt PowerShell 5.1 die Umlaute) und la
 Windows PowerShell 5.1. Zeilenenden: CRLF über `.gitattributes`.
 
 Autor: Alexander Zarenko IT Consulting (AZITC).
+
+## Lizenz
+
+MIT – siehe `LICENSE`.
