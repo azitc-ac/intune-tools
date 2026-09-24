@@ -1,8 +1,8 @@
 ﻿<#
 .SYNOPSIS
     Intune assignments seen from a group: which apps, configuration profiles, compliance policies,
-    app configuration and app protection policies are assigned to the group, in which mode - and
-    add, change or remove those assignments.
+    app configuration and app protection policies and policy sets are assigned to the group, in which
+    mode - and add, change or remove those assignments.
 
 .DESCRIPTION
     Pick an Entra ID group (or All Users / All Devices) and a category on the left. The middle list
@@ -74,6 +74,7 @@ $strings = @{
         CatCompliance      = 'Compliance'
         CatAppConfig       = 'App-Konfiguration'
         CatAppProtection   = 'App-Schutz'
+        CatPolicySets      = 'Richtliniensätze'
         TypeMamAppConfig   = 'verwaltete Apps (MAM)'
         CatNotLoaded       = '{0}  (...)'
         CatCounts          = '{0}  ({1} / {2})'
@@ -177,6 +178,7 @@ $strings = @{
         CatCompliance      = 'Compliance'
         CatAppConfig       = 'App configuration'
         CatAppProtection   = 'App protection'
+        CatPolicySets      = 'Policy sets'
         TypeMamAppConfig   = 'managed apps (MAM)'
         CatNotLoaded       = '{0}  (...)'
         CatCounts          = '{0}  ({1} / {2})'
@@ -351,6 +353,15 @@ function Get-CategoryTable {
                            -AssignAction 'deviceAppManagement/managedAppPolicies/{0}/assign' `
                            -AssignmentType '#microsoft.graph.targetedManagedAppPolicyAssignment' -UsersOnly $true
             }
+        )
+    }
+    # policy sets: the set itself is assigned; what it contains shows up read-only in the other categories
+    $t['policySets'] = [PSCustomObject]@{
+        Key = 'policySets'; Label = $L.CatPolicySets; HasIntent = $false; NeedsConfigScope = $true
+        Sources = @(
+            (New-Source -List 'deviceAppManagement/policySets?$select=id,displayName' `
+                        -ItemPath 'deviceAppManagement/policySets/{0}' -Write 'Single' `
+                        -AssignmentType '#microsoft.graph.policySetAssignment')
         )
     }
     return $t

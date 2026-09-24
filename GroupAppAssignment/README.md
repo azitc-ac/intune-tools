@@ -45,6 +45,7 @@ bleiben unverändert. Oberfläche zweisprachig (Deutsch/Englisch nach UI-Kultur)
 | App-Konfiguration (verwaltete Geräte) | `deviceAppManagement/mobileAppConfigurations` | einzeln |
 | App-Konfiguration (verwaltete Apps, MAM) – nur Benutzer | `deviceAppManagement/targetedManagedAppConfigurations` | Gesamtliste (`…/assign`) |
 | App-Schutz (iOS, Android, Windows) – nur Benutzer | `deviceAppManagement/{ios,android,windows}ManagedAppProtections` | Gesamtliste (`managedAppPolicies/{id}/assign`) |
+| Richtliniensätze (der Satz selbst; sein Inhalt erscheint schreibgeschützt in den anderen Kategorien) | `deviceAppManagement/policySets` | einzeln |
 
 **Gesamtliste** heißt: Das Tool liest die Zuweisungsliste des Objekts unmittelbar vor dem Schreiben frisch,
 ändert nur den Eintrag des gewählten Ziels und schickt die Liste zurück. Alle anderen Ziele gehen mit
@@ -110,6 +111,10 @@ oder `Start-GroupAppAssignment.bat` doppelklicken (Parameter werden durchgereich
   Erweiterung in der Antwort, liest das Tool die Zuweisungen Objekt für Objekt (langsamer, aber korrekt).
 - **Einstellungskatalog:** Die Ressourcenseite nennt Einzel-Anlegen/-Löschen und `/assign`, die
   Methodenseiten dazu fehlen in der Doku. Das Tool nutzt `/assign` (Gesamtliste, wie das Portal) – Annahme.
+- **Gesamtliste ohne Richtliniensatz-Einträge:** Dass `/assign` Zuweisungen aus Richtliniensätzen unberührt
+  lässt, wenn sie nicht mitgeschickt werden, ist eine Annahme (die Doku sagt dazu nichts).
+- **Richtliniensätze:** Das Zuweisungsobjekt hat nur `target`; ob Intune dort Ausschlüsse annimmt, ist
+  ungeprüft – lehnt Intune ab, steht die Meldung pro Objekt im Speichern-Ergebnis.
 - Pfade, Zuweisungstypen, `intent`-Werte, Ziel-Typen, `source` und `useDeviceLicensing` sind gegen die
   Graph-beta-Doku (Quelle: `microsoftgraph/microsoft-graph-docs-contrib`) geprüft. Die Oberfläche lief bei
   der Entwicklung nicht (kein Windows); geprüft ist die Logik über das Testskript.

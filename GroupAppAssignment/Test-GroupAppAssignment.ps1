@@ -238,6 +238,12 @@ $itemAp = ConvertTo-Item @{ id = 'ap1'; displayName = 'iOS MAM'; '@odata.type' =
 Assert ($itemAp.AssignPath -eq 'deviceAppManagement/iosManagedAppProtections/ap1/assignments' -and $itemAp.AssignAction -eq 'deviceAppManagement/managedAppPolicies/ap1/assign') 'app protection item: read per collection, write through managedAppPolicies'
 Assert (($itemAp.Platforms -join ',') -eq 'iOS' -and $itemAp.UsersOnly) 'app protection item: platform iOS, users only'
 Assert (($cats['appProtection'].Sources[1].List) -eq 'deviceAppManagement/androidManagedAppProtections?$select=id,displayName') 'app protection list path built correctly'
+# phase 3: policy sets - assigned one by one like apps, no intent
+Assert ($cats.Contains('policySets') -and $cats['policySets'].Sources[0].Write -eq 'Single' -and $cats['policySets'].Sources[0].AssignmentType -eq '#microsoft.graph.policySetAssignment') 'policy sets: single writes, policySetAssignment'
+$itemPs = ConvertTo-Item @{ id = 'ps1'; displayName = 'iOS Baseline'; '@odata.type' = '#microsoft.graph.policySet' } $cats['policySets'] $cats['policySets'].Sources[0]
+Assert ($itemPs.AssignPath -eq 'deviceAppManagement/policySets/ps1/assignments' -and ($itemPs.Platforms -join ',') -eq '*' -and -not $itemPs.HasIntent) 'policy set item: path, no platform of its own, no intent'
+$bPs = New-AssignmentBody -Selection $selG1 -Intent '' -Exclude $false -AppType 'policySet' -VppDeviceLicensing $true -AssignmentType '#microsoft.graph.policySetAssignment' -HasIntent $false
+Assert ($bPs.'@odata.type' -eq '#microsoft.graph.policySetAssignment' -and -not $bPs.Contains('intent') -and $bPs.target.groupId -eq $g1) 'policy set body'
 
 # ---- Platforms ----
 function P([string]$t, [string]$v = '') { (Get-ItemPlatforms -OdataType $t -PlatformsValue $v) -join ',' }
