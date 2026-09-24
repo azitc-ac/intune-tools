@@ -605,7 +605,9 @@ $colFilter = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colFilter.Name = 'Filter'; $colFilter.HeaderText = $L.ColFilter; $colFilter.ReadOnly = $true; $colFilter.FillWeight = 16
 $colChange = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colChange.Name = 'Change'; $colChange.HeaderText = $L.ColChange; $colChange.ReadOnly = $true; $colChange.FillWeight = 9
-[void]$grid.Columns.AddRange(@($colApp, $colType, $colIntent, $colExcl, $colFilter, $colChange))
+# One by one: Columns.AddRange takes a params array, and Windows PowerShell 5.1 does not bind an
+# object[] to it (Controls.AddRange has no params and works with @(...)).
+foreach ($c in @($colApp, $colType, $colIntent, $colExcl, $colFilter, $colChange)) { [void]$grid.Columns.Add($c) }
 
 function New-MoveButton {
     param([string]$Text)

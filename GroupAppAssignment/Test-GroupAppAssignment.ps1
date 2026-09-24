@@ -3,8 +3,9 @@
     Checks for Manage-GroupAppAssignment.ps1 - no Graph, no GUI, no Pester needed.
     Exit code 0 = all passed. Runs on Windows PowerShell 5.1 and PowerShell 7.
 
-    1. Static: every .ps1 in this folder is UTF-8 with BOM and uses no syntax that Windows
-       PowerShell 5.1 cannot parse (?? ?. ?: && || ??=).
+    1. Static: every .ps1 in this folder is UTF-8 with BOM, uses no syntax that Windows
+       PowerShell 5.1 cannot parse (?? ?. ?: && || ??=) and calls AddRange(@(...)) only on
+       .Controls (5.1 does not bind an object[] to a params array such as Columns.AddRange).
     2. Logic: requested permissions, target matching, request bodies and the add / change / remove plan.
 #>
 $ErrorActionPreference = 'Stop'
@@ -29,6 +30,16 @@ foreach ($f in Get-ChildItem -Path $here -Filter *.ps1) {
     $bad = @($tokens | Where-Object { $ps7Only -contains $_.Kind.ToString() })
     foreach ($t in $bad) { Assert $false "$($f.Name): PS 5.1-incompatible token '$($t.Text)' at line $($t.Extent.StartLineNumber)" }
     if (-not $bad) { Assert $true "$($f.Name): no PS 7-only operators" }
+
+    # AddRange(@(...)) only on .Controls: other AddRange overloads (DataGridView Columns, Items, ...)
+    # take a params array that Windows PowerShell 5.1 does not bind from an object[] - pwsh 7 does,
+    # so only this check catches it here.
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$null)
+    $calls = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+                                     $n.Member.Extent.Text -eq 'AddRange' }, $true)
+    foreach ($c in $calls) {
+        Assert ($c.Expression.Extent.Text -match '\.Controls$') "$($f.Name): AddRange only on .Controls (line $($c.Extent.StartLineNumber): $($c.Expression.Extent.Text).AddRange)"
+    }
 }
 #endregion
 
