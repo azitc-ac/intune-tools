@@ -310,6 +310,24 @@ function Test-DesiredAssignment {
     return $null
 }
 
+function Get-ChangeText {
+    # Text of the grid's change column for one app: new / changed / from a policy set / ''
+    param($Original, $Desired)
+    if (-not $Original) { return $L.ChangeNew }
+    if ($Desired -and ($Original.Intent -ne $Desired.Intent -or [bool]$Original.Exclude -ne [bool]$Desired.Exclude)) { return $L.ChangeChanged }
+    if ($Original.PolicySet) { return $L.FromPolicySet }
+    return ''
+}
+
+function Sort-GridRows {
+    # Rows carry one property per grid column (App, Type, Intent = display text, Exclude, Filter, Change).
+    # Sorted by the clicked column, then by app name.
+    param($Rows, [string]$Column = 'App', [bool]$Descending = $false)
+    $by = @(@{ Expression = $Column; Descending = $Descending })
+    if ($Column -ne 'App') { $by += @{ Expression = 'App'; Descending = $false } }
+    $Rows | Sort-Object -Property $by     # streamed: no rows = no output
+}
+
 function Get-PlanProblem {
     # $null when the operation can be written, otherwise the reason.
     param($Operation, $Selection)
@@ -612,7 +630,12 @@ $colChange = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colChange.Name = 'Change'; $colChange.HeaderText = $L.ColChange; $colChange.ReadOnly = $true; $colChange.FillWeight = 9
 # One by one: Columns.AddRange takes a params array, and Windows PowerShell 5.1 does not bind an
 # object[] to it (Controls.AddRange has no params and works with @(...)).
-foreach ($c in @($colApp, $colType, $colIntent, $colExcl, $colFilter, $colChange)) { [void]$grid.Columns.Add($c) }
+foreach ($c in @($colApp, $colType, $colIntent, $colExcl, $colFilter, $colChange)) {
+    $c.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::Programmatic   # sorted by Update-Views
+    [void]$grid.Columns.Add($c)
+}
+$script:SortColumn = 'App'
+$script:SortDesc   = $false
 
 function New-MoveButton {
     param([string]$Text)
@@ -679,16 +702,10 @@ function Get-FilterText {
 function Update-GridRow {
     param($Row)
     $id = [string]$Row.Tag
-    $o = $script:Original[$id]; $d = $script:Desired[$id]
-    $change = ''
+    $change = Get-ChangeText $script:Original[$id] $script:Desired[$id]
     $color  = [System.Drawing.SystemColors]::Window
-    if (-not $o) {
-        $change = $L.ChangeNew; $color = [System.Drawing.Color]::Honeydew
-    } elseif ($o.Intent -ne $d.Intent -or [bool]$o.Exclude -ne [bool]$d.Exclude) {
-        $change = $L.ChangeChanged; $color = [System.Drawing.Color]::LightYellow
-    } elseif ($o.PolicySet) {
-        $change = $L.FromPolicySet
-    }
+    if ($change -eq $L.ChangeNew)         { $color = [System.Drawing.Color]::Honeydew }
+    elseif ($change -eq $L.ChangeChanged) { $color = [System.Drawing.Color]::LightYellow }
     $Row.Cells['Change'].Value = $change
     $Row.DefaultCellStyle.BackColor = $color
 }
@@ -720,13 +737,24 @@ function Update-Views {
         $grid.CurrentCell = $null
         $grid.SuspendLayout()
         $grid.Rows.Clear()
+        $gridRows = @()
         foreach ($a in $sorted) {
             if (-not $script:Desired.ContainsKey($a.Id) -or -not (Test-AppVisible $a)) { continue }
             $d = $script:Desired[$a.Id]
-            if ($script:Intents -notcontains $d.Intent -and -not $intentTable.Select("Value = '$($d.Intent)'")) {
-                [void]$intentTable.Rows.Add($d.Intent, $d.Intent)   # an intent this tool does not know yet
+            $gridRows += [PSCustomObject]@{
+                Id = $a.Id; App = $a.Name; Type = $a.Type; IntentKey = $d.Intent
+                Intent  = (Get-IntentText $d.Intent)
+                Exclude = [bool]$d.Exclude
+                Filter  = (Get-FilterText $script:Original[$a.Id])
+                Change  = (Get-ChangeText $script:Original[$a.Id] $d)
             }
-            $idx = $grid.Rows.Add($a.Name, $a.Type, $d.Intent, [bool]$d.Exclude, (Get-FilterText $script:Original[$a.Id]), '')
+        }
+        foreach ($r in (Sort-GridRows $gridRows $script:SortColumn $script:SortDesc)) {
+            $a = $script:AppById[$r.Id]
+            if ($script:Intents -notcontains $r.IntentKey -and -not $intentTable.Select("Value = '$($r.IntentKey)'")) {
+                [void]$intentTable.Rows.Add($r.IntentKey, $r.IntentKey)   # an intent this tool does not know yet
+            }
+            $idx = $grid.Rows.Add($r.App, $r.Type, $r.IntentKey, $r.Exclude, $r.Filter, '')
             $row = $grid.Rows[$idx]
             $row.Tag = $a.Id
             if ($script:Selection -and $script:Selection.Kind -ne 'group') { $row.Cells['Exclude'].ReadOnly = $true }
@@ -736,6 +764,12 @@ function Update-Views {
                 $row.DefaultCellStyle.ForeColor = [System.Drawing.SystemColors]::GrayText
             }
             Update-GridRow $row
+        }
+        foreach ($col in $grid.Columns) {
+            $col.HeaderCell.SortGlyphDirection = [System.Windows.Forms.SortOrder]::None
+            if ($col.Name -eq $script:SortColumn) {
+                $col.HeaderCell.SortGlyphDirection = if ($script:SortDesc) { [System.Windows.Forms.SortOrder]::Descending } else { [System.Windows.Forms.SortOrder]::Ascending }
+            }
         }
         $grid.ResumeLayout()
     } finally {
@@ -991,6 +1025,14 @@ $grid.Add_CellValueChanged({
     Update-Status
 })
 $grid.Add_DataError({ param($s, $e) $e.ThrowException = $false })
+# Header click sorts by that column; a second click on the same column reverses the order
+$grid.Add_ColumnHeaderMouseClick({
+    param($s, $e)
+    $name = $grid.Columns[$e.ColumnIndex].Name
+    if ($script:SortColumn -eq $name) { $script:SortDesc = -not $script:SortDesc }
+    else { $script:SortColumn = $name; $script:SortDesc = $false }
+    Update-Views
+})
 
 $txtSearch.Add_TextChanged({ Update-Views })
 $chkFilterNames.Add_CheckedChanged({

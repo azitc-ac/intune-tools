@@ -11,6 +11,8 @@ aus – wie `CollectionMembership` in den [SCCM-RightClickTools](https://github.
 - Pfeil-Buttons `Erforderlich >`, `Verfügbar >`, `Deinstallieren >`, `Ausschließen >`, `< Entfernen`;
   Modus und Ausschluss lassen sich rechts im Grid direkt ändern. Doppelklick links = Erforderlich.
 - Suche und App-Typ-Filter (z. B. `iosVppApp`) wirken auf beide Seiten.
+- Klick auf eine Spaltenüberschrift rechts sortiert danach (erneuter Klick: absteigend); bei gleichem
+  Wert nach App-Name. Modus sortiert nach dem angezeigten Text.
 - Farben rechts: grün = neu, gelb = geändert; links `(wird entfernt)` = Zuweisung wird gelöscht.
 - **Speichern** zeigt die Liste der Änderungen, schreibt sie und **liest danach jede berührte App
   aus Intune zurück** – die Anzeige zeigt anschließend den echten Ist-Stand, Abweichungen werden gemeldet.

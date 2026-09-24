@@ -160,6 +160,26 @@ Assert ($null -eq (Test-DesiredAssignment $selAD 'required' $false)) 'Required t
 
 # Plan
 function S([string]$i, [bool]$x = $false) { [PSCustomObject]@{ Intent = $i; Exclude = $x } }
+
+# Change column and sorting
+$o1 = S 'required'
+Assert ((Get-ChangeText $null (S 'required')) -eq $L.ChangeNew) 'change text: new'
+Assert ((Get-ChangeText $o1 (S 'available')) -eq $L.ChangeChanged) 'change text: changed intent'
+Assert ((Get-ChangeText $o1 (S 'required' $true)) -eq $L.ChangeChanged) 'change text: changed to exclusion'
+Assert ((Get-ChangeText $o1 (S 'required')) -eq '') 'change text: unchanged'
+$rows = @(
+    [PSCustomObject]@{ App = 'Teams';   Type = 'iosVppApp';        Intent = 'Required';  Exclude = $false; Filter = ''; Change = '' },
+    [PSCustomObject]@{ App = 'Edge';    Type = 'iosVppApp';        Intent = 'Available'; Exclude = $false; Filter = ''; Change = 'new' },
+    [PSCustomObject]@{ App = 'Outlook'; Type = 'iosStoreApp';      Intent = 'Required';  Exclude = $true;  Filter = ''; Change = '' },
+    [PSCustomObject]@{ App = 'Authenticator'; Type = 'iosVppApp';  Intent = 'Uninstall'; Exclude = $false; Filter = ''; Change = '' }
+)
+Assert (((Sort-GridRows $rows 'App' $false) | ForEach-Object { $_.App }) -join ',' -eq 'Authenticator,Edge,Outlook,Teams') 'sort by app'
+Assert (((Sort-GridRows $rows 'App' $true) | ForEach-Object { $_.App }) -join ',' -eq 'Teams,Outlook,Edge,Authenticator') 'sort by app, descending'
+Assert (((Sort-GridRows $rows 'Type' $false) | ForEach-Object { $_.App }) -join ',' -eq 'Outlook,Authenticator,Edge,Teams') 'sort by type, then app'
+Assert (((Sort-GridRows $rows 'Intent' $false) | ForEach-Object { $_.App }) -join ',' -eq 'Edge,Outlook,Teams,Authenticator') 'sort by mode text, then app'
+Assert (((Sort-GridRows $rows 'Intent' $true) | ForEach-Object { $_.App }) -join ',' -eq 'Authenticator,Outlook,Teams,Edge') 'sort by mode descending, app stays ascending'
+Assert (@(Sort-GridRows @() 'App' $false).Count -eq 0) 'sorting no rows'
+
 $orig = @{ keep = (S 'required'); gone = (S 'available'); intent = (S 'required'); excl = (S 'required') }
 $want = @{ keep = (S 'required'); new = (S 'uninstall'); intent = (S 'available'); excl = (S 'required' $true) }
 $plan = Get-AssignmentPlan -Original $orig -Desired $want
