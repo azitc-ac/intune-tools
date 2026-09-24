@@ -1,0 +1,7 @@
+# Normalize line endings; PowerShell and batch files check out as CRLF (UTF-8 BOM stays as committed)
+* text=auto
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
