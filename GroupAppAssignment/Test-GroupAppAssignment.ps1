@@ -331,6 +331,12 @@ Assert ((P 'macOSLobApp') -eq 'macOS' -and (P 'macOsVppApp') -eq 'macOS') 'platf
 Assert ((P 'macOSGeneralDeviceConfiguration') -eq 'macOS') 'platform: macOS configuration (not iOS)'
 Assert ((P 'androidManagedStoreApp') -eq 'Android' -and (P 'aospDeviceOwnerDeviceConfiguration') -eq 'Android') 'platform: Android'
 Assert ((P 'win32LobApp') -eq 'Windows' -and (P 'windows10GeneralConfiguration') -eq 'Windows') 'platform: Windows'
+# Every concrete Windows app type of the Graph beta mobileApp hierarchy (winGetApp once fell through to '*')
+foreach ($wt in 'winGetApp', 'win32CatalogApp', 'win32LobApp', 'windowsMicrosoftEdgeApp', 'microsoftStoreForBusinessApp', 'officeSuiteApp',
+                'windowsUniversalAppX', 'windowsAppX', 'windowsMobileMSI', 'windowsWebApp', 'windowsStoreApp') {
+    Assert ((P $wt) -eq 'Windows') "platform: $wt is Windows"
+}
+Assert (-not (Test-PlatformMatch (Get-ItemPlatforms 'winGetApp') 'iOS')) 'platform: WinGet app is hidden under iOS'
 Assert ((P 'webApp') -eq '*') 'platform: web app has none (shown everywhere)'
 Assert ((P '' 'iOS') -eq 'iOS' -and (P '' 'macOS') -eq 'macOS' -and (P '' 'windows10') -eq 'Windows') 'platform: settings catalog platforms value'
 Assert ((P '' 'iOS,macOS') -eq 'iOS,macOS') 'platform: several platforms'

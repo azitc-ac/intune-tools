@@ -445,7 +445,7 @@ function Get-ItemPlatforms {
         if ($t -match '^(?i)(managed)?ios')     { $p += 'iOS' }
         if ($t -match '^(?i)(managed)?macos')   { $p += 'macOS' }
         if ($t -match '^(?i)((managed)?android|aosp)') { $p += 'Android' }
-        if ($t -match '^(?i)(windows|win32|win10|microsoftStore|officeSuite|sharedPC|editionUpgrade)') { $p += 'Windows' }
+        if ($t -match '^(?i)(windows|win32|win10|winGet|microsoftStore|officeSuite|sharedPC|editionUpgrade)') { $p += 'Windows' }
     }
     if ($p.Count -eq 0) { $p = @('*') }
     return ,$p
