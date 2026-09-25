@@ -78,8 +78,8 @@ $strings = @{
         CatAppProtection   = 'App-Schutz'
         CatPolicySets      = 'Richtliniensätze'
         TypeMamAppConfig   = 'verwaltete Apps (MAM)'
-        CatNotLoaded       = '{0}  (...)'
-        CatCounts          = '{0}  ({1} / {2})'
+        CatNotLoaded       = '(...)'
+        CatCounts          = '({0} / {1})'
         TypeSettingsCatalog = 'Einstellungskatalog'
         BtnRequired        = 'Erforderlich >'
         BtnAvailable       = 'Verfügbar >'
@@ -185,8 +185,8 @@ $strings = @{
         CatAppProtection   = 'App protection'
         CatPolicySets      = 'Policy sets'
         TypeMamAppConfig   = 'managed apps (MAM)'
-        CatNotLoaded       = '{0}  (...)'
-        CatCounts          = '{0}  ({1} / {2})'
+        CatNotLoaded       = '(...)'
+        CatCounts          = '({0} / {1})'
         TypeSettingsCatalog = 'Settings catalog'
         BtnRequired        = 'Required >'
         BtnAvailable       = 'Available >'
@@ -263,12 +263,15 @@ $strings = @{
     }
 }
 
-$useDe = switch ($Language) {
-    'de'    { $true }
-    'en'    { $false }
-    default { [System.Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName -eq 'de' }
+function Get-UiLanguage {
+    # English unless -Language de, or -Language auto and a German Windows display language (de-DE, de-AT, ...)
+    param([string]$Language, [string]$CultureName)
+    if ($Language -eq 'de') { return 'de' }
+    if ($Language -eq 'en') { return 'en' }
+    if ($CultureName -match '^(?i)de(-|$)') { return 'de' }
+    return 'en'
 }
-$L = if ($useDe) { $strings.de } else { $strings.en }
+$L = $strings[(Get-UiLanguage $Language ([System.Globalization.CultureInfo]::CurrentUICulture.Name))]
 #endregion
 
 #region Assignment logic (no GUI, no Graph - covered by Test-GroupAppAssignment.ps1)
@@ -310,11 +313,25 @@ function New-Source {
     }
 }
 
+# Category icons: the Intune portal icons as drawn by IntuneManagement (github.com/Micke-K/IntuneManagement,
+# MIT, (c) 2019 Mikael Karlsson), Xaml/Icons/*.xaml, converted to 48 px PNG. The drawings are Microsoft's
+# Azure / Intune portal icons.
+$script:IconData = @{
+    Intune               = 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAE90lEQVR4nOxaa2gcVRT+7uwj2c0mu3lt0mAaVorQNsZQmhZNKakiitCKSm2rCFqxWkGLiGBbwYqiQUVTbGjJDynaaClWiYJQMFpR2/4xAfMiIclaU/PYZrfJZB/Z11zvzO6apOluZnZm3a30g507M/fO3PPNueeec89dPW5y6HGT4/9B4KlPZzcTTjgECis4dkNgv1wpCTxRQXijfW9pf1IC3mh4P43QHYQQUErBClayZ3PlGmSIifl6UgJ9bt4sUi02cdhVXwiDjiDbCEUo2rt5eIMiAdiStZMIDM0E2JHiyEY7XtlajFzB2FwQLb+5IakkCeJGTKWjxx9BLmHaF5dHEJK24WJF9odMSnBc0qolGshZpNBAnICoAfUkggLFiC8EZn+oK8qDZsi0BgJRimOjHpy+Mrvkfi0j8UxNMZrKzFCFTNrATFjAs11/LxNeRC8fxKs9k3h3cBqqkEkNHO6fwqA3JJ1vsxegocSE0jwdpuYjuDgdwEW3H2fHeVTm67G3xpZeJ5mygR72hS95AtL57lWleLDMGu8QqDAyO6iyolx3Dd+6rqGVDbHHbyuCRccp7idjGvjB5ZVKu9GABxLCX4cddhvOe3jwkSjOXOFRZ82HXPiMFJYSHQx5qKr5ydmUuE8oaPe9jp8XEUhPA3/6w1LpMOcltSI986I1pjz0zPklLSgCG3F3bDSKZ9tBhe2LqzZ0Dn/Ydd+a11RpICG0gWTDEZJK8ahKA6vNBoCFKhPBUMp2k/H6/Y5i1NtMaHN60DUzj6N1lchXaBNh5msO/DGBMFMJoNIG7rdb0D42ixF/EL3eAGotpmVtunkfroYiMHIET1TbYGaR7ldGHdglGkvT8w/isAzTmMyq/MCdzFHdUxITuvWvKXS6ebiCYenlE6w8Nz2L42Muqf559vXN8TBd0CByIZRIsqv2A++sr8Cb/S78wub7z8dv7LAerSrC06sXfACngclQsmQIpR8LWfUcWthY/pUROHl5BgMshp+Pf2LNQokU0Cwa3cLG85b4mB6YC2FtoRH/BTKyHlhJeC1tIE4gd9YDLm9UUfucW5G9/aMLxy/J99hLNDDsDiHbiLDx9WLHBD65II/Eklno+0EvyME+ZBoFVg6+WQHkXPK+Xv5ugqV3gBc2l6R8V0ID3yAHwcmIsWIaaK79EgcHfgeNVCENVI4P79SH5hsT3uT6Mmi2nrlqr76QaF/h0L1vMOgbTtQv704cOl/38Wh9eBX2bVo5R7WQ3H1vrZi+G0IaMO46tZulAe8ShV0cmiWu8/2eE2h+6HzivrVz5DLzfw1Ntxcse9fZXh5tj1ThuU3yEmyaZKcDdzeaUk7EFPk4DVk4vK0clYXyxdKEAE2Ru4xD9mJYifAi0lig3gCErElZz61QrwKqCdiOjdawHPi6lI0o3cp+GfGWqgnow+SQjGbVJS3Ox5ABpE2g4oPJgvIWZzObK/fJac8R7mTZx849WmtCmcUcoVyZdXQPCPdSBP4NbOfEIP9hWsDIflF21Nk274DPUgRNoIhAqdX5JBP+M/GcpB0AEosQhUWrCFjhnEV4lnV7a+EasY04hdd6I93JzlIbvkwoIuA+4OhgRQdUorpzZD1LaK/7aNgNi16ZGfoiwr9LVhFZ3ScWUzJqkS0CWmzGSe/ICgE2kZ5iRzE1mNZMwCaQaOwdOb+7tzJu/dkj2/gHAAD//18jY1cAAAAGSURBVAMA6azhlH1wVCgAAAAASUVORK5CYII='
+    Applications         = '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'
+    DeviceConfiguration  = 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAA7klEQVR4nOzYsRGCMBQG4Bcua1jZWLgAM7iAG7iAVcCzyRIOY80UbmFtTBqOJgfI5X4f/F8VvYN7P3k8OKwoZ0U5/QGcc2djjI/rvejyCiG4tAN30Vd8kmq+2Xj1D6JUrP0Iuwe89/26bduf/+cUQjNN0wRRjC2EZp+7U/+ju9SiQf3o+jVbCI0B0LYRYHjXTzGcZnOPzZ0nhy2ENjtAbltzrVL64cgWQiseYMkEm4I7gFY8AKfQCAYYw3ehEdsLUPrBNBdbCG1SgH/+XsQWQmMAtHUFWPLeglJJCG/RKtZefcRcRalUuxHlOIXQvgAAAP//NYUeiAAAAAZJREFUAwAeuzlEsJpSAAAAAABJRU5ErkJggg=='
+    CompliancePolicies   = 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAACtklEQVR4nOyZz08TQRTHv7PdWgURRBDhoKiR0INRNAESTmqMMUbqj4ChaGIMHvwTvOg/QOLRGC8mWutBEmnBCx40xpgARoOm1h8N/mhCG61RpFq17fi2slq001Zbdkrcz2XezLxu3nvz+nYzT0We9Hp87Rysm3M0gWENA1bT8jIYBAcP03AXXBlwO5ov6ess1w+dQy+X88Sni4xhD0oEDoyA2464HevCSjbFrpFAJRLR0VIyXoOivpOxmGtWFuP0+K6RikOfl1sV7FpbjR2NVaiyqTCKM2NBjIdm/lindD4qdMA59HgrkhjX520NFejbVI8yNeuhFZ3+0SDuh2cy7lEqeYVh5Al+iLEf/tUsseJESwOsSs6/TFGZeBMVGj/LFnEeMNaqi/uaVhhuvMad4HQuFZswHxjHel3eWLsUMvBHorlUJoQOUN1dqcvViy2QQeRzPOs+A78gTCHK/0W6rLBf6dPr9aPYuPY2Z1znafLlTnvGHDauFs4T/58DouOWhZlCsvlrB4ysQvlgppBszCokG7MKFQOzCi1kzCokG7MKFQOzCi1kzCokG9MB2ZgOyGaOAz2D/sN037ifrvTa09fn4+WlUWmz4Dj1HFrq/v3yOOVA1/CjVWrC4iLjt2tzIy7StW7P6Y5G1JVbUQgpB6xxy1WyugMG4thQU7DxGmqPx9dHo6HGa7TWV6AYKODsICRQW1Z49DUUasVshgReT3/Juj/5IYZ8UBhnHBIYC33Mvj+Vts8hVNZO4AEkMPDkLV4JTiHwPobBZ5Gfc4rwQ9FzqEemnIMkTt6axHDgHULRr6n5FI3e5xGcuv3iN012VvSMVMmnjvx1EnejBKHo33R32reJ9lNdym+W5DHq299A6XEvrqrd2RTmvHS1TwkgeYCW26gx2QBJcI6nFPn+Kw77+Vy63wEAAP//AI6L4wAAAAZJREFUAwB9D7vsiuaNMgAAAABJRU5ErkJggg=='
+    AppConfiguration     = 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAFXElEQVR4nOxYe0ibVxS/J/k0aazPsGGHdN3qXoyO2T1AKwodwwcUtoJQWB+TPdqNDWYRZ3wwwddmNzMMyJpB2YpdH7L9MVpUsO5hN7cOVtrujz1o1eEf66yOxRJNjN/t72oCJvnyJSafSQs58HEf59xzzzn33HPO/aQthwc5WwNMdJeTr5+otatBYnc5JBVINCQVSDQkFUg0JBVINCQVSDQQu8sh6UKJBin6spbTlsNDcnRrtSundewOA87oFZnRLs7ZcCT0MShAkVmQcwfnvJfJugK/acbPB5OyjsnusmN/d5ednbSWPy+T/Dgm7Wrs1/cOcP7HhLXiUdFtbm7eJjc22tCtIKJdR2eNL5iMrm/hF0+t0LIzELoRUIXRESjdR/TDp+3t7QfzagYtobZYVxfitGIgCNUpy/IVdN/CtxX9869nD5s9LqkMVh/A3GmWaThgsVgK0T+O734o2Yh2oqmpqXrKWj7LtFeAh80hxMm8TMm5wW+eaBPmRl6754IeVq/EBd2zZ2EoD/PngDaupl1aWjKq7bG+LkQsy9ubCUIRPeh2u39paGgY944fQZOtQPcfU4F1zwPw3xyi0f+VcBBuM5rNaut1Op1DFc+ihqAodFl8cI3r8Jlp9BdwMUelTIMTc04WJeC+uNTwMZyAuAND3i53eFhm4ZS1aD6QCtGnQCb6iEUPvbjcRZ2dnTNKSG1ciOjYVHfRPKLNKe+FdcA9RPyfgwXfxnij0jLgl9BcBW062q3KrOlhNAOIRk2gF3dEfFlibUdHxxGKtZRAGAQvKX+vaUSEvpEI2fTj65qenr5st9sXxURNTc0Go9H4NHy+DcOSCHi4EaFyNSunEU2+hAK7w5DdhLYvw3LnwvB6FbxE0lMNoTjdN/VMA6iqqtKbzWY7NjWo0UH43RB+gIWB0dHRX0tKSoRxd4Yh3ahJJu7v71/S6/Wl6P6rQtYL4YdYhAD3+mA5ooUA4KbgbgdJi3Ia92BsziOXH0q/kIbhWZzE9sB1InG1tbWNszUAXGk/1n3OgoW/kpqaWtbS0vKPJidAxAozJLp4fP45HRjvwNTVgA1n1iq8d91Fhbkxj8dTLIQXY+0SGUoBiS32gfGCOF5/FI2xKMBgMPyJJjAJDnd1dc35BppWo5xWBIfAgdEt6nwDY/jxAms/w2lWjSIdnJjMMFbX19fnY/hkgBA7cDJr3gtxfhsE3hAwvbO2tjbNN9DkBFZeUhV76xeGChAZhN/mrsaLTAu/jSQ5+QHWFClMF+OefQOD5IiBFnegRrykEDEqEEq/h7DZStQ4BTs2jdiVQJsBXs2KOxM9g1L8Z+y5KWYXgmBur3ucZOqZ8yFs2sQihMXFxY/FwycUHrh8fJ/F7kJEb0ABFJx0MjwpNcNqH4I+pKLA5aIoPINudTh+MN4JbRKZzIv2p/94y/vujQSu4XvP6XR+ZbVal0vwurq6+yRJEkJboGhaBDxuOhyOPE3KadLRodbW1gOw7jvY3AXLjOObxHcD92IQJM8GLBGlc5/JZPJgzW9Yk4nxA6H4g8/XCA42GEhcXHE3MtBes9lsLk1OADu4HB5+76ytMuj5B5fIEhfOW9evGSD8KUSdfeDjUcLH5e80rPwuFHifRQGw+mN4jf0eCh+Xn7veI48K4Do5avh4/Z1WVADu8QWav7zDF6HoEwo0innFB3FRAEJkBJdH7DTeBy/5BvDxTxD7L7GALA4wq7COz99pCC8Ec/vGUOg7PFj2raYR5THmy9C9tWpazE2q8dbkSRkO8ET8qbi4+CgT/4oYM6FIq+zp6XEq0N0oLS29BKG3w/ctKSkp1XhHXFfjfRsAAP//E0JInwAAAAZJREFUAwDDOF7tAmFwsQAAAABJRU5ErkJggg=='
+    AppProtection        = 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAADUUlEQVR4nOyZS0wTQRjHv5ktqAGJChESInIyPmI8ESVKeAQROBg1mBgfCMSDT0TAaKLgilEiRoqKiRIMBL0QTTh4kAKNIHDw4EUl3kwPCgcelgoVu+yO34qblNpCS1lmSfo7tLvz2vl/8+90dsaUWNrOIABstdlEu+ZV1x0TLHNCAngTEsCbkADehATwJiSANwSWOSEL8cbEezmNH4OE0aM2c1bPw94TDwCE6eKU5rKNJZYMIEoLISTes+4sAcALxj4yQp//lOSG4kNP6Lq8ky8p0Dw161F/wYZRoe5US1vpNkWST6PI476aWTIBjMGA+73NnLNDfHtgTXRYVDkha89gUoyWR4AcjpFjU89mN5gnYLheTO++66tdHQWwm7baHNEz9XbX/thVEZHbTXJYASUEI05WeK9P1q8Mj6wOZ6uu3+850mqXhhoF19SAmPve4V5K9xGo68uvIQTiKJAtGNlN2LEoUMDvCZwSIcIp2YuoIhQxUwTc6EgfYYx8weof0FrjugswEeEyBMEvyQHTissthcRgQFLwIkWNgaGnUZlNw4Trx5xlDC3AMTU8bxnDCnD+Zx3vGFKAap3JeayjYUgB/lhHw3AC/LWOhu7L6fr+Qr/XS6p1xpzfIRAMNQKBWEfDMAKc0nhA1tHQcTntfS3kDVmRcNaxw0IwxAg4fgduHQ3uAmasI8FC4SogGOtocBUQjHU0uAkI1joaFHSCAVk98w1jnnnqdBmsdf49xa6bAHwJ3ql+EQZdnlmOqRFYFBjp000AbofsTiyzbJYEdgVf6Ce1dDXyMgveOjPPUFr1GwGEKcrjS8nNNvznK1HvVeuo3l+UtoH1i1ndL3QVgKOQkVBiuXB+T1MjodS8WNZRX+Yppfnqta4CVHCYzQkl7Znnkp+VyoqrBYIEIy8xKueImdavf9uHJaayI70Kt1cqYAFg5Cfxh3uwap+1U0vjsr1eaUk7hkPThELC/K7E2DeFyrm39r775J7M7Xygois1iSjCG+xA9HxlMfKvJUoKqzOto555XA84rlkz4gUZ2rATSd5LsAn0fHlVVvdTX21wP6ERP28NVwbjarAjF2dlMHglMan4Tnbv0Fz1DXPEJHam7cI9z3t46VCIfNXT6774AwAA//9EXgF+AAAABklEQVQDAPtbVXQXSCetAAAAAElFTkSuQmCC'
+    PolicySets           = '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'
+}
+$script:AllIcon = 'Intune'
+
 function Get-CategoryTable {
     # Every category the tool can show: one shared load / plan / write / verify path for all of them.
     $t = [ordered]@{}
     $t['apps'] = [PSCustomObject]@{
-        Key = 'apps'; Label = $L.CatApps; HasIntent = $true; NeedsConfigScope = $false
+        Key = 'apps'; Icon = 'Applications'; Label = $L.CatApps; HasIntent = $true; NeedsConfigScope = $false
         Sources = @(
             (New-Source -List 'deviceAppManagement/mobileApps?$select=id,displayName,publisher' `
                         -ItemPath 'deviceAppManagement/mobileApps/{0}' -Write 'Single' `
@@ -322,7 +339,7 @@ function Get-CategoryTable {
         )
     }
     $t['config'] = [PSCustomObject]@{
-        Key = 'config'; Label = $L.CatConfig; HasIntent = $false; NeedsConfigScope = $true
+        Key = 'config'; Icon = 'DeviceConfiguration'; Label = $L.CatConfig; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
             (New-Source -List 'deviceManagement/deviceConfigurations?$select=id,displayName' `
                         -ItemPath 'deviceManagement/deviceConfigurations/{0}' -Write 'Single' `
@@ -337,7 +354,7 @@ function Get-CategoryTable {
         )
     }
     $t['compliance'] = [PSCustomObject]@{
-        Key = 'compliance'; Label = $L.CatCompliance; HasIntent = $false; NeedsConfigScope = $true
+        Key = 'compliance'; Icon = 'CompliancePolicies'; Label = $L.CatCompliance; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
             # POST .../assignments is documented but has no route in the service: /assign
             (New-Source -List 'deviceManagement/deviceCompliancePolicies?$select=id,displayName' `
@@ -347,7 +364,7 @@ function Get-CategoryTable {
         )
     }
     $t['appConfig'] = [PSCustomObject]@{
-        Key = 'appConfig'; Label = $L.CatAppConfig; HasIntent = $false; NeedsConfigScope = $true
+        Key = 'appConfig'; Icon = 'AppConfiguration'; Label = $L.CatAppConfig; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
             # POST .../assignments is documented but has no route in the service: /assign
             (New-Source -List 'deviceAppManagement/mobileAppConfigurations?$select=id,displayName' `
@@ -365,7 +382,7 @@ function Get-CategoryTable {
     # app protection: users only; read and written per platform collection (the documented
     # managedAppPolicies/{id}/assign answers "Resource not found for the segment 'assign'")
     $t['appProtection'] = [PSCustomObject]@{
-        Key = 'appProtection'; Label = $L.CatAppProtection; HasIntent = $false; NeedsConfigScope = $true
+        Key = 'appProtection'; Icon = 'AppProtection'; Label = $L.CatAppProtection; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
             foreach ($coll in @('iosManagedAppProtections', 'androidManagedAppProtections', 'windowsManagedAppProtections')) {
                 New-Source -List "deviceAppManagement/$coll`?`$select=id,displayName" `
@@ -379,7 +396,7 @@ function Get-CategoryTable {
     # No GET/POST on .../assignments and no $expand on the list: read per set with $expand, write the
     # complete list through /update.
     $t['policySets'] = [PSCustomObject]@{
-        Key = 'policySets'; Label = $L.CatPolicySets; HasIntent = $false; NeedsConfigScope = $true
+        Key = 'policySets'; Icon = 'PolicySets'; Label = $L.CatPolicySets; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
             (New-Source -List 'deviceAppManagement/policySets?$select=id,displayName' `
                         -ItemPath 'deviceAppManagement/policySets/{0}' -Write 'Replace' `
@@ -964,7 +981,7 @@ function Test-HasScope {
 $form = New-Object System.Windows.Forms.Form
 $form.Text          = $L.FormTitleNoGroup
 $form.Size          = New-Object System.Drawing.Size(1320, 780)
-$form.MinimumSize   = New-Object System.Drawing.Size(1000, 560)
+$form.MinimumSize   = New-Object System.Drawing.Size(1000, 560)   # widened in Shown to fit the top strip
 $form.StartPosition = 'CenterScreen'
 $form.Font          = New-Object System.Drawing.Font('Segoe UI', 9)
 
@@ -1079,12 +1096,50 @@ $lblLeft.Text = $L.HdrNotAssigned; $lblLeft.Dock = 'Fill'; $lblLeft.Font = $bold
 $lblRight = New-Object System.Windows.Forms.Label
 $lblRight.Text = $L.HdrAssigned; $lblRight.Dock = 'Fill'; $lblRight.Font = $boldFont; $lblRight.TextAlign = 'MiddleLeft'
 
+# DPI factor for the owner-drawn category list
+$gTmp = $form.CreateGraphics(); $script:Scale = [Math]::Max(1.0, $gTmp.DpiX / 96.0); $gTmp.Dispose()
+$script:IconImages = @{}
+foreach ($k in $script:IconData.Keys) {
+    $ms = [System.IO.MemoryStream]::new([Convert]::FromBase64String($script:IconData[$k]))   # stays open: Image needs it
+    $script:IconImages[$k] = [System.Drawing.Image]::FromStream($ms)
+}
+$catFontSmall = New-Object System.Drawing.Font('Segoe UI', 8)
+
 $lbCat = New-Object System.Windows.Forms.ListBox
-$lbCat.Dock = 'Fill'; $lbCat.IntegralHeight = $false; $lbCat.BorderStyle = 'FixedSingle'
+$lbCat.Dock = 'Fill'; $lbCat.IntegralHeight = $false; $lbCat.BorderStyle = 'None'
+$lbCat.BackColor = [System.Drawing.SystemColors]::Control
+$lbCat.DrawMode = 'OwnerDrawFixed'; $lbCat.ItemHeight = [int](42 * $script:Scale)
+$lbCat.Add_DrawItem({
+    # icon left, name, counts below in grey - like the Intune portal navigation
+    param($s, $e)
+    if ($e.Index -lt 0 -or $e.Index -ge $lbCat.Items.Count) { return }
+    $it = $lbCat.Items[$e.Index]
+    $sel = (($e.State -band [System.Windows.Forms.DrawItemState]::Selected) -ne 0)
+    $bg = if ($sel) { [System.Drawing.Color]::FromArgb(204, 228, 247) } else { [System.Drawing.SystemColors]::Control }
+    $brush = New-Object System.Drawing.SolidBrush($bg)
+    $e.Graphics.FillRectangle($brush, $e.Bounds); $brush.Dispose()
+    $icon = [int](24 * $script:Scale); $pad = [int](8 * $script:Scale)
+    $img = $script:IconImages[$it.Icon]
+    if ($img) {
+        $e.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $e.Graphics.DrawImage($img, $e.Bounds.X + $pad, $e.Bounds.Y + [int](($e.Bounds.Height - $icon) / 2), $icon, $icon)
+    }
+    $x = $e.Bounds.X + $pad * 2 + $icon
+    $w = [Math]::Max(10, $e.Bounds.Right - $x - 2)
+    $flags = [System.Windows.Forms.TextFormatFlags]::EndEllipsis -bor [System.Windows.Forms.TextFormatFlags]::NoPrefix
+    $half = [int]($e.Bounds.Height / 2)
+    [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $it.Label, $form.Font,
+        (New-Object System.Drawing.Rectangle($x, ($e.Bounds.Y + $half - [int](17 * $script:Scale)), $w, [int](17 * $script:Scale))),
+        [System.Drawing.SystemColors]::ControlText, $flags)
+    [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $it.Counts, $catFontSmall,
+        (New-Object System.Drawing.Rectangle($x, ($e.Bounds.Y + $half), $w, [int](16 * $script:Scale))),
+        [System.Drawing.SystemColors]::GrayText, $flags)
+})
 
 $lbLeft = New-Object System.Windows.Forms.ListBox
 $lbLeft.Dock = 'Fill'; $lbLeft.SelectionMode = 'MultiExtended'
 $lbLeft.ScrollAlwaysVisible = $true; $lbLeft.IntegralHeight = $false; $lbLeft.BorderStyle = 'FixedSingle'
+$lbLeft.HorizontalScrollbar = $true   # long names: scroll sideways (width measured by the ListBox itself)
 
 # Intent column source: DataTable, because WinForms data binding does not see PSCustomObject properties
 $intentTable = New-Object System.Data.DataTable
@@ -1097,25 +1152,28 @@ $grid.Dock = 'Fill'
 $grid.AllowUserToAddRows = $false; $grid.AllowUserToDeleteRows = $false
 $grid.AllowUserToResizeRows = $false; $grid.RowHeadersVisible = $false
 $grid.SelectionMode = 'FullRowSelect'; $grid.MultiSelect = $true
-$grid.AutoSizeColumnsMode = 'Fill'; $grid.BackgroundColor = [System.Drawing.SystemColors]::Window
+$grid.AutoSizeColumnsMode = 'None'; $grid.ScrollBars = 'Both'   # long names: scroll sideways
+$grid.BackgroundColor = [System.Drawing.SystemColors]::Window
 $grid.BorderStyle = 'FixedSingle'; $grid.EditMode = 'EditOnEnter'
 
 $colName = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$colName.Name = 'Name'; $colName.HeaderText = $L.ColName; $colName.ReadOnly = $true; $colName.FillWeight = 36
+$colName.Name = 'Name'; $colName.HeaderText = $L.ColName; $colName.ReadOnly = $true
+$colName.MinimumWidth = [int](160 * $script:Scale)   # sized to the longest name once per rebuild (Update-Views)
 $colCategory = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$colCategory.Name = 'Category'; $colCategory.HeaderText = $L.ColCategory; $colCategory.ReadOnly = $true; $colCategory.FillWeight = 16
+$colCategory.Name = 'Category'; $colCategory.HeaderText = $L.ColCategory; $colCategory.ReadOnly = $true; $colCategory.Width = [int](130 * $script:Scale)
 $colType = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$colType.Name = 'Type'; $colType.HeaderText = $L.ColType; $colType.ReadOnly = $true; $colType.FillWeight = 16
+$colType.Name = 'Type'; $colType.HeaderText = $L.ColType; $colType.ReadOnly = $true; $colType.Width = [int](160 * $script:Scale)
 $colIntent = New-Object System.Windows.Forms.DataGridViewComboBoxColumn
-$colIntent.Name = 'Intent'; $colIntent.HeaderText = $L.ColIntent; $colIntent.FillWeight = 18
+$colIntent.Name = 'Intent'; $colIntent.HeaderText = $L.ColIntent; $colIntent.Width = [int](150 * $script:Scale)
 $colIntent.DataSource = $intentTable; $colIntent.ValueMember = 'Value'; $colIntent.DisplayMember = 'Text'
 $colIntent.FlatStyle = 'Flat'
 $colExcl = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
-$colExcl.Name = 'Exclude'; $colExcl.HeaderText = $L.ColExclude; $colExcl.FillWeight = 9
+$colExcl.Name = 'Exclude'; $colExcl.HeaderText = $L.ColExclude; $colExcl.Width = [int](80 * $script:Scale)
 $colFilter = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$colFilter.Name = 'Filter'; $colFilter.HeaderText = $L.ColFilter; $colFilter.ReadOnly = $true; $colFilter.FillWeight = 14
+$colFilter.Name = 'Filter'; $colFilter.HeaderText = $L.ColFilter; $colFilter.ReadOnly = $true; $colFilter.Width = [int](150 * $script:Scale)
 $colChange = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$colChange.Name = 'Change'; $colChange.HeaderText = $L.ColChange; $colChange.ReadOnly = $true; $colChange.FillWeight = 9
+$colChange.Name = 'Change'; $colChange.HeaderText = $L.ColChange; $colChange.ReadOnly = $true
+$colChange.AutoSizeMode = 'Fill'; $colChange.MinimumWidth = [int](80 * $script:Scale)   # takes the rest, never squeezes the others
 # One by one: Columns.AddRange takes a params array, and Windows PowerShell 5.1 does not bind an
 # object[] to it (Controls.AddRange has no params and works with @(...)).
 foreach ($c in @($colName, $colCategory, $colType, $colIntent, $colExcl, $colFilter, $colChange)) {
@@ -1156,10 +1214,10 @@ $btnRemove.Margin = New-Object System.Windows.Forms.Padding(8, 20, 8, 4)
 $table = New-Object System.Windows.Forms.TableLayoutPanel
 $table.Dock = 'Fill'; $table.ColumnCount = 4; $table.RowCount = 2
 $table.Padding = New-Object System.Windows.Forms.Padding(6)
-[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 230)))
-[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 34)))
+[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, [int](190 * $script:Scale))))
+[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
 [void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 150)))
-[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 66)))
+[void]$table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
 [void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 22)))
 [void]$table.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 $table.Controls.Add($lblCat,     0, 0)
@@ -1217,13 +1275,21 @@ function Update-GridRow {
     $Row.DefaultCellStyle.BackColor = $color
 }
 
+function New-CategoryEntry {
+    # entry of the owner-drawn category list; ToString keeps keyboard search in the list working
+    param([string]$Icon, [string]$Label, [string]$Counts)
+    $e = [PSCustomObject]@{ Icon = $Icon; Label = $Label; Counts = $Counts }
+    $e | Add-Member -MemberType ScriptMethod -Name ToString -Value { $this.Label } -Force
+    return $e
+}
+
 function Update-CategoryList {
     # "Apps  (assigned / total)" per category for the selected platform; "(...)" = not loaded yet
     $platform = Get-SelectedPlatform
     $texts = @()
     $sumA = 0; $sumT = 0
     foreach ($cat in $script:Categories.Values) {
-        if (-not $script:LoadedCats[$cat.Key]) { $texts += ($L.CatNotLoaded -f $cat.Label); continue }
+        if (-not $script:LoadedCats[$cat.Key]) { $texts += (New-CategoryEntry $cat.Icon $cat.Label $L.CatNotLoaded); continue }
         $a = 0; $t = 0
         foreach ($it in $script:ItemByKey.Values) {
             if ($it.Category -ne $cat.Key -or -not (Test-PlatformMatch $it.Platforms $platform)) { continue }
@@ -1231,9 +1297,9 @@ function Update-CategoryList {
             if ($script:Desired.ContainsKey($it.Key)) { $a++ }
         }
         $sumA += $a; $sumT += $t
-        $texts += ($L.CatCounts -f $cat.Label, $a, $t)
+        $texts += (New-CategoryEntry $cat.Icon $cat.Label ($L.CatCounts -f $a, $t))
     }
-    $all = @($L.CatCounts -f $L.CatAll, $sumA, $sumT) + $texts
+    $all = @((New-CategoryEntry $script:AllIcon $L.CatAll ($L.CatCounts -f $sumA, $sumT))) + $texts
     $script:Rebuilding = $true
     try {
         $sel = $lbCat.SelectedIndex
@@ -1242,7 +1308,10 @@ function Update-CategoryList {
             $lbCat.Items.Clear()
             foreach ($x in $all) { [void]$lbCat.Items.Add($x) }
         } else {
-            for ($i = 0; $i -lt $all.Count; $i++) { if ([string]$lbCat.Items[$i] -ne $all[$i]) { $lbCat.Items[$i] = $all[$i] } }
+            for ($i = 0; $i -lt $all.Count; $i++) {
+                $old = $lbCat.Items[$i]
+                if ($old.Label -ne $all[$i].Label -or $old.Counts -ne $all[$i].Counts) { $lbCat.Items[$i] = $all[$i] }
+            }
         }
         $lbCat.EndUpdate()
         $want = 0
@@ -1348,6 +1417,8 @@ function Update-Views {
             }
             Update-GridRow $row
         }
+        # once after filling - an AllCells column would measure all rows again after every single row
+        $grid.AutoResizeColumn($colName.Index, [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells)
         foreach ($col in $grid.Columns) {
             $col.HeaderCell.SortGlyphDirection = [System.Windows.Forms.SortOrder]::None
             if ($col.Name -eq $script:SortColumn) {
@@ -1825,6 +1896,12 @@ $btnPick.Add_Click({
 })
 $form.Add_FormClosing({ param($s, $e) if (-not (Confirm-Discard)) { $e.Cancel = $true } })
 $form.Add_Shown({
+    # the window may not get narrower than the top strip (the rightmost control is fully visible)
+    $right = 0
+    foreach ($c in $stripTop.Controls) { if ($c.Right -gt $right) { $right = $c.Right } }
+    $minW = $right + [int](12 * $script:Scale) + ($form.Width - $form.ClientSize.Width)
+    if ($form.MinimumSize.Width -lt $minW) { $form.MinimumSize = New-Object System.Drawing.Size($minW, $form.MinimumSize.Height) }
+    if ($form.Width -lt $minW) { $form.Width = $minW }
     Set-SelectionText
     Update-ButtonMode
     Update-CategoryList

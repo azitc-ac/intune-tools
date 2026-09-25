@@ -16,8 +16,9 @@ und zeigt nicht nur Apps, sondern alles, was man einer (z. B. iOS-)Gruppe typisc
 ```
 
 - Gruppe wählen (Suche in Entra ID) – oder **Alle Benutzer** / **Alle Geräte**.
-- **Kategorie links** bestimmt, was in der Mitte und rechts steht; dahinter „zugewiesen / gesamt" für die
-  gewählte Plattform, `(...)` = noch nicht geladen. Eine Kategorie wird beim ersten Öffnen geladen.
+- **Kategorie links** (Icons wie im Intune-Portal, darunter „zugewiesen / gesamt" für die gewählte
+  Plattform, `(...)` = noch nicht geladen) bestimmt, was in der Mitte und rechts steht. Eine Kategorie wird
+  beim ersten Öffnen geladen.
 - **Mitte:** alle Objekte der Kategorie, die dem Ziel *nicht* zugewiesen sind.
 - **Rechts:** alle, die ihm zugewiesen sind – bei Apps mit **Modus** (Erforderlich / Verfügbar /
   Deinstallieren / Verfügbar ohne Registrierung), bei allen mit **Ausschluss** und **Filter**.
@@ -27,12 +28,18 @@ und zeigt nicht nur Apps, sondern alles, was man einer (z. B. iOS-)Gruppe typisc
 - **Plattform** oben (Standard iOS/iPadOS) grenzt alle Kategorien ein; Objekte ohne eigene Plattform
   (Web-Apps, …) erscheinen immer. Suche und Typ-Filter wirken auf Mitte und rechts.
 - Klick auf eine Spaltenüberschrift rechts sortiert danach (erneut: absteigend), bei gleichem Wert nach Name.
+- Lange Namen: Mitte und rechts lassen sich waagerecht scrollen; die Namensspalte rechts wächst mit dem
+  längsten Namen. „Nicht zugewiesen" und „Zugewiesen" sind gleich breit.
 - Farben rechts: grün = neu, gelb = geändert; in der Mitte `(wird entfernt)` = Zuweisung wird gelöscht.
 - **Speichern** zeigt alle Änderungen über alle Kategorien, schreibt sie und **liest danach jedes
   berührte Objekt aus Intune zurück** – die Anzeige zeigt den echten Ist-Stand, Abweichungen werden gemeldet.
 
 Es wird nur die Zuweisung **für das gewählte Ziel** angefasst; alle anderen Zuweisungen eines Objekts
-bleiben unverändert. Oberfläche zweisprachig (Deutsch/Englisch nach UI-Kultur).
+bleiben unverändert. Oberfläche zweisprachig: **Englisch** als Standard, **Deutsch** automatisch bei deutscher
+Windows-Anzeigesprache (`de-*`); `-Language en|de` erzwingt eine Sprache.
+
+Die Kategorie-Icons stammen aus [IntuneManagement](https://github.com/Micke-K/IntuneManagement) (MIT) und
+zeigen die Intune-Portal-Icons von Microsoft – siehe `THIRD-PARTY-NOTICES.md`.
 
 ## Kategorien
 

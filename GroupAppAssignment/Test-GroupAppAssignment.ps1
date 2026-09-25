@@ -57,6 +57,13 @@ $graphModuleNames = @(
 $toolAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $here 'Manage-GroupAppAssignment.ps1'), [ref]$null, [ref]$null)
 $toolFunctions = @($toolAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
 $clash = @($toolFunctions | Where-Object { $graphModuleNames -contains $_ })
+
+# Every visible text of the window comes from the de/en tables: no literal .Text / .HeaderText / message
+# box text / list item in the GUI part (only "..." for the picker button is allowed).
+$guiPart = $mainText = [System.IO.File]::ReadAllText((Join-Path $here 'Manage-GroupAppAssignment.ps1'))
+$guiPart = $guiPart.Substring($guiPart.IndexOf('# ---- end of the GUI-free part'))
+$literal = [regex]::Matches($guiPart, "(\.(Text|HeaderText)\s*=\s*['""][^'""]*[A-Za-z\u00C0-\u017F][^'""]*['""])|(MessageBox\]::Show\(\s*['""])|(Items\.Add\(\s*['""][A-Za-z])")
+Assert ($literal.Count -eq 0) "no hard-coded visible text in the GUI ($(@($literal | ForEach-Object { $_.Value }) -join ' | '))"
 Assert ($toolFunctions.Count -gt 20 -and $clash.Count -eq 0) "no function name collides with the Graph module ($($clash -join ', '))"
 #endregion
 
@@ -89,6 +96,21 @@ $assignments = @(
                                                      deviceAndAppManagementAssignmentFilterId = 'f-1'; deviceAndAppManagementAssignmentFilterType = 'include' };
        settings = @{ '@odata.type' = '#microsoft.graph.win32LobAppAssignmentSettings'; notifications = 'hideAll' } }
 )
+
+# Language: English by default, German for a German Windows display language, -Language overrides
+Assert ((Get-UiLanguage 'auto' 'de-DE') -eq 'de' -and (Get-UiLanguage 'auto' 'de-AT') -eq 'de' -and (Get-UiLanguage 'auto' 'de') -eq 'de') 'language: German Windows -> de'
+Assert ((Get-UiLanguage 'auto' 'en-US') -eq 'en' -and (Get-UiLanguage 'auto' 'fr-FR') -eq 'en' -and (Get-UiLanguage 'auto' '') -eq 'en') 'language: anything else -> en (default)'
+Assert ((Get-UiLanguage 'en' 'de-DE') -eq 'en' -and (Get-UiLanguage 'de' 'en-US') -eq 'de') 'language: -Language overrides'
+
+# Icons: every category (and "All") has one, and it is a real 48 x 48 PNG
+foreach ($c in (Get-CategoryTable).Values) { Assert ($script:IconData.ContainsKey($c.Icon)) "category $($c.Key) has icon '$($c.Icon)'" }
+Assert ($script:IconData.ContainsKey($script:AllIcon)) 'the "All" entry has an icon'
+foreach ($k in $script:IconData.Keys) {
+    $png = [Convert]::FromBase64String($script:IconData[$k])
+    $isPng = ($png.Length -gt 24 -and $png[0] -eq 0x89 -and $png[1] -eq 0x50 -and $png[2] -eq 0x4E -and $png[3] -eq 0x47)
+    $w = if ($isPng) { ($png[16] -shl 24) + ($png[17] -shl 16) + ($png[18] -shl 8) + $png[19] } else { 0 }
+    Assert ($isPng -and $w -eq 48) "icon $k is a 48 px PNG"
+}
 
 # Permissions: by default only the two scopes an app-centric bulk tool asks for too (no new consent)
 $def = Get-RequestedScopes
