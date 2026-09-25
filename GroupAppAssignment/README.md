@@ -1,202 +1,208 @@
-# GroupAppAssignment – Intune-Zuweisungen aus Sicht der Gruppe
+# GroupAppAssignment – Intune assignments seen from the group
 
-Gegenstück zum [Intune Bulk App Assignment Tool](https://github.com/TheJamberry/Intune-Bulk-App-Assignment-Tool):
-Das geht von den **Apps** aus („diese Apps an diese Gruppen"). Dieses Tool geht von der **Gruppe**
-aus – wie `CollectionMembership` in den [SCCM-RightClickTools](https://github.com/azitc-ac/SCCM-RightClickTools/tree/main/CollectionMembership) –
-und zeigt nicht nur Apps, sondern alles, was man einer (z. B. iOS-)Gruppe typischerweise zuweist.
+*English · [Deutsch](README.de.md)*
+
+Counterpart to the [Intune Bulk App Assignment Tool](https://github.com/TheJamberry/Intune-Bulk-App-Assignment-Tool):
+that one starts from the **apps** ("these apps to these groups"). This tool starts from the **group** –
+like `CollectionMembership` in the [SCCM-RightClickTools](https://github.com/azitc-ac/SCCM-RightClickTools/tree/main/CollectionMembership) –
+and shows not only apps but everything you typically assign to a (for example iOS) group.
 
 ```
-┌ Kategorie ──────────┬ Nicht zugewiesen ─────┬──────────┬ Zugewiesen ─────────────────────────────┐
-│ Alle          23/410│                       │Zuweisen >│ Name | Kategorie | Typ | Modus | Ausschl.│
-│ Apps          12/140│                       │Ausschl. >│ …                                       │
-│ Konfiguration  6/85 │                       │          │                                         │
-│ Compliance     1/9  │                       │<Entfernen│                                         │
+┌ Category ───────────┬ Not assigned ─────────┬──────────┬ Assigned ───────────────────────────────┐
+│ All         (23/410)│                       │ Assign > │ Name | Category | Type | Mode | Exclus. │
+│ Apps        (12/140)│                       │Exclude > │ …                                       │
+│ Configuration (6/85)│                       │          │                                         │
+│ Compliance    (1/9) │                       │ < Remove │                                         │
 │ …                   │                       │          │                                         │
 └─────────────────────┴───────────────────────┴──────────┴─────────────────────────────────────────┘
 ```
 
-- Gruppe wählen (Suche in Entra ID) – oder **Alle Benutzer** / **Alle Geräte**.
-- **Kategorie links** (Icons wie im Intune-Portal, darunter „zugewiesen / gesamt" für die gewählte
-  Plattform, `(...)` = noch nicht geladen) bestimmt, was in der Mitte und rechts steht. Eine Kategorie wird
-  beim ersten Öffnen geladen.
-- **Mitte:** alle Objekte der Kategorie, die dem Ziel *nicht* zugewiesen sind.
-- **Rechts:** alle, die ihm zugewiesen sind – bei Apps mit **Modus** (Erforderlich / Verfügbar /
-  Deinstallieren / Verfügbar ohne Registrierung), bei allen mit **Ausschluss** und **Filter**.
-- **Buttons** passen sich an: Apps `Erforderlich >` `Verfügbar >` `Deinstallieren >` `Ausschließen >`,
-  alle anderen Kategorien `Zuweisen >` `Ausschließen >`, dazu `< Entfernen`. Doppelklick in der Mitte =
-  Erforderlich bzw. Zuweisen. In **„Alle"** nur ansehen und entfernen (Spalte *Kategorie* kommt dazu).
-- **Plattform** oben (Standard iOS/iPadOS) grenzt alle Kategorien ein; Objekte ohne eigene Plattform
-  (Web-Apps, …) erscheinen immer. Suche und Typ-Filter wirken auf Mitte und rechts.
-- Klick auf eine Spaltenüberschrift rechts sortiert danach (erneut: absteigend), bei gleichem Wert nach Name.
-- Lange Namen: Mitte und rechts lassen sich waagerecht scrollen; die Namensspalte rechts wächst mit dem
-  längsten Namen. „Nicht zugewiesen" und „Zugewiesen" sind gleich breit.
-- Farben rechts: grün = neu, gelb = geändert; in der Mitte `(wird entfernt)` = Zuweisung wird gelöscht.
-- **Speichern** zeigt alle Änderungen über alle Kategorien, schreibt sie und **liest danach jedes
-  berührte Objekt aus Intune zurück** – die Anzeige zeigt den echten Ist-Stand, Abweichungen werden gemeldet.
+- Pick a group (search in Entra ID) – or **All users** / **All devices**.
+- The **category on the left** (icons as in the Intune portal, below them "assigned / total" for the selected
+  platform, `(...)` = not loaded yet) decides what the middle and the right side show. A category is loaded
+  the first time it is opened.
+- **Middle:** every object of the category that is *not* assigned to the target.
+- **Right:** every object that is assigned – for apps with their **mode** (Required / Available / Uninstall /
+  Available without enrollment), for all of them with **exclusion** and **filter**.
+- **Buttons** follow the category: apps `Required >` `Available >` `Uninstall >` `Exclude >`, all other
+  categories `Assign >` `Exclude >`, plus `< Remove`. Double-click in the middle = Required or Assign.
+  **"All"** only shows and removes (a *Category* column is added).
+- **Platform** at the top (default iOS/iPadOS) narrows every category; objects without a platform of their
+  own (web apps, …) are always shown. Search and type filter apply to the middle and the right side.
+- Clicking a column header on the right sorts by it (again: descending), equal values by name.
+- Long names: the middle and the right side scroll sideways; the name column on the right grows with the
+  longest name. "Not assigned" and "Assigned" have the same width.
+- Colours on the right: green = new, yellow = changed; in the middle `(to be removed)` = the assignment
+  will be deleted.
+- **Save** lists all changes across all categories, writes them and then **reads every touched object back
+  from Intune** – the view shows the real state, differences are reported.
 
-Es wird nur die Zuweisung **für das gewählte Ziel** angefasst; alle anderen Zuweisungen eines Objekts
-bleiben unverändert. Oberfläche zweisprachig: **Englisch** als Standard, **Deutsch** automatisch bei deutscher
-Windows-Anzeigesprache (`de-*`); `-Language en|de` erzwingt eine Sprache.
+Only the assignment **of the selected target** is touched; every other assignment of an object stays as it
+is. The window is bilingual: **English** by default, **German** automatically with a German Windows display
+language (`de-*`); `-Language en|de` forces one.
 
-Die Kategorie-Icons stammen aus [IntuneManagement](https://github.com/Micke-K/IntuneManagement) (MIT) und
-zeigen die Intune-Portal-Icons von Microsoft – siehe `THIRD-PARTY-NOTICES.md`.
+The category icons come from [IntuneManagement](https://github.com/Micke-K/IntuneManagement) (MIT) and show
+Microsoft's Intune portal icons – see `THIRD-PARTY-NOTICES.md`.
 
-## Kategorien
+## Categories
 
-| Kategorie | Graph (beta) | Schreiben |
+| Category | Graph (beta) | Write |
 |---|---|---|
-| Apps | `deviceAppManagement/mobileApps` | einzeln (`POST`/`DELETE …/assignments`) |
-| Konfigurationsprofile – Vorlagen (Geräteeinschränkungen, WLAN, VPN, Zertifikate, iOS-Update, …) | `deviceManagement/deviceConfigurations` | einzeln |
-| Konfigurationsprofile – Einstellungskatalog (inkl. Declarative Software Update) | `deviceManagement/configurationPolicies` | Gesamtliste (`…/assign`) |
-| Compliance | `deviceManagement/deviceCompliancePolicies` | Gesamtliste (`…/assign`) |
-| App-Konfiguration (verwaltete Geräte) | `deviceAppManagement/mobileAppConfigurations` | Gesamtliste (`…/assign`) |
-| App-Konfiguration (verwaltete Apps, MAM) – nur Benutzer | `deviceAppManagement/targetedManagedAppConfigurations` | Gesamtliste (`…/assign`) |
-| App-Schutz (iOS, Android, Windows) – nur Benutzer | `deviceAppManagement/{ios,android,windows}ManagedAppProtections` | Gesamtliste (`…/{id}/assign`) |
-| Richtliniensätze (der Satz selbst; sein Inhalt erscheint schreibgeschützt in den anderen Kategorien) | `deviceAppManagement/policySets` | Gesamtliste (`…/update`), gelesen per `?$expand=assignments` |
+| Apps | `deviceAppManagement/mobileApps` | one by one (`POST`/`DELETE …/assignments`) |
+| Configuration profiles – templates (device restrictions, Wi-Fi, VPN, certificates, iOS update, …) | `deviceManagement/deviceConfigurations` | one by one |
+| Configuration profiles – settings catalog (incl. declarative software update) | `deviceManagement/configurationPolicies` | complete list (`…/assign`) |
+| Compliance | `deviceManagement/deviceCompliancePolicies` | complete list (`…/assign`) |
+| App configuration (managed devices) | `deviceAppManagement/mobileAppConfigurations` | complete list (`…/assign`) |
+| App configuration (managed apps, MAM) – users only | `deviceAppManagement/targetedManagedAppConfigurations` | complete list (`…/assign`) |
+| App protection (iOS, Android, Windows) – users only | `deviceAppManagement/{ios,android,windows}ManagedAppProtections` | complete list (`…/{id}/assign`) |
+| Policy sets (the set itself; its content shows up read-only in the other categories) | `deviceAppManagement/policySets` | complete list (`…/update`), read via `?$expand=assignments` |
 
-**Gesamtliste** heißt: Das Tool liest die Zuweisungsliste des Objekts unmittelbar vor dem Schreiben frisch,
-ändert nur den Eintrag des gewählten Ziels und schickt die Liste zurück. Alle anderen Ziele gehen mit
-ihrem Filter unverändert mit; das prüft das Testskript ausdrücklich und es ist live bestätigt (siehe unten).
+**Complete list** means: right before writing, the tool reads the object's assignment list fresh, changes
+only the entry of the selected target and sends the list back. All other targets go along unchanged,
+including their filter; the test script checks this explicitly and it is confirmed live (see below).
 
-**Live geprüft** (Test-Tenant, 2026-09) – und dabei von der Graph-Doku abweichend:
-- Compliance und App-Konfiguration (Geräte): das dokumentierte `POST …/assignments` hat im Dienst keine
-  Route („No OData route exists“) – nur `/assign` funktioniert.
-- App-Schutz: das dokumentierte `managedAppPolicies/{id}/assign` antwortet „Resource not found for the
-  segment 'assign'“ – `iosManagedAppProtections/{id}/assign` (bzw. android/windows) funktioniert.
-- Richtliniensätze: weder `GET` noch `POST …/assignments` existieren, die Liste erlaubt kein `$expand` –
-  gelesen wird je Satz über `?$expand=assignments`, geschrieben über `/update`.
-- **MAM (App-Schutz, MAM-App-Konfiguration) ist nur verzögert konsistent:** Nach `/assign` erscheinen
-  Einschlüsse sofort, **Ausschlüsse aber minutenlang nur zeitweise** – gemessen: nach dem Setzen eines
-  Ausschlusses zeigten 11 von 13 Lesungen über 2 Minuten ihn nicht an, auch zwei Lesungen hintereinander waren
-  veraltet. Ein Gesamtlisten-Schreibvorgang auf Basis einer solchen Lesung hat im Test den Ausschluss
-  gelöscht. Ein Schreiben kurz nach einer Änderung scheitert außerdem vorübergehend mit
-  `ConditionNotMet`/`ResourceNotFound`. Das Tool deshalb bei MAM-Objekten:
-  - merkt sich die zuletzt **selbst gesendete** Liste 10 Minuten lang und baut den nächsten Schreibvorgang
-    darauf auf statt auf einer Lesung; Laden und Zurücklesen zeigen in dieser Zeit ebenfalls den gesendeten Stand;
-  - liest sonst erst, wenn zwei Lesungen im Abstand von 5 s übereinstimmen;
-  - wiederholt den Gesamtlisten-Schreibvorgang bei den genannten Fehlern (bis zu 5 Versuche);
-  - wartet beim Zurücklesen bis zu 60 s; zeigt Intune den Stand dann noch nicht, meldet es das als Hinweis
-    („noch nicht überall sichtbar"), nicht als Fehler.
+**Checked live** (test tenant, 2026-09) – and different from the Graph documentation:
+- Compliance and app configuration (devices): the documented `POST …/assignments` has no route in the
+  service ("No OData route exists") – only `/assign` works.
+- App protection: the documented `managedAppPolicies/{id}/assign` answers "Resource not found for the
+  segment 'assign'" – `iosManagedAppProtections/{id}/assign` (or android/windows) works.
+- Policy sets: neither `GET` nor `POST …/assignments` exists, and the list does not allow `$expand` –
+  each set is read via `?$expand=assignments` and written via `/update`.
+- **MAM (app protection, MAM app configuration) is only eventually consistent:** after `/assign`,
+  inclusions show up at once, **exclusions only now and then for minutes** – measured: after setting an
+  exclusion, 11 of 13 reads over 2 minutes did not show it, and two reads in a row were stale too. A
+  complete-list write based on such a read deleted the exclusion in the test. Writing shortly after a change
+  also fails temporarily with `ConditionNotMet`/`ResourceNotFound`. For MAM objects the tool therefore:
+  - remembers the list it **sent itself** last for 10 minutes and builds the next write on it instead of on
+    a read; loading and reading back show the sent state during that time as well;
+  - otherwise reads only when two reads 5 s apart agree;
+  - retries the complete-list write on these errors (up to 5 attempts);
+  - waits up to 60 s when reading back; if Intune still does not show the state, it reports that as a note
+    ("not visible everywhere yet"), not as an error.
 
-  **Grenze:** Ändert *jemand anderes* (Portal, anderes Tool) Ausschlüsse desselben MAM-Objekts, kann das Tool
-  das in den ersten Minuten danach nicht zuverlässig sehen – und dieselbe Lücke hat jeder Gesamtlisten-Schreiber,
-  auch ein Skript. Zwischen zwei Bearbeitern desselben MAM-Objekts ein paar Minuten Abstand lassen.
+  **Limit:** if *someone else* (portal, another tool) changes exclusions of the same MAM object, the tool
+  cannot see that reliably during the first minutes – and every complete-list writer, a script included, has
+  the same gap. Leave a few minutes between two people editing the same MAM object.
 
-## Voraussetzungen
+## Requirements
 
 | | |
 |---|---|
-| OS / PowerShell | Windows, Windows PowerShell 5.1 (oder 7.x) – WinForms |
-| Modul | `Microsoft.Graph.Authentication` (`Install-Module Microsoft.Graph.Authentication -Scope CurrentUser`) |
-| Graph-Rechte (delegiert) | Apps: `DeviceManagementApps.ReadWrite.All`, `Group.Read.All` – dieselben wie beim Bulk App Assignment Tool, also kein neuer Zustimmungsdialog. Jede andere Kategorie: zusätzlich `DeviceManagementConfiguration.ReadWrite.All`, angefordert erst beim ersten Öffnen einer solchen Kategorie (einmaliger Zustimmungsdialog). „Filternamen laden" ohne weitere Kategorie: `DeviceManagementConfiguration.Read.All` |
+| OS / PowerShell | Windows, Windows PowerShell 5.1 (or 7.x) – WinForms |
+| Module | `Microsoft.Graph.Authentication` (`Install-Module Microsoft.Graph.Authentication -Scope CurrentUser`) |
+| Graph permissions (delegated) | Apps: `DeviceManagementApps.ReadWrite.All`, `Group.Read.All` – the same as the Bulk App Assignment Tool, so no new consent prompt. Every other category: additionally `DeviceManagementConfiguration.ReadWrite.All`, requested only when such a category is opened for the first time (one consent prompt). "Load filter names" without another category: `DeviceManagementConfiguration.Read.All` |
 
-Anmeldung interaktiv mit dem eigenen Konto (`Connect-MgGraph`), keine App-Registrierung.
-**Konto wechseln:** `Connect-MgGraph` merkt sich die Anmeldung pro Windows-Benutzer und meldet beim nächsten Mal
-ohne Rückfrage mit demselben Konto an – „Neu verbinden" bleibt daher beim selben Konto. **„Abmelden"** ruft
-`Disconnect-MgGraph` auf (löscht diese gespeicherte Anmeldung und den Token-Cache) und verwirft alle geladenen
-Daten; beim nächsten „Verbinden" lässt sich ein anderes Konto wählen. Andere Anwendungen, die das Windows-Konto
-nutzen, bleiben angemeldet (kein `-SignOutFromBroker`).
+Sign-in is interactive with your own account (`Connect-MgGraph`), no app registration.
+**Switching accounts:** `Connect-MgGraph` remembers the sign-in per Windows user and signs in with the same
+account next time without asking – so "Reconnect" stays with the same account. **"Sign out"** calls
+`Disconnect-MgGraph` (deletes that stored sign-in and the token cache) and discards all loaded data; the next
+"Connect" lets you pick another account. Other applications using the Windows account stay signed in
+(no `-SignOutFromBroker`).
 
 ## Start
 
 ```powershell
 Unblock-File .\Manage-GroupAppAssignment.ps1
-.\Manage-GroupAppAssignment.ps1                                # Ziel im Fenster wählen
-.\Manage-GroupAppAssignment.ps1 -GroupId <Objekt-ID>           # direkt diese Gruppe
-.\Manage-GroupAppAssignment.ps1 -GroupId AllUsers              # oder AllDevices
-.\Manage-GroupAppAssignment.ps1 -Platform All                  # alle Plattformen statt iOS
+.\Manage-GroupAppAssignment.ps1                                # pick the target in the window
+.\Manage-GroupAppAssignment.ps1 -GroupId <object id>           # this group directly
+.\Manage-GroupAppAssignment.ps1 -GroupId AllUsers              # or AllDevices
+.\Manage-GroupAppAssignment.ps1 -Platform All                  # all platforms instead of iOS
 ```
 
-oder `Start-GroupAppAssignment.bat` doppelklicken (Parameter werden durchgereicht).
+or double-click `Start-GroupAppAssignment.bat` (parameters are passed on).
 
-| Parameter | Standard | Bedeutung | im Fenster |
+| Parameter | Default | Meaning | In the window |
 |---|---|---|---|
-| `-GroupId` | – | Gruppen-Objekt-ID, `AllUsers` oder `AllDevices` | `...`-Button |
-| `-TenantId` | – | Tenant für `Connect-MgGraph` | – (Anmeldedialog) |
-| `-Platform` | `iOS` | `iOS` \| `macOS` \| `Android` \| `Windows` \| `All` | Liste „Plattform" |
-| `-VppDeviceLicensing` | `$true` | Lizenztyp für **neue** VPP-Zuweisungen (`iosVppApp`, `macOsVppApp`): Gerät / Benutzer | Checkbox „VPP neu: Gerätelizenz" |
-| `-LoadFilterNames` | aus | Namen der Zuweisungsfilter statt ihrer IDs anzeigen (Recht siehe oben); ist das Häkchen beim Verbinden noch nicht gesetzt, wird beim Anhaken neu verbunden | Checkbox „Filternamen laden" |
+| `-GroupId` | – | group object ID, `AllUsers` or `AllDevices` | `...` button |
+| `-TenantId` | – | tenant for `Connect-MgGraph` | – (sign-in dialog) |
+| `-Platform` | `iOS` | `iOS` \| `macOS` \| `Android` \| `Windows` \| `All` | "Platform" list |
+| `-VppDeviceLicensing` | `$true` | license type of **new** VPP assignments (`iosVppApp`, `macOsVppApp`): device / user | checkbox "New VPP: device license" |
+| `-LoadFilterNames` | off | show the names of assignment filters instead of their IDs (permission see above); if the box is ticked after connecting, the tool connects again | checkbox "Load filter names" |
 | `-Language` | `auto` | `auto` \| `de` \| `en` | – |
 
-## Verhalten im Detail
+## Behaviour in detail
 
-- **Einzeln schreiben:** neu `POST …/assignments`, entfernen `DELETE …/assignments/{id}`.
-  **Modus/Ausschluss ändern:** `DELETE` + `POST` (ein Ziel kann pro Objekt nur einmal zugewiesen sein).
-  Filter und Einstellungen (z. B. Win32-Benachrichtigungen, VPP-Lizenztyp; bei Konfigurationsprofilen
-  `apply`/`remove`) der alten Zuweisung werden übernommen, solange es ein Einschluss bleibt; ein Ausschluss
-  hat beides nicht. Scheitert das `POST`, wird die alte Zuweisung wiederhergestellt – und gemeldet, falls
-  auch das scheitert.
-- **Richtliniensätze (Policy Sets):** Zuweisungen mit `source = policySets` werden grau und
-  schreibgeschützt angezeigt („Richtliniensatz"); das Tool ändert oder löscht sie nicht und schickt sie bei
-  einer Gesamtliste auch nicht mit. Gibt es für dasselbe Ziel eine direkte und eine Policy-Set-Zuweisung,
-  zeigt es die direkte.
-- **Vorab abgelehnt:** Ausschluss für Alle Benutzer/Alle Geräte, „Verfügbar" an Alle Geräte,
-  App-Schutz und MAM-App-Konfiguration an Alle Geräte (gelten nur für Benutzer; ob eine *Gruppe* Benutzer
-  oder Geräte enthält, prüft Intune beim Speichern).
-  Alles andere prüft Intune selbst (z. B. „Verfügbar" an eine Gerätegruppe) – die Fehlermeldung von
-  Graph wird pro Objekt angezeigt.
-- **Neue App-Ausschlüsse** bekommen den Modus „Erforderlich"; im Grid änderbar.
-- **Laden** lädt Apps und jede schon geöffnete Kategorie neu.
-- Ungespeicherte Änderungen: Rückfrage beim Schließen, Neuladen und Gruppenwechsel.
+- **One-by-one writes:** new `POST …/assignments`, remove `DELETE …/assignments/{id}`.
+  **Changing mode/exclusion:** `DELETE` + `POST` (a target can be assigned only once per object).
+  Filter and settings (for example Win32 notifications, VPP license type; `apply`/`remove` of configuration
+  profiles) of the old assignment are kept as long as it stays an inclusion; an exclusion has neither. If the
+  `POST` fails, the old assignment is restored – and reported if that fails too.
+- **Policy sets:** assignments with `source = policySets` are shown grey and read-only ("policy set"); the
+  tool neither changes nor deletes them and does not send them back in a complete list. If a target has a
+  direct and a policy-set assignment, the direct one is shown.
+- **Rejected up front:** exclusion for All users/All devices, "Available" to All devices, app protection and
+  MAM app configuration to All devices (they apply to users only; whether a *group* holds users or devices is
+  checked by Intune when saving). Everything else is checked by Intune itself (for example "Available" to a
+  device group) – Graph's error message is shown per object.
+- **New app exclusions** get the mode "Required"; changeable in the grid.
+- **Load** reloads the apps and every category opened before.
+- Unsaved changes: the tool asks before closing, reloading and changing the group.
 
-## Grenzen / Annahmen
+## Limits / assumptions
 
-- Es zählt nur die **direkte** Zuweisung an die Gruppe. Verschachtelte Gruppen (die Gruppe ist Mitglied
-  einer zugewiesenen Gruppe) werden **nicht** aufgelöst.
-- `$expand=assignments` auf den Listen steht nicht in den dokumentierten Abfrageoptionen; fehlt die
-  Erweiterung in der Antwort, liest das Tool die Zuweisungen Objekt für Objekt (langsamer, aber korrekt).
-- **Einstellungskatalog:** `/assign` (Gesamtliste, wie das Portal) – live bestätigt.
-- **Gesamtliste ohne Richtliniensatz-Einträge:** Dass `/assign` Zuweisungen aus Richtliniensätzen unberührt
-  lässt, wenn sie nicht mitgeschickt werden, ist eine Annahme (die Doku sagt dazu nichts).
-- **Richtliniensätze:** Ausschlüsse nimmt Intune an – live bestätigt.
-- Pfade, Zuweisungstypen, `intent`-Werte, Ziel-Typen, `source` und `useDeviceLicensing` sind gegen die
-  Graph-beta-Doku (Quelle: `microsoftgraph/microsoft-graph-docs-contrib`) geprüft und – wo sie abweicht –
-  nach dem Live-Test korrigiert. Die Graph-Logik (Laden, Schreiben einzeln und als Gesamtliste, Zurücklesen)
-  lief live gegen einen Test-Tenant; die WinForms-Oberfläche selbst lief bei der Entwicklung nicht (kein Windows).
+- Only the **direct** assignment to the group counts. Nested groups (the group is a member of an assigned
+  group) are **not** resolved.
+- `$expand=assignments` on the lists is not among the documented query options; if the expansion is missing
+  from the answer, the tool reads the assignments object by object (slower, but correct).
+- **Settings catalog:** `/assign` (complete list, as the portal does) – confirmed live.
+- **Complete list without policy-set entries:** that `/assign` leaves assignments coming from policy sets
+  alone when they are not sent along is an assumption (the documentation says nothing about it).
+- **Policy sets:** Intune accepts exclusions – confirmed live.
+- Paths, assignment types, `intent` values, target types, `source` and `useDeviceLicensing` were checked
+  against the Graph beta documentation (source: `microsoftgraph/microsoft-graph-docs-contrib`) and – where it
+  is wrong – corrected after the live test. The Graph logic (loading, writing one by one and as a complete
+  list, reading back) ran live against a test tenant; the WinForms window itself did not run during
+  development (no Windows).
 
 ## Tests
 
 ```powershell
-.\Test-GroupAppAssignment.ps1     # Exit-Code 0 = alles grün; kein Graph, keine GUI, kein Pester
+.\Test-GroupAppAssignment.ps1     # exit code 0 = all passed; no Graph, no GUI, no Pester
 ```
 
-Prüft:
-- **statisch:** UTF-8-BOM jeder `.ps1`, Parsbarkeit, keine PS-7-only-Operatoren (`??`, `?.`, `?:`, `&&`,
-  `||`), `AddRange(@(...))` nur auf `.Controls`;
-- **Logik:** Kategorien-Tabelle vollständig (Pfade, Schreibweg, Zuweisungstyp, Modus nur bei Apps),
-  Plattform-Erkennung, angeforderte Graph-Rechte, Ziel-Zuordnung inkl. Policy-Set-Vorrang, Request-Bodies
-  (Ein-/Ausschluss, VPP-Lizenz, Filter/Settings-Übernahme, `apply`/`remove`), Zielregeln, Plan, Sortierung;
-- **Graph mit nachgebildetem `Invoke-MgGraphRequest`:** Laden mit und ohne `$expand`, Paging, Zurücklesen
-  (0/1/2 Zuweisungen), Schreiben einzeln (`DELETE` + `POST`, Wiederherstellung bei Fehler) und als
-  Gesamtliste (frisch gelesen, andere Ziele samt Filter bleiben, Policy-Set-Einträge nicht mitgeschickt).
+Checks:
+- **static:** UTF-8 BOM of every `.ps1`, parses, no PS 7-only operators (`??`, `?.`, `?:`, `&&`, `||`),
+  `AddRange(@(...))` only on `.Controls`;
+- **logic:** category table complete (paths, write mode, assignment type, mode only for apps), platform
+  detection, requested Graph permissions, target matching incl. policy-set precedence, request bodies
+  (inclusion/exclusion, VPP license, keeping filter/settings, `apply`/`remove`), target rules, plan, sorting;
+- **Graph with a mocked `Invoke-MgGraphRequest`:** loading with and without `$expand`, paging, reading back
+  (0/1/2 assignments), writing one by one (`DELETE` + `POST`, restore on error) and as a complete list (read
+  fresh, other targets keep their filter, policy-set entries not sent);
+- **MAM:** stable reads, retry on `ConditionNotMet`, waiting when reading back, last sent list instead of a
+  stale read;
+- **window, without running it:** every visible text comes from the de/en tables (both complete, no
+  hard-coded text), language choice, one 48 px icon per category, no function name collides with a command
+  or alias of `Microsoft.Graph.Authentication`, sign-out calls `Disconnect-MgGraph`.
 
-Das Skript lädt nur den GUI-freien Teil von `Manage-GroupAppAssignment.ps1` bis zur Markerzeile
+The script loads only the GUI-free part of `Manage-GroupAppAssignment.ps1` up to the marker line
 `# ---- end of the GUI-free part`.
 
-Alle `.ps1` sind UTF-8 mit BOM, CRLF per `.gitattributes` im Repo-Wurzelverzeichnis.
+All `.ps1` files are UTF-8 with BOM, CRLF via `.gitattributes` in the repository root.
 
-## Ausblick: plattformübergreifende Oberfläche (Idee, noch nicht umgesetzt)
+## Outlook: a cross-platform window (idea, not implemented)
 
-Die Oberfläche ist WinForms und läuft daher nur unter Windows. Alles oberhalb der Markerzeile ist frei von
-WinForms und lief bereits unter PowerShell 7 auf Linux live gegen einen Tenant.
+The window is WinForms and therefore runs on Windows only. Everything above the marker line is free of
+WinForms and already ran under PowerShell 7 on Linux, live against a tenant.
 
-**Vorschlag:** eine lokale Web-Oberfläche statt WinForms.
-- Das Skript startet einen kleinen HTTP-Server nur auf `127.0.0.1` mit zufälligem Port und öffnet den Browser.
-  Das funktioniert unter Windows, macOS und Linux.
-- Die Seite hat denselben Aufbau wie jetzt und ruft nur wenige JSON-Endpunkte auf, die direkt die vorhandenen
-  Funktionen nutzen. Die Intune-Logik bleibt in PowerShell, nichts davon wird in JavaScript nachgebaut.
-- Die Anmeldung läuft wie bisher über `Connect-MgGraph`, ohne Desktop-Browser über den Gerätecode.
-  Das Graph-Token bleibt im PowerShell-Prozess.
-- Absicherung: Einmal-Token in der Start-URL, Anfragen ohne Token oder von fremdem Origin werden abgelehnt.
-- Für Windows PowerShell 5.1 ohne Adminrechte einen einfachen TCP-Listener statt `HttpListener` nehmen.
-  Ob `HttpListener` unter 5.1 ohne URL-Reservierung läuft, ist ungeprüft.
-- Den Kern in eine gemeinsame Datei auslagern, die WinForms- und Web-Oberfläche beide nutzen. So gibt es nur
-  einen Schreibweg. WinForms behalten, bis die Web-Oberfläche erprobt ist.
+**Proposal:** a local web page instead of WinForms.
+- The script starts a small HTTP server on `127.0.0.1` only, on a random port, and opens the browser.
+  That works on Windows, macOS and Linux.
+- The page has the same layout as now and calls a few JSON endpoints that use the existing functions
+  directly. The Intune logic stays in PowerShell; none of it is rebuilt in JavaScript.
+- Sign-in stays `Connect-MgGraph`, without a desktop browser via device code. The Graph token stays in the
+  PowerShell process.
+- Protection: a one-time token in the start URL; requests without it or from another origin are rejected.
+- For Windows PowerShell 5.1 without admin rights use a plain TCP listener instead of `HttpListener`.
+  Whether `HttpListener` runs on 5.1 without a URL reservation is unchecked.
+- Move the core into a shared file used by both the WinForms and the web window, so there is only one
+  write path. Keep WinForms until the web window has proven itself.
 
-**Warum:** Neben der Plattformfrage lässt sich eine Web-Oberfläche automatisch mit Playwright durchklicken,
-mit nachgebildetem Graph oder live. Die bisherigen Laufzeitfehler (`Columns.AddRange` unter 5.1, `@()` auf
-`List[object]`) saßen genau in der Oberfläche, die sich bisher nicht automatisch testen ließ.
+**Why:** besides the platform question, a web page can be clicked through automatically with Playwright,
+against a mocked Graph or live. The runtime errors so far (`Columns.AddRange` on 5.1, `@()` on
+`List[object]`, the `Connect-Graph` alias) were exactly in the window that could not be tested
+automatically.
 
-**Verworfen:** Avalonia für PowerShell (Anbindung zu unreif), Konsolen-Oberfläche mit Terminal.Gui (zu eng für
-vier Listen mit Grid), reine Browser-App mit MSAL.js (bräuchte eine eigene App-Registrierung, und die Logik
-müsste in JavaScript ohne die vorhandenen Tests neu entstehen).
+**Rejected:** Avalonia for PowerShell (binding too immature), a console window with Terminal.Gui (too narrow
+for four lists with a grid), a pure browser app with MSAL.js (needs its own app registration, and the logic
+would have to be rewritten in JavaScript without the existing tests).
