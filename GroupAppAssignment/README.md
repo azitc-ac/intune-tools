@@ -91,6 +91,12 @@ including their filter; the test script checks this explicitly and it is confirm
   cannot see that reliably during the first minutes – and every complete-list writer, a script included, has
   the same gap. Leave a few minutes between two people editing the same MAM object.
 
+  **Observed on MAM app configuration (second live test):** after removing an exclusion, reads still showed
+  it in about half of all cases for more than 30 minutes, via `/assignments` and via `?$expand` alike;
+  sending the correct list again did not change that. App protection settled within minutes. This is the
+  Intune service, not something a Graph client can fix – if a removed exclusion shows up again later, check
+  in the portal before acting on it.
+
 ## Requirements
 
 | | |

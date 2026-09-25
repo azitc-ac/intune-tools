@@ -91,6 +91,12 @@ ihrem Filter unverändert mit; das prüft das Testskript ausdrücklich und es is
   das in den ersten Minuten danach nicht zuverlässig sehen – und dieselbe Lücke hat jeder Gesamtlisten-Schreiber,
   auch ein Skript. Zwischen zwei Bearbeitern desselben MAM-Objekts ein paar Minuten Abstand lassen.
 
+  **Beobachtet bei der MAM-App-Konfiguration (zweiter Live-Test):** Nach dem Entfernen eines Ausschlusses zeigte
+  ihn etwa jede zweite Lesung noch nach über 30 Minuten an, über `/assignments` wie über `?$expand`; erneutes
+  Senden der richtigen Liste änderte daran nichts. Beim App-Schutz war der Stand nach wenigen Minuten stabil.
+  Das liegt im Intune-Dienst, nicht an einem Graph-Client – taucht ein entfernter Ausschluss später wieder auf,
+  vor dem Handeln im Portal nachsehen.
+
 ## Voraussetzungen
 
 | | |
