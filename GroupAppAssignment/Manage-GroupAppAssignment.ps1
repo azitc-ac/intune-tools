@@ -694,7 +694,9 @@ function Invoke-GraphPaged {
     return ,$all.ToArray()
 }
 
-function Connect-Graph {
+function Connect-GaaGraph {
+    # not "Connect-Graph": Microsoft.Graph.Authentication exports that as an alias of Connect-MgGraph, and
+    # an alias wins over a function - after the module is loaded, "Reconnect" called Connect-MgGraph
     param([bool]$WithFilterNames = $false, [bool]$WithConfig = $false)
     if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) { throw $L.ModuleMissing }
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
@@ -1370,7 +1372,7 @@ function Invoke-Connect {
     Set-Busy $true
     $lblStatus.Text = $L.StatusConnecting; $form.Update()
     try {
-        $ctx = Connect-Graph -WithFilterNames $chkFilterNames.Checked -WithConfig $script:NeedConfig
+        $ctx = Connect-GaaGraph -WithFilterNames $chkFilterNames.Checked -WithConfig $script:NeedConfig
         $script:Connected = $true
         $who = "$($ctx.Account)|$($ctx.TenantId)"
         if ($script:ConnectedAs -and $script:ConnectedAs -ne $who) {
@@ -1407,7 +1409,7 @@ function Update-FilterNames {
     if ($chkFilterNames.Checked -and $script:Connected) {
         try {
             if (-not (Test-HasScope @($script:FilterScope, $script:ConfigScope))) {
-                [void](Connect-Graph -WithFilterNames $true -WithConfig $script:NeedConfig)
+                [void](Connect-GaaGraph -WithFilterNames $true -WithConfig $script:NeedConfig)
             }
             $f = Invoke-GraphPaged -Uri "$($script:GraphBase)/deviceManagement/assignmentFilters?`$select=id,displayName"
             foreach ($x in $f) { $script:FilterNames[[string]$x.id] = [string]$x.displayName }
@@ -1426,7 +1428,7 @@ function Import-Category {
     $cat = $script:Categories[$CatKey]
     if ($cat.NeedsConfigScope -and -not (Test-HasScope @($script:ConfigScope))) {
         $script:NeedConfig = $true
-        [void](Connect-Graph -WithFilterNames $chkFilterNames.Checked -WithConfig $true)   # the one consent prompt
+        [void](Connect-GaaGraph -WithFilterNames $chkFilterNames.Checked -WithConfig $true)   # the one consent prompt
     }
     # no GetNewClosure(): a closure no longer sees the script's variables ($lblStatus, $form)
     $script:LoadingLabel = $cat.Label

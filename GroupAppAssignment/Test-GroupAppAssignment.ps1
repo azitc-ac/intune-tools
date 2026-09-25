@@ -45,6 +45,19 @@ foreach ($f in Get-ChildItem -Path $here -Filter *.ps1) {
         Assert ($c.Expression.Extent.Text -match '\.Controls$') "$($f.Name): AddRange only on .Controls (line $($c.Extent.StartLineNumber): $($c.Expression.Extent.Text).AddRange)"
     }
 }
+
+# No function of the tool may carry the name of a command or alias of Microsoft.Graph.Authentication:
+# an alias wins over a function once the module is loaded ("Connect-Graph" broke "Reconnect" this way).
+# Names from the module manifest (msgraph-sdk-powershell, src/Authentication/.../Microsoft.Graph.Authentication.psd1).
+$graphModuleNames = @(
+    'Connect-MgGraph', 'Disconnect-MgGraph', 'Get-MgContext', 'Invoke-MgGraphRequest', 'Add-MgEnvironment',
+    'Get-MgEnvironment', 'Remove-MgEnvironment', 'Set-MgEnvironment', 'Get-MgRequestContext', 'Set-MgRequestContext',
+    'Set-MgGraphOption', 'Get-MgGraphOption', 'Find-MgGraphCommand', 'Find-MgGraphPermission',
+    'Connect-Graph', 'Disconnect-Graph', 'Invoke-GraphRequest', 'Invoke-MgRestMethod')
+$toolAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $here 'Manage-GroupAppAssignment.ps1'), [ref]$null, [ref]$null)
+$toolFunctions = @($toolAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+$clash = @($toolFunctions | Where-Object { $graphModuleNames -contains $_ })
+Assert ($toolFunctions.Count -gt 20 -and $clash.Count -eq 0) "no function name collides with the Graph module ($($clash -join ', '))"
 #endregion
 
 #region Logic
