@@ -52,6 +52,8 @@ $strings = @{
         FormTitleNoGroup   = 'Intune-Zuweisungen einer Gruppe verwalten'
         BtnConnect         = 'Verbinden'
         BtnReconnect       = 'Neu verbinden'
+        BtnDisconnect      = 'Abmelden'
+        StatusSignedOut    = "Abgemeldet. Beim nächsten 'Verbinden' lässt sich ein anderes Konto wählen."
         NotConnected       = '(nicht verbunden)'
         ConnectedAs        = 'Verbunden: {0}  ({1})'
         LblGroup           = 'Gruppe / Ziel:'
@@ -157,6 +159,8 @@ $strings = @{
         FormTitleNoGroup   = 'Manage the Intune assignments of a group'
         BtnConnect         = 'Connect'
         BtnReconnect       = 'Reconnect'
+        BtnDisconnect      = 'Sign out'
+        StatusSignedOut    = "Signed out. The next 'Connect' lets you pick another account."
         NotConnected       = '(not connected)'
         ConnectedAs        = 'Connected: {0}  ({1})'
         LblGroup           = 'Group / target:'
@@ -707,6 +711,15 @@ function Connect-GaaGraph {
     return Get-MgContext
 }
 
+function Disconnect-GaaGraph {
+    # Connect-MgGraph keeps a sign-in record per Windows user and signs in with that account again without
+    # asking. Disconnect-MgGraph deletes the record and the token cache, so the next connect offers the
+    # account choice again. (Not -SignOutFromBroker: that would sign other apps out of the Windows account.)
+    if (Get-Command Disconnect-MgGraph -ErrorAction SilentlyContinue) {
+        try { Disconnect-MgGraph -ErrorAction Stop | Out-Null } catch { }   # "No application to sign out from" is fine
+    }
+}
+
 function Search-Groups {
     param([string]$Term)
     $sel = 'id,displayName,groupTypes'
@@ -964,9 +977,13 @@ $btnConnect = New-Object System.Windows.Forms.Button
 $btnConnect.Text = $L.BtnConnect; $btnConnect.Location = New-Object System.Drawing.Point(10, 8)
 $btnConnect.Size = New-Object System.Drawing.Size(120, 26)
 
+$btnDisconnect = New-Object System.Windows.Forms.Button
+$btnDisconnect.Text = $L.BtnDisconnect; $btnDisconnect.Location = New-Object System.Drawing.Point(136, 8)
+$btnDisconnect.Size = New-Object System.Drawing.Size(100, 26); $btnDisconnect.Enabled = $false
+
 $lblAccount = New-Object System.Windows.Forms.Label
 $lblAccount.Text = $L.NotConnected; $lblAccount.AutoSize = $true
-$lblAccount.Location = New-Object System.Drawing.Point(140, 13)
+$lblAccount.Location = New-Object System.Drawing.Point(246, 13)
 $lblAccount.ForeColor = [System.Drawing.SystemColors]::GrayText
 
 $lblGroup = New-Object System.Windows.Forms.Label
@@ -1024,7 +1041,7 @@ $chkFilterNames.Text = $L.ChkFilterNames; $chkFilterNames.AutoSize = $true
 $chkFilterNames.Location = New-Object System.Drawing.Point(870, 80)
 $chkFilterNames.Checked = [bool]$LoadFilterNames
 
-$stripTop.Controls.AddRange(@($btnConnect, $lblAccount, $lblGroup, $txtGroup, $btnPick, $btnLoad, $lblPlatform, $cmbPlatform,
+$stripTop.Controls.AddRange(@($btnConnect, $btnDisconnect, $lblAccount, $lblGroup, $txtGroup, $btnPick, $btnLoad, $lblPlatform, $cmbPlatform,
                               $lblSearch, $txtSearch, $lblType, $cmbType, $chkVpp, $chkFilterNames))
 
 # --- Bottom strip ---
@@ -1349,6 +1366,7 @@ function Set-Busy {
     param([bool]$Busy)
     $form.Cursor = if ($Busy) { [System.Windows.Forms.Cursors]::WaitCursor } else { [System.Windows.Forms.Cursors]::Default }
     foreach ($c in @($btnConnect, $btnPick, $btnLoad) + $script:MoveButtons) { $c.Enabled = -not $Busy }
+    $btnDisconnect.Enabled = (-not $Busy -and $script:Connected)
     $lbCat.Enabled = -not $Busy
     if ($Busy) { $btnSave.Enabled = $false }
     if (-not $Busy -and $script:ItemByKey.Count -eq 0) { foreach ($b in $script:MoveButtons) { $b.Enabled = $false } }
@@ -1779,6 +1797,19 @@ function Invoke-Save {
 
 #region Wiring
 $btnConnect.Add_Click({ Invoke-Connect })
+$btnDisconnect.Add_Click({
+    if (-not (Confirm-Discard)) { return }
+    Disconnect-GaaGraph
+    # nothing of the old account may survive: data, sent MAM lists, filter names, extra permission
+    $script:Connected = $false; $script:ConnectedAs = ''; $script:NeedConfig = $false
+    $script:ItemByKey = @{}; $script:Original = @{}; $script:Desired = @{}; $script:LoadedCats = @{}
+    $script:LastSent = @{}; $script:FilterNames = @{}
+    $lblAccount.Text = $L.NotConnected; $lblAccount.ForeColor = [System.Drawing.SystemColors]::GrayText
+    $btnConnect.Text = $L.BtnConnect
+    Set-Busy $false
+    Update-ButtonMode; Update-Views
+    $lblStatus.Text = $L.StatusSignedOut
+})
 $btnLoad.Add_Click({ if (Confirm-Discard) { Invoke-Load } })
 $btnSave.Add_Click({ Invoke-Save })
 $btnPick.Add_Click({

@@ -84,6 +84,11 @@ ihrem Filter unverändert mit; das prüft das Testskript ausdrücklich und es is
 | Graph-Rechte (delegiert) | Apps: `DeviceManagementApps.ReadWrite.All`, `Group.Read.All` – dieselben wie beim Bulk App Assignment Tool, also kein neuer Zustimmungsdialog. Jede andere Kategorie: zusätzlich `DeviceManagementConfiguration.ReadWrite.All`, angefordert erst beim ersten Öffnen einer solchen Kategorie (einmaliger Zustimmungsdialog). „Filternamen laden" ohne weitere Kategorie: `DeviceManagementConfiguration.Read.All` |
 
 Anmeldung interaktiv mit dem eigenen Konto (`Connect-MgGraph`), keine App-Registrierung.
+**Konto wechseln:** `Connect-MgGraph` merkt sich die Anmeldung pro Windows-Benutzer und meldet beim nächsten Mal
+ohne Rückfrage mit demselben Konto an – „Neu verbinden" bleibt daher beim selben Konto. **„Abmelden"** ruft
+`Disconnect-MgGraph` auf (löscht diese gespeicherte Anmeldung und den Token-Cache) und verwirft alle geladenen
+Daten; beim nächsten „Verbinden" lässt sich ein anderes Konto wählen. Andere Anwendungen, die das Windows-Konto
+nutzen, bleiben angemeldet (kein `-SignOutFromBroker`).
 
 ## Start
 

@@ -118,6 +118,16 @@ foreach ($x in $assignments) { $list.Add($x) }
 $hit = $null; try { $hit = Find-AssignmentForSelection $list $selG1 } catch { }
 Assert ($hit.id -eq 'as-2') 'matching accepts a List[object]'
 
+# Sign-out: Disconnect-MgGraph is called (it deletes the sign-in record that makes the next connect silent),
+# without -SignOutFromBroker, and "no application to sign out from" does not stop the tool
+$script:discon = @()
+function Disconnect-MgGraph { param([switch]$SignOutFromBroker, $ErrorAction) $script:discon += [PSCustomObject]@{ Broker = [bool]$SignOutFromBroker }; if ($script:disconFail) { throw 'No application to sign out from.' } }
+$script:disconFail = $false; Disconnect-GaaGraph
+Assert ($script:discon.Count -eq 1 -and -not $script:discon[0].Broker) 'sign-out calls Disconnect-MgGraph, not from the Windows broker'
+$script:disconFail = $true; $ok = $true; try { Disconnect-GaaGraph } catch { $ok = $false }
+Assert $ok 'sign-out without a session does not throw'
+Remove-Item Function:\Disconnect-MgGraph
+
 # Graph paging and read-back, with Invoke-MgGraphRequest mocked: 0 / 1 / 2 assignments, two pages
 function Invoke-MgGraphRequest {
     param($Method, $Uri, $Headers, $Body, $ContentType, $ErrorAction)
