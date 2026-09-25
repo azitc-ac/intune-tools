@@ -1,4 +1,4 @@
-﻿#!/bin/sh
+#!/bin/sh
 # Pre-commit für dieses Monorepo: ein Ordner pro Tool, eine VERSION pro Tool.
 #
 #   1. Für jedes Tool mit Änderungen im Commit werden dessen Strukturchecks
@@ -16,6 +16,21 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [ -n "$staged" ] || exit 0
+
+# Shell-Skripte mit UTF-8-BOM: die Shebang-Zeile wird unbrauchbar ("not found"),
+# das Skript läuft nur zufällig weiter. Genau so wurde dieser Hook einmal
+# lahmgelegt - ein Editor oder Skript, das mit BOM schreibt, genügt.
+for candidate in $staged; do
+    case "$candidate" in
+        .githooks/*|*.sh) ;;
+        *) continue ;;
+    esac
+    [ -f "$candidate" ] || continue
+    if [ "$(head -c 3 "$candidate" | od -An -tx1 | tr -d ' \n')" = "efbbbf" ]; then
+        echo "pre-commit: $candidate beginnt mit einem UTF-8-BOM - die Shebang-Zeile wird dadurch unbrauchbar" >&2
+        exit 1
+    fi
+done
 
 # Tool-Ordner der Änderung: die oberste Ebene jedes Pfades mit Verzeichnisanteil
 tools=$(printf '%s\n' "$staged" | awk -F/ 'NF > 1 { print $1 }' | sort -u)
