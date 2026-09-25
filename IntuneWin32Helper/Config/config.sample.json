@@ -1,0 +1,19 @@
+{
+    "apiKey":  "",
+    "packetRoot":  "C:\\IntuneApps",
+    "tenants":  [
+                    {
+                        "appid":  "e99492cc-9a89-4b2c-b9ee-025348c049cb",
+                        "name":  "xyz.onmicrosoft.com",
+                        "clientSecret":  "some generated secret"
+                    },
+                    {
+                        "appid":  "b1688a8d-de90-4ce1-8652-029235a48194",
+                        "name":  "other tenant 1",
+                        "clientSecret":  "some generated secret"
+                    }
+                ],
+    "apiSecret":  "",
+    "removeExistingPacketDirOnEachRun":  true,
+    "cloudName":  ""
+}
