@@ -66,6 +66,12 @@ $Icon = New-IntuneWin32AppIcon -FilePath $ImageFile
 $InstallCommandLine = "ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe -DeploymentType Install -DeployMode Silent"
 $UninstallCommandLine = "ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe -DeploymentType Uninstall -DeployMode Silent"
 
+# Ergebnis des Uploads. Add-IntuneWin32App wirft bei einem fehlgeschlagenen Upload
+# oder Commit KEINE Exception, sondern schreibt nur eine Warnung und gibt $null zurueck
+# (siehe Modulquelle). Ohne diese Pruefung meldet das Skript "Finished." obwohl die App
+# ohne Inhalt in Intune liegt - in einem Bulk-Lauf faellt das niemandem auf.
+$uploadResult = $null
+
 # check if there is an app with the same name already which could be updated
 $existingapps = $null
 $existingapps = Get-IntuneWin32App -DisplayName $Displayname
@@ -80,7 +86,7 @@ if($existingapps){
             #BULK IS NOT SET
             #ANSWER WAS "YES, CREATE A NEW APP"
             #Builds the App and Uploads to Intune
-            Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
+            $uploadResult = Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
         }
         if($result -eq "No"){
             #BULK IS NOT SET
@@ -94,15 +100,22 @@ if($existingapps){
             $app = Get-SingleDialogSelection -Value (Open-SelectDialog -data @($updateCandidates) -title "Select the app to update" -size medium)
             if (-not $app) { throw "No application selected for update - aborting." }
             Update-IntuneWin32AppPackageFile -ID $app.id -FilePath $IntuneWinFile
+            # Anders als Add-IntuneWin32App ist fuer Update-IntuneWin32AppPackageFile nicht
+            # geprueft, wie es einen Fehlschlag meldet - dieser Pfad bleibt daher ungeprueft.
+            $uploadResult = $app
         }
     }
     else{
         #BULK IS SET, always build a NEW App without asking
-        Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
+        $uploadResult = Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
     }
 }
 else{    
-    Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Verbose
+    $uploadResult = Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
 }
-Write-Host "Finished."
+if (-not $uploadResult) {
+    throw ("Upload to Intune FAILED for '{0}' - see the warnings above. An app entry may exist in Intune without content and should be removed." -f $Displayname)
+}
+
+Write-Host "Finished." -ForegroundColor Green
 #if($bulk -ne $true){pause}else{Start-Sleep -Seconds 3}

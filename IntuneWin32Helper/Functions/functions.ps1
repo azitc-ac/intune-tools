@@ -114,6 +114,37 @@ function Start-ToolTranscript {
     return $logPath
 }
 
+function Write-DeploymentSummary {
+    <#
+        .SYNOPSIS
+        Fasst das Ergebnis eines Deploy-Laufs zusammen.
+
+        .DESCRIPTION
+        Add-IntuneWin32App wirft bei einem fehlgeschlagenen Upload keine Exception,
+        sondern warnt nur. Das erzeugte deploy.ps1 prueft das Ergebnis und wirft
+        deshalb selbst; hier wird der Fehlschlag aufgefangen, damit ein Bulk-Lauf
+        weiterlaeuft, und am Ende sichtbar aufgelistet. Ohne diese Ausgabe geht ein
+        Fehlschlag zwischen hunderten Zeilen Verbose-Ausgabe unter.
+    #>
+    [CmdletBinding()]
+    param(
+        [string[]]$Succeeded = @(),
+        [string[]]$Failed = @()
+    )
+
+    $okCount   = @($Succeeded).Count
+    $failCount = @($Failed).Count
+
+    Write-Host ""
+    Write-Host ("Deployment summary: {0} succeeded, {1} failed." -f $okCount, $failCount) -ForegroundColor Cyan
+    foreach ($name in $Succeeded) { Write-Host ("  OK      {0}" -f $name) -ForegroundColor Green }
+    foreach ($name in $Failed)    { Write-Host ("  FAILED  {0}" -f $name) -ForegroundColor Red }
+
+    if ($failCount -gt 0) {
+        Write-Host "A failed upload can leave an app without content in Intune - remove those entries." -ForegroundColor Yellow
+    }
+}
+
 function Initialize-IntuneConnection {
     <#
         .SYNOPSIS
@@ -371,21 +402,35 @@ function deployApps{
     $isBulk = (@($appsToDeploy).Count -gt 1)
     if($isBulk){ write-host "Parameter -bulk is set." } else { write-host "Parameter -bulk is NOT set." }
 
+    $succeeded = @()
+    $failed    = @()
+
     foreach($app in $appsToDeploy){
-        Write-Host "Deploy Application: $($app.AppName) - $($app.AppVersion)" -ForegroundColor Cyan
+        $appLabel = "$($app.AppName) - $($app.AppVersion)"
+        Write-Host "Deploy Application: $appLabel" -ForegroundColor Cyan
 
         # Aeltere deploy.ps1 kennen -Tenant nicht und wuerden erneut fragen:
         # aus der aktuellen Vorlage nachziehen (Sicherung wird angelegt).
         $null = Update-DeployScript -DeployScriptPath $app.FullPath -RootDir $rootDir -ToolVersion $toolVersion
 
         #deploy.ps1 aufrufen
-        if($isBulk){
-            & $app.FullPath -bulk -Tenant $tenant
+        try {
+            if($isBulk){
+                & $app.FullPath -bulk -Tenant $tenant
+            }
+            else{
+                & $app.FullPath -Tenant $tenant
+            }
+            $succeeded += $appLabel
         }
-        else{
-            & $app.FullPath -Tenant $tenant
+        catch {
+            # Den Lauf nicht abbrechen: die restlichen Apps sollen noch durchlaufen.
+            Write-Host ("FAILED: {0} - {1}" -f $appLabel, $_.Exception.Message) -ForegroundColor Red
+            $failed += $appLabel
         }
     }
+
+    Write-DeploymentSummary -Succeeded $succeeded -Failed $failed
 }
 
 function createApps{
@@ -423,6 +468,9 @@ function createApps{
         if($createAndDeploy){
             $tenant = Initialize-IntuneConnection -Tenant $tenant -Tenants $config.tenants
         }
+
+        $succeeded = @()
+        $failed    = @()
 
     foreach($app in $apps){
         # Erstellen der Anwendung
@@ -564,17 +612,29 @@ function createApps{
         }
         if($createAndDeploy){
             #deploy.ps1 aufrufen - der Tenant kommt aus dem Lauf, daher kein weiterer Dialog
-            if(@($apps).Count -gt 1){
-                write-host "Parameter -bulk is set."
-                & $SourcePath\deploy.ps1 -bulk -Tenant $tenant
+            try {
+                if(@($apps).Count -gt 1){
+                    write-host "Parameter -bulk is set."
+                    & $SourcePath\deploy.ps1 -bulk -Tenant $tenant
+                }
+                else{
+                    write-host "Parameter -bulk is NOT set."
+                    & $SourcePath\deploy.ps1 -Tenant $tenant
+                }
+                $succeeded += $AppNameCombined
             }
-            else{
-                write-host "Parameter -bulk is NOT set."
-                & $SourcePath\deploy.ps1 -Tenant $tenant
+            catch {
+                # Den Lauf nicht abbrechen: die restlichen Apps sollen noch durchlaufen.
+                Write-Host ("FAILED: {0} - {1}" -f $AppNameCombined, $_.Exception.Message) -ForegroundColor Red
+                $failed += $AppNameCombined
             }
             # und weiter gehts mit der nächsten App
         }
     }
+
+        if($createAndDeploy){
+            Write-DeploymentSummary -Succeeded $succeeded -Failed $failed
+        }
 
         # Nach der Verarbeitung geht die Schleife automatisch weiter
         # → Der Dialog wird erneut geöffnet, bis der Nutzer abbricht.

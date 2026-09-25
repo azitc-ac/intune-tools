@@ -335,6 +335,74 @@ foreach ($p in $parsed.Values) {
 }
 
 # ---------------------------------------------------------------------------
+# 10) Das Ergebnis von Add-IntuneWin32App muss aufgefangen werden, und jeder
+#     Aufruf muss -Notes setzen.
+#     Hintergrund: Bei fehlgeschlagenem Upload oder Commit wirft
+#     Add-IntuneWin32App keine Exception, sondern warnt nur und gibt $null
+#     zurueck. Ein Lauf meldete dadurch "Finished.", obwohl die App ohne Inhalt
+#     in Intune lag. Und von den drei Aufrufen setzten nur zwei -Notes - genau
+#     der dritte (keine bestehende App) lief in der Praxis.
+# ---------------------------------------------------------------------------
+foreach ($p in $parsed.Values) {
+    $checked++
+    $adds = $p.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq "Add-IntuneWin32App"
+    }, $true)
+
+    foreach ($add in $adds) {
+        # Rueckgabe auffangen: die Pipeline muss einer Variablen zugewiesen sein.
+        $assigned = $false
+        $node = $add.Parent
+        while ($node -ne $null) {
+            if ($node -is [System.Management.Automation.Language.AssignmentStatementAst]) { $assigned = $true; break }
+            if ($node -is [System.Management.Automation.Language.StatementBlockAst]) { break }
+            $node = $node.Parent
+        }
+        if (-not $assigned) {
+            Add-Failure "AddResultChecked" ("{0}:{1} Rueckgabe von Add-IntuneWin32App wird verworfen - bei Fehlschlag gibt es nur eine Warnung, kein Abbruch" -f `
+                $p.File.Name, $add.Extent.StartLineNumber)
+        }
+
+        $hasNotes = $false
+        foreach ($element in $add.CommandElements) {
+            if ($element -is [System.Management.Automation.Language.CommandParameterAst] -and
+                $element.ParameterName -eq "Notes") { $hasNotes = $true }
+        }
+        if (-not $hasNotes) {
+            Add-Failure "NotesOnAdd" ("{0}:{1} Add-IntuneWin32App ohne -Notes - die anderen Aufrufe setzen es" -f `
+                $p.File.Name, $add.Extent.StartLineNumber)
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 11) Das erzeugte deploy.ps1 darf "Finished." nicht bedingungslos melden.
+#     Vor der Meldung muss das Upload-Ergebnis geprueft werden.
+# ---------------------------------------------------------------------------
+$checked++
+if (Test-Path -LiteralPath $templatePath) {
+    $tplAst = $parsed[(Get-Item -LiteralPath $templatePath).FullName].Ast
+
+    $throwsOnFailure = $tplAst.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.ThrowStatementAst] -and
+        $n.Extent.Text -match 'uploadResult|FAILED'
+    }, $true)
+
+    $guard = $tplAst.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.IfStatementAst] -and
+        $n.Extent.Text -match '\$uploadResult'
+    }, $true)
+
+    if (-not $guard -or -not $throwsOnFailure) {
+        Add-Failure "FinishedNotUnconditional" 'deploy_template.ps1 prueft $uploadResult nicht, bevor es "Finished." meldet - ein fehlgeschlagener Upload bleibt unsichtbar'
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""
