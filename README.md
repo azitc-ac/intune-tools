@@ -12,6 +12,20 @@ Tools for Microsoft Intune, one folder per tool. Windows PowerShell 5.1, Microso
 All `.ps1` files are UTF-8 with BOM (otherwise Windows PowerShell 5.1 mangles non-ASCII characters) and run
 on Windows PowerShell 5.1. Line endings: CRLF via `.gitattributes`.
 
+Each tool carries its own `VERSION` file, one line. The `pre-commit` hook raises its last number for
+every tool a commit touches, so builds can be told apart; a `VERSION` already staged - a deliberate
+jump to 2.1.0 - is left alone. The same hook runs a tool's `Tests/Invoke-RepoChecks.ps1` if it has
+one and refuses the commit when a check fails.
+
+Activate the hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Without PowerShell on the machine (a Linux clone, say) the hook cannot run the checks. It says so
+loudly rather than passing silently.
+
 Author: Alexander Zarenko IT Consulting (AZITC).
 
 ## License

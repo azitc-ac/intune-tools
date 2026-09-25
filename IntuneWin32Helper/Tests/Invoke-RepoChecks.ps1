@@ -489,6 +489,38 @@ if (Test-Path -LiteralPath $templatePath) {
 }
 
 # ---------------------------------------------------------------------------
+# 15) VERSION-Datei. Die Version stand fest im Startskript und wanderte als
+#     "Created by IntuneWin32Helper 2.0" in jede erzeugte App - jede Version
+#     behauptete dasselbe. Jetzt liest das Startskript VERSION, die der
+#     pre-commit-Hook je Tool hebt. Geprueft wird: die Datei existiert, hat eine
+#     Zeile, endet auf einer Zahl, und das Startskript liest sie auch.
+# ---------------------------------------------------------------------------
+$checked++
+$versionPath = Join-Path $RepoRoot "VERSION"
+if (-not (Test-Path -LiteralPath $versionPath)) {
+    Add-Failure "VersionFile" "VERSION fehlt - der pre-commit-Hook kann die Version dieses Tools nicht heben"
+}
+else {
+    $versionLines = @(Get-Content -LiteralPath $versionPath)
+    if ($versionLines.Count -ne 1) {
+        Add-Failure "VersionFile" ("VERSION hat {0} Zeilen, erwartet genau eine" -f $versionLines.Count)
+    }
+    $versionText = ([string]$versionLines[0]).Trim()
+    if ($versionText -notmatch '\.\d+$') {
+        Add-Failure "VersionFile" ("VERSION enthaelt '{0}' und endet nicht auf '.<Zahl>' - der Hook koennte sie nicht heben" -f $versionText)
+    }
+}
+
+$checked++
+$starters = @($psFiles | Where-Object { $_.Name -like "start-*.ps1" })
+foreach ($starter in $starters) {
+    $starterAst = $parsed[$starter.FullName].Ast
+    if ($starterAst.Extent.Text -notmatch "'VERSION'|""VERSION""") {
+        Add-Failure "VersionFile" ("{0} liest die VERSION-Datei nicht - eine fest verdrahtete Version stempelt jeden Build gleich" -f $starter.Name)
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

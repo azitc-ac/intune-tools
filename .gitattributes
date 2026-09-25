@@ -6,3 +6,6 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.sh text eol=lf
+
+# Hooks laufen unter /bin/sh - CRLF würde "bad interpreter" ergeben
+.githooks/* text eol=lf
