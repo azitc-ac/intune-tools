@@ -46,18 +46,29 @@ done
 
 status=0
 
+# Welche Skripte ein Tool vor dem Commit fahren lässt: der Strukturcheck und
+# jedes Test-*.ps1 im Tool-Ordner oder dessen Tests/. Was hier mitläuft, muss
+# ohne Netz, ohne GUI und ohne Fremdsystem auskommen und mit Exit-Code 0/1
+# antworten - sonst blockiert es irgendwann jeden Commit aus dem falschen Grund.
 for tool in $tools; do
-    checks="$tool/Tests/Invoke-RepoChecks.ps1"
-    [ -f "$checks" ] || continue
+    scripts=""
+    for candidate in "$tool/Tests/Invoke-RepoChecks.ps1" "$tool"/Test-*.ps1 "$tool"/Tests/Test-*.ps1; do
+        [ -f "$candidate" ] && scripts="$scripts $candidate"
+    done
+    [ -n "$scripts" ] || continue
+
     if [ -z "$shell_ps" ]; then
-        echo "pre-commit: WARNUNG - keine PowerShell gefunden, Checks für $tool NICHT gelaufen" >&2
+        echo "pre-commit: WARNUNG - keine PowerShell gefunden, Prüfungen für $tool NICHT gelaufen" >&2
         continue
     fi
-    echo "pre-commit: Checks für $tool"
-    if ! "$shell_ps" -NoProfile -File "$checks"; then
-        echo "pre-commit: Checks für $tool fehlgeschlagen - Commit abgebrochen" >&2
-        status=1
-    fi
+
+    for script in $scripts; do
+        echo "pre-commit: $script"
+        if ! "$shell_ps" -NoProfile -File "$script"; then
+            echo "pre-commit: $script fehlgeschlagen - Commit abgebrochen" >&2
+            status=1
+        fi
+    done
 done
 
 [ "$status" -eq 0 ] || exit 1
