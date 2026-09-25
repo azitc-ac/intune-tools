@@ -21,7 +21,8 @@ and shows not only apps but everything you typically assign to a (for example iO
 - The **category on the left** (icons as in the Intune portal, below them "assigned / total" for the selected
   platform, `(...)` = not loaded yet) decides what the middle and the right side show. A category is loaded
   the first time it is opened.
-- **Middle:** every object of the category that is *not* assigned to the target.
+- **Middle:** every object of the category that is *not* assigned to the target – a sortable table like the
+  right one.
 - **Right:** every object that is assigned – for apps with their **mode** (Required / Available / Uninstall /
   Available without enrollment), for all of them with **exclusion** and **filter**.
 - **Buttons** follow the category: apps `Required >` `Available >` `Uninstall >` `Exclude >`, all other
@@ -30,10 +31,14 @@ and shows not only apps but everything you typically assign to a (for example iO
 - **Platform** at the top (default iOS/iPadOS) narrows every category; objects without a platform of their
   own (web apps, …) are always shown. Search and type filter apply to the middle and the right side.
 - Clicking a column header on the right sorts by it (again: descending), equal values by name.
+- Apps (and "All") show a **Publisher** column on both sides, with platform Windows (or All) also a
+  **Version** column (`displayVersion` of Win32 apps, `productVersion` of MSI, `identityVersion` of AppX/MSIX;
+  store, WinGet, Office and Edge apps have none).
 - Long names: the middle and the right side scroll sideways; the name column on the right grows with the
   longest name. "Not assigned" and "Assigned" have the same width.
-- Colours on the right: green = new, yellow = changed; in the middle `(to be removed)` = the assignment
-  will be deleted.
+- Colours: right green = new, yellow = changed; middle red with "to be removed" = the assignment will be
+  deleted.
+- A green check mark next to "Connected: …" shows that the sign-in worked.
 - **Save** lists all changes across all categories, writes them and then **reads every touched object back
   from Intune** – the view shows the real state, differences are reported.
 

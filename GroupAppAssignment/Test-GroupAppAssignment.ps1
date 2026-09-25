@@ -58,6 +58,18 @@ $toolAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path 
 $toolFunctions = @($toolAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
 $clash = @($toolFunctions | Where-Object { $graphModuleNames -contains $_ })
 
+# The account line (text + green check mark) is set in Set-AccountDisplay only, so both always agree
+$guiText = [System.IO.File]::ReadAllText((Join-Path $here 'Manage-GroupAppAssignment.ps1'))
+$accSets = [regex]::Matches($guiText, '\$(lblAccount\.Text|lblConnected\.Visible)\s*=')
+$fnAcc = $toolAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-AccountDisplay' }, $true) | Select-Object -First 1
+$inside = @($accSets | Where-Object { $fnAcc -and $_.Index -ge $fnAcc.Extent.StartOffset -and $_.Index -lt $fnAcc.Extent.EndOffset }).Count
+Assert ($fnAcc -and ($accSets.Count - $inside) -eq 2) "account line set only in Set-AccountDisplay (outside: $($accSets.Count - $inside), expected 2 initial values)"
+
+# Both grids drop the selection they make by themselves when filled (else a button acts on an unpicked row)
+foreach ($g in 'grid', 'gridLeft') {
+    Assert ($guiText -match ('\$' + $g + '\.CurrentCell = \$null; \$' + $g + '\.ClearSelection\(\)')) "$g clears its automatic selection after filling"
+}
+
 # Every visible text of the window comes from the de/en tables: no literal .Text / .HeaderText / message
 # box text / list item in the GUI part (only "..." for the picker button is allowed).
 $guiPart = $mainText = [System.IO.File]::ReadAllText((Join-Path $here 'Manage-GroupAppAssignment.ps1'))
@@ -263,7 +275,7 @@ foreach ($c in $cats.Values) {
     Assert ($c.HasIntent -eq ($c.Key -eq 'apps')) "category $($c.Key): only apps have an intent"
     Assert ($c.NeedsConfigScope -eq ($c.Key -ne 'apps')) "category $($c.Key): permission beyond apps only outside apps"
     foreach ($src in $c.Sources) {
-        Assert ($src.List -match '^[A-Za-z/]+\?\$select=') "category $($c.Key): list '$($src.List)' is a path with `$select"
+        Assert ($src.List -match '^[A-Za-z/]+(\?\$select=.+)?$') "category $($c.Key): list '$($src.List)' is a path, optionally with `$select"
         Assert ($src.ItemPath -match '\{0\}$') "category $($c.Key): item path '$($src.ItemPath)' ends in {0}"
         Assert (@('Single', 'Replace') -contains $src.Write) "category $($c.Key): write mode '$($src.Write)' is Single or Replace"
         if ($src.Write -eq 'Replace') { Assert ($src.AssignAction -match '\{0\}/(assign|update)$') "category $($c.Key): Replace source has an /assign or /update action" }
@@ -294,6 +306,15 @@ $itemPs = ConvertTo-Item @{ id = 'ps1'; displayName = 'iOS Baseline'; '@odata.ty
 Assert ($itemPs.AssignPath -eq 'deviceAppManagement/policySets/ps1/assignments' -and ($itemPs.Platforms -join ',') -eq '*' -and -not $itemPs.HasIntent) 'policy set item: path, no platform of its own, no intent'
 $bPs = New-AssignmentBody -Selection $selG1 -Intent '' -Exclude $false -AppType 'policySet' -VppDeviceLicensing $true -AssignmentType '#microsoft.graph.policySetAssignment' -HasIntent $false
 Assert ($bPs.'@odata.type' -eq '#microsoft.graph.policySetAssignment' -and -not $bPs.Contains('intent') -and $bPs.target.groupId -eq $g1) 'policy set body'
+
+# ---- App version (Windows) and publisher ----
+Assert ((Get-AppVersion @{ displayVersion = '1.2.3' }) -eq '1.2.3') 'version: win32LobApp displayVersion'
+Assert ((Get-AppVersion @{ productVersion = '4.5'; identityVersion = '9.9' }) -eq '4.5') 'version: MSI productVersion first'
+Assert ((Get-AppVersion @{ identityVersion = '7.0.1.0' }) -eq '7.0.1.0') 'version: AppX/MSIX identityVersion'
+Assert ((Get-AppVersion @{ packageIdentifier = 'XP99' }) -eq '') 'version: WinGet / store apps have none'
+$itApp = ConvertTo-Item @{ id = 'w1'; displayName = 'Notepad++'; publisher = 'Don Ho'; displayVersion = '8.6'; '@odata.type' = '#microsoft.graph.win32LobApp' } $cats['apps'] $cats['apps'].Sources[0]
+Assert ($itApp.Publisher -eq 'Don Ho' -and $itApp.Version -eq '8.6') 'app item carries publisher and version'
+Assert ($cats['apps'].Sources[0].List -notmatch '\$select') 'apps list without $select (version fields live on the derived types)'
 
 # ---- Platforms ----
 function P([string]$t, [string]$v = '') { (Get-ItemPlatforms -OdataType $t -PlatformsValue $v) -join ',' }
@@ -373,6 +394,12 @@ function Invoke-MgGraphRequest {
     return @{ value = @() }
 }
 function Get-Calls([string]$Method) { @($script:calls | Where-Object { $_.Method -eq $Method }) }
+
+# a list without '?' gets '?$expand', not '&$expand'
+$script:calls = @(); $script:responses = [ordered]@{}
+[void](Get-CategoryItems -Category $cats['apps'])
+Assert (@($script:calls | Where-Object { $_.Uri -like '*/mobileApps?$expand=assignments' }).Count -eq 1 -and @($script:calls | Where-Object { $_.Uri -like '*mobileApps&*' }).Count -eq 0) 'apps list: ?$expand=assignments'
+$script:calls = @()
 
 # load with $expand
 $script:responses = @{ '*configurationPolicies?*expand=assignments' = @{ value = @(@{ id = 'sc1'; name = 'A'; platforms = 'iOS'; assignments = @($cur[1]) }) } }

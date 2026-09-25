@@ -21,7 +21,8 @@ und zeigt nicht nur Apps, sondern alles, was man einer (z. B. iOS-)Gruppe typisc
 - **Kategorie links** (Icons wie im Intune-Portal, darunter „zugewiesen / gesamt" für die gewählte
   Plattform, `(...)` = noch nicht geladen) bestimmt, was in der Mitte und rechts steht. Eine Kategorie wird
   beim ersten Öffnen geladen.
-- **Mitte:** alle Objekte der Kategorie, die dem Ziel *nicht* zugewiesen sind.
+- **Mitte:** alle Objekte der Kategorie, die dem Ziel *nicht* zugewiesen sind – als sortierbare Tabelle wie
+  rechts.
 - **Rechts:** alle, die ihm zugewiesen sind – bei Apps mit **Modus** (Erforderlich / Verfügbar /
   Deinstallieren / Verfügbar ohne Registrierung), bei allen mit **Ausschluss** und **Filter**.
 - **Buttons** passen sich an: Apps `Erforderlich >` `Verfügbar >` `Deinstallieren >` `Ausschließen >`,
@@ -30,9 +31,13 @@ und zeigt nicht nur Apps, sondern alles, was man einer (z. B. iOS-)Gruppe typisc
 - **Plattform** oben (Standard iOS/iPadOS) grenzt alle Kategorien ein; Objekte ohne eigene Plattform
   (Web-Apps, …) erscheinen immer. Suche und Typ-Filter wirken auf Mitte und rechts.
 - Klick auf eine Spaltenüberschrift rechts sortiert danach (erneut: absteigend), bei gleichem Wert nach Name.
+- Bei Apps (und „Alle") zeigen beide Seiten eine Spalte **Herausgeber**, bei Plattform Windows (oder Alle)
+  zusätzlich **Version** (`displayVersion` bei Win32, `productVersion` bei MSI, `identityVersion` bei
+  AppX/MSIX; Store-, WinGet-, Office- und Edge-Apps haben keine).
 - Lange Namen: Mitte und rechts lassen sich waagerecht scrollen; die Namensspalte rechts wächst mit dem
   längsten Namen. „Nicht zugewiesen" und „Zugewiesen" sind gleich breit.
-- Farben rechts: grün = neu, gelb = geändert; in der Mitte `(wird entfernt)` = Zuweisung wird gelöscht.
+- Farben: rechts grün = neu, gelb = geändert; in der Mitte rot mit „wird entfernt" = Zuweisung wird gelöscht.
+- Ein grüner Haken neben „Verbunden: …" zeigt, dass die Anmeldung geklappt hat.
 - **Speichern** zeigt alle Änderungen über alle Kategorien, schreibt sie und **liest danach jedes
   berührte Objekt aus Intune zurück** – die Anzeige zeigt den echten Ist-Stand, Abweichungen werden gemeldet.
 

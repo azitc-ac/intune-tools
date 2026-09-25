@@ -91,6 +91,8 @@ $strings = @{
         ColName            = 'Name'
         ColCategory        = 'Kategorie'
         ColType            = 'Typ'
+        ColPublisher       = 'Herausgeber'
+        ColVersion         = 'Version'
         ColIntent          = 'Modus'
         ColExclude         = 'Ausschluss'
         ColFilter          = 'Filter'
@@ -103,7 +105,7 @@ $strings = @{
         StateIncluded      = 'eingeschlossen'
         ChangeNew          = 'neu'
         ChangeChanged      = 'geändert'
-        PendingRemove      = '(wird entfernt)  '
+        ChangeRemove       = 'wird entfernt'
         TargetAllUsers     = 'Alle Benutzer'
         TargetAllDevices   = 'Alle Geräte'
         GroupDynamic       = 'dynamisch'
@@ -198,6 +200,8 @@ $strings = @{
         ColName            = 'Name'
         ColCategory        = 'Category'
         ColType            = 'Type'
+        ColPublisher       = 'Publisher'
+        ColVersion         = 'Version'
         ColIntent          = 'Mode'
         ColExclude         = 'Exclusion'
         ColFilter          = 'Filter'
@@ -210,7 +214,7 @@ $strings = @{
         StateIncluded      = 'included'
         ChangeNew          = 'new'
         ChangeChanged      = 'changed'
-        PendingRemove      = '(to be removed)  '
+        ChangeRemove       = 'to be removed'
         TargetAllUsers     = 'All users'
         TargetAllDevices   = 'All devices'
         GroupDynamic       = 'dynamic'
@@ -333,7 +337,9 @@ function Get-CategoryTable {
     $t['apps'] = [PSCustomObject]@{
         Key = 'apps'; Icon = 'Applications'; Label = $L.CatApps; HasIntent = $true; NeedsConfigScope = $false
         Sources = @(
-            (New-Source -List 'deviceAppManagement/mobileApps?$select=id,displayName,publisher' `
+            # no $select: the version fields (displayVersion, productVersion, identityVersion) belong to the
+            # derived app types and would not come back with a $select on the base collection
+            (New-Source -List 'deviceAppManagement/mobileApps' `
                         -ItemPath 'deviceAppManagement/mobileApps/{0}' -Write 'Single' `
                         -AssignmentType '#microsoft.graph.mobileAppAssignment')
         )
@@ -453,6 +459,17 @@ function Test-PlatformMatch {
     return ($ItemPlatforms -contains '*' -or $ItemPlatforms -contains $Platform)
 }
 
+function Get-AppVersion {
+    # Windows app version by type: win32LobApp displayVersion, windowsMobileMSI productVersion,
+    # AppX/MSIX identityVersion; store, WinGet, Office and Edge apps have none ('')
+    param($Raw)
+    foreach ($p in 'displayVersion', 'productVersion', 'identityVersion') {
+        $v = [string]$Raw.$p
+        if ($v) { return $v }
+    }
+    return ''
+}
+
 function ConvertTo-Item {
     # One Graph object of a category -> the object the tool works with.
     param($Raw, $Category, $Source)
@@ -471,6 +488,7 @@ function ConvertTo-Item {
         Type          = $type
         Platforms     = (Get-ItemPlatforms -OdataType $odata -PlatformsValue ([string]$Raw.platforms))
         Publisher     = [string]$Raw.publisher
+        Version       = (Get-AppVersion $Raw)
         HasIntent     = [bool]$Category.HasIntent
         UsersOnly     = [bool]$Source.UsersOnly
         Write         = $Source.Write
@@ -856,7 +874,8 @@ function Get-CategoryItems {
     foreach ($src in $Category.Sources) {
         $uri = "$($script:GraphBase)/$($src.List)"
         $raw = $null
-        try { $raw = Invoke-GraphPaged -Uri "$uri&`$expand=assignments" -OnPage $OnPage } catch { $raw = $null }
+        $sep = if ($uri.Contains('?')) { '&' } else { '?' }
+        try { $raw = Invoke-GraphPaged -Uri "$uri$sep`$expand=assignments" -OnPage $OnPage } catch { $raw = $null }
         $expanded = $false
         foreach ($r in $raw) { if ($r -is [System.Collections.IDictionary] -and $r.Contains('assignments')) { $expanded = $true; break } }
         if (-not $expanded) {
@@ -998,9 +1017,16 @@ $btnDisconnect = New-Object System.Windows.Forms.Button
 $btnDisconnect.Text = $L.BtnDisconnect; $btnDisconnect.Location = New-Object System.Drawing.Point(136, 8)
 $btnDisconnect.Size = New-Object System.Drawing.Size(100, 26); $btnDisconnect.Enabled = $false
 
+# green check mark: visible only while connected
+$lblConnected = New-Object System.Windows.Forms.Label
+$lblConnected.Text = [string][char]0x2714; $lblConnected.AutoSize = $true; $lblConnected.Visible = $false
+$lblConnected.Font = New-Object System.Drawing.Font('Segoe UI Symbol', 11, [System.Drawing.FontStyle]::Bold)
+$lblConnected.ForeColor = [System.Drawing.Color]::FromArgb(16, 124, 16)
+$lblConnected.Location = New-Object System.Drawing.Point(244, 10)
+
 $lblAccount = New-Object System.Windows.Forms.Label
 $lblAccount.Text = $L.NotConnected; $lblAccount.AutoSize = $true
-$lblAccount.Location = New-Object System.Drawing.Point(246, 13)
+$lblAccount.Location = New-Object System.Drawing.Point(266, 13)
 $lblAccount.ForeColor = [System.Drawing.SystemColors]::GrayText
 
 $lblGroup = New-Object System.Windows.Forms.Label
@@ -1058,7 +1084,7 @@ $chkFilterNames.Text = $L.ChkFilterNames; $chkFilterNames.AutoSize = $true
 $chkFilterNames.Location = New-Object System.Drawing.Point(870, 80)
 $chkFilterNames.Checked = [bool]$LoadFilterNames
 
-$stripTop.Controls.AddRange(@($btnConnect, $btnDisconnect, $lblAccount, $lblGroup, $txtGroup, $btnPick, $btnLoad, $lblPlatform, $cmbPlatform,
+$stripTop.Controls.AddRange(@($btnConnect, $btnDisconnect, $lblConnected, $lblAccount, $lblGroup, $txtGroup, $btnPick, $btnLoad, $lblPlatform, $cmbPlatform,
                               $lblSearch, $txtSearch, $lblType, $cmbType, $chkVpp, $chkFilterNames))
 
 # --- Bottom strip ---
@@ -1136,10 +1162,33 @@ $lbCat.Add_DrawItem({
         [System.Drawing.SystemColors]::GrayText, $flags)
 })
 
-$lbLeft = New-Object System.Windows.Forms.ListBox
-$lbLeft.Dock = 'Fill'; $lbLeft.SelectionMode = 'MultiExtended'
-$lbLeft.ScrollAlwaysVisible = $true; $lbLeft.IntegralHeight = $false; $lbLeft.BorderStyle = 'FixedSingle'
-$lbLeft.HorizontalScrollbar = $true   # long names: scroll sideways (width measured by the ListBox itself)
+# "Not assigned": a read-only grid (name, category, type, publisher, version, change), sortable like the right one
+$gridLeft = New-Object System.Windows.Forms.DataGridView
+$gridLeft.Dock = 'Fill'; $gridLeft.ReadOnly = $true
+$gridLeft.AllowUserToAddRows = $false; $gridLeft.AllowUserToDeleteRows = $false
+$gridLeft.AllowUserToResizeRows = $false; $gridLeft.RowHeadersVisible = $false
+$gridLeft.SelectionMode = 'FullRowSelect'; $gridLeft.MultiSelect = $true
+$gridLeft.AutoSizeColumnsMode = 'None'; $gridLeft.ScrollBars = 'Both'
+$gridLeft.BackgroundColor = [System.Drawing.SystemColors]::Window; $gridLeft.BorderStyle = 'FixedSingle'
+function New-TextColumn {
+    param([string]$Name, [string]$Header, [int]$Width)
+    $c = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $c.Name = $Name; $c.HeaderText = $Header; $c.ReadOnly = $true
+    $c.Width = [int]($Width * $script:Scale)
+    $c.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::Programmatic
+    return $c
+}
+$lcolName      = New-TextColumn 'Name'      $L.ColName      160
+$lcolName.MinimumWidth = [int](160 * $script:Scale)
+$lcolCategory  = New-TextColumn 'Category'  $L.ColCategory  130
+$lcolType      = New-TextColumn 'Type'      $L.ColType      150
+$lcolPublisher = New-TextColumn 'Publisher' $L.ColPublisher 130
+$lcolVersion   = New-TextColumn 'Version'   $L.ColVersion   90
+$lcolChange    = New-TextColumn 'Change'    $L.ColChange    90
+$lcolChange.AutoSizeMode = 'Fill'; $lcolChange.MinimumWidth = [int](80 * $script:Scale)
+foreach ($c in @($lcolName, $lcolCategory, $lcolType, $lcolPublisher, $lcolVersion, $lcolChange)) { [void]$gridLeft.Columns.Add($c) }
+$script:SortLeftColumn = 'Name'
+$script:SortLeftDesc   = $false
 
 # Intent column source: DataTable, because WinForms data binding does not see PSCustomObject properties
 $intentTable = New-Object System.Data.DataTable
@@ -1163,6 +1212,10 @@ $colCategory = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colCategory.Name = 'Category'; $colCategory.HeaderText = $L.ColCategory; $colCategory.ReadOnly = $true; $colCategory.Width = [int](130 * $script:Scale)
 $colType = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colType.Name = 'Type'; $colType.HeaderText = $L.ColType; $colType.ReadOnly = $true; $colType.Width = [int](160 * $script:Scale)
+$colPublisher = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$colPublisher.Name = 'Publisher'; $colPublisher.HeaderText = $L.ColPublisher; $colPublisher.ReadOnly = $true; $colPublisher.Width = [int](130 * $script:Scale)
+$colVersion = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$colVersion.Name = 'Version'; $colVersion.HeaderText = $L.ColVersion; $colVersion.ReadOnly = $true; $colVersion.Width = [int](90 * $script:Scale)
 $colIntent = New-Object System.Windows.Forms.DataGridViewComboBoxColumn
 $colIntent.Name = 'Intent'; $colIntent.HeaderText = $L.ColIntent; $colIntent.Width = [int](150 * $script:Scale)
 $colIntent.DataSource = $intentTable; $colIntent.ValueMember = 'Value'; $colIntent.DisplayMember = 'Text'
@@ -1176,7 +1229,7 @@ $colChange.Name = 'Change'; $colChange.HeaderText = $L.ColChange; $colChange.Rea
 $colChange.AutoSizeMode = 'Fill'; $colChange.MinimumWidth = [int](80 * $script:Scale)   # takes the rest, never squeezes the others
 # One by one: Columns.AddRange takes a params array, and Windows PowerShell 5.1 does not bind an
 # object[] to it (Controls.AddRange has no params and works with @(...)).
-foreach ($c in @($colName, $colCategory, $colType, $colIntent, $colExcl, $colFilter, $colChange)) {
+foreach ($c in @($colName, $colCategory, $colType, $colPublisher, $colVersion, $colIntent, $colExcl, $colFilter, $colChange)) {
     $c.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::Programmatic   # sorted by Update-Views
     [void]$grid.Columns.Add($c)
 }
@@ -1224,7 +1277,7 @@ $table.Controls.Add($lblCat,     0, 0)
 $table.Controls.Add($lblLeft,    1, 0)
 $table.Controls.Add($lblRight,   3, 0)
 $table.Controls.Add($lbCat,      0, 1)
-$table.Controls.Add($lbLeft,     1, 1)
+$table.Controls.Add($gridLeft,   1, 1)
 $table.Controls.Add($arrowPanel, 2, 1)
 $table.Controls.Add($grid,       3, 1)
 
@@ -1320,6 +1373,18 @@ function Update-CategoryList {
     } finally { $script:Rebuilding = $false }
 }
 
+function Update-ColumnVisibility {
+    # Category only in "All"; mode and publisher where apps are shown; version for apps on Windows (or all platforms)
+    $cat  = $script:CurrentCat
+    $apps = ($cat -eq 'apps' -or $cat -eq 'all')
+    $win  = (@('Windows', 'All') -contains (Get-SelectedPlatform))
+    [void]$grid.EndEdit(); $grid.CurrentCell = $null; $gridLeft.CurrentCell = $null
+    $colCategory.Visible  = ($cat -eq 'all');  $lcolCategory.Visible  = ($cat -eq 'all')
+    $colIntent.Visible    = $apps
+    $colPublisher.Visible = $apps;             $lcolPublisher.Visible = $apps
+    $colVersion.Visible   = ($apps -and $win); $lcolVersion.Visible   = ($apps -and $win)
+}
+
 function Update-ButtonMode {
     # Apps: Required / Available / Uninstall / Exclude. Other categories: Assign / Exclude.
     # "All" only shows and removes - what "assign" means differs per category.
@@ -1330,8 +1395,7 @@ function Update-ButtonMode {
     $btnUni.Visible    = ($cat -eq 'apps')
     $btnAssign.Visible = ($cat -ne 'apps' -and $cat -ne 'all')
     $btnExcl.Visible   = ($cat -ne 'all')
-    $colCategory.Visible = ($cat -eq 'all')
-    $colIntent.Visible   = ($cat -eq 'apps' -or $cat -eq 'all')
+    Update-ColumnVisibility
     Update-ArrowPadding
     $script:Rebuilding = $true
     try {
@@ -1354,19 +1418,41 @@ function Update-Views {
     try {
         $sorted = @($script:ItemByKey.Values | Where-Object { Test-ItemVisible $_ } | Sort-Object Name)
 
-        $lbLeft.BeginUpdate()
-        $lbLeft.Items.Clear()
+        $gridLeft.SuspendLayout()
+        $gridLeft.Rows.Clear()
+        $leftRows = @()
         foreach ($it in $sorted) {
             if ($script:Desired.ContainsKey($it.Key)) { continue }
-            $prefix = ''
-            if ($script:Original.ContainsKey($it.Key)) { $prefix = $L.PendingRemove }
-            $label = $it.Type
-            if ($script:CurrentCat -eq 'all') { $label = "$($it.CategoryLabel) - $($it.Type)" }
-            $entry = [PSCustomObject]@{ Key = $it.Key; Text = "$prefix$($it.Name)   [$label]" }
-            $entry | Add-Member -MemberType ScriptMethod -Name ToString -Value { $this.Text } -Force
-            [void]$lbLeft.Items.Add($entry)
+            $chg = ''
+            if ($script:Original.ContainsKey($it.Key)) { $chg = $L.ChangeRemove }   # assigned now, removed on Save
+            $leftRows += [PSCustomObject]@{ Key = $it.Key; Name = $it.Name; Category = $it.CategoryLabel; Type = $it.Type
+                                            Publisher = $it.Publisher; Version = $it.Version; Change = $chg }
         }
-        $lbLeft.EndUpdate()
+        foreach ($r in (Sort-GridRows $leftRows $script:SortLeftColumn $script:SortLeftDesc)) {
+            $row = New-Object System.Windows.Forms.DataGridViewRow
+            $row.CreateCells($gridLeft)
+            $row.Cells[$lcolName.Index].Value      = $r.Name
+            $row.Cells[$lcolCategory.Index].Value  = $r.Category
+            $row.Cells[$lcolType.Index].Value      = $r.Type
+            $row.Cells[$lcolPublisher.Index].Value = $r.Publisher
+            $row.Cells[$lcolVersion.Index].Value   = $r.Version
+            $row.Cells[$lcolChange.Index].Value    = $r.Change
+            $idx = $gridLeft.Rows.Add($row)
+            $row = $gridLeft.Rows[$idx]
+            $row.Tag = $r.Key
+            if ($r.Change) { $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::MistyRose }
+        }
+        $gridLeft.AutoResizeColumn($lcolName.Index, [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells)
+        # a grid selects its first row by itself when filled - a button click would then move an object
+        # nobody picked
+        $gridLeft.CurrentCell = $null; $gridLeft.ClearSelection()
+        foreach ($col in $gridLeft.Columns) {
+            $col.HeaderCell.SortGlyphDirection = [System.Windows.Forms.SortOrder]::None
+            if ($col.Name -eq $script:SortLeftColumn) {
+                $col.HeaderCell.SortGlyphDirection = if ($script:SortLeftDesc) { [System.Windows.Forms.SortOrder]::Descending } else { [System.Windows.Forms.SortOrder]::Ascending }
+            }
+        }
+        $gridLeft.ResumeLayout()
 
         [void]$grid.EndEdit()          # EditOnEnter keeps a cell in edit mode; clearing under it can throw
         $grid.CurrentCell = $null
@@ -1378,6 +1464,7 @@ function Update-Views {
             $d = $script:Desired[$it.Key]
             $gridRows += [PSCustomObject]@{
                 Key = $it.Key; Name = $it.Name; Category = $it.CategoryLabel; Type = $it.Type; IntentKey = $d.Intent
+                Publisher = $it.Publisher; Version = $it.Version
                 Intent  = (Get-IntentText $d.Intent)
                 Exclude = [bool]$d.Exclude
                 Filter  = (Get-FilterText $script:Original[$it.Key])
@@ -1403,6 +1490,8 @@ function Update-Views {
             $row.Cells[$colName.Index].Value     = $r.Name
             $row.Cells[$colCategory.Index].Value = $r.Category
             $row.Cells[$colType.Index].Value     = $r.Type
+            $row.Cells[$colPublisher.Index].Value = $r.Publisher
+            $row.Cells[$colVersion.Index].Value  = $r.Version
             $row.Cells[$colExcl.Index].Value     = $r.Exclude
             $row.Cells[$colFilter.Index].Value   = $r.Filter
             $idx = $grid.Rows.Add($row)
@@ -1419,6 +1508,7 @@ function Update-Views {
         }
         # once after filling - an AllCells column would measure all rows again after every single row
         $grid.AutoResizeColumn($colName.Index, [System.Windows.Forms.DataGridViewAutoSizeColumnMode]::AllCells)
+        $grid.CurrentCell = $null; $grid.ClearSelection()   # no row selected by itself (Remove would act on it)
         foreach ($col in $grid.Columns) {
             $col.HeaderCell.SortGlyphDirection = [System.Windows.Forms.SortOrder]::None
             if ($col.Name -eq $script:SortColumn) {
@@ -1457,6 +1547,22 @@ function Set-SelectionText {
 #endregion
 
 #region Connect / load
+function Set-AccountDisplay {
+    # "Connected: account (tenant)" with a green check mark, or "(not connected)" - the only place that sets it
+    param($Context)
+    if ($Context) {
+        $lblAccount.Text = $L.ConnectedAs -f $Context.Account, $Context.TenantId
+        $lblAccount.ForeColor = [System.Drawing.SystemColors]::ControlText
+        $lblConnected.Visible = $true
+        $btnConnect.Text = $L.BtnReconnect
+    } else {
+        $lblAccount.Text = $L.NotConnected
+        $lblAccount.ForeColor = [System.Drawing.SystemColors]::GrayText
+        $lblConnected.Visible = $false
+        $btnConnect.Text = $L.BtnConnect
+    }
+}
+
 function Invoke-Connect {
     Set-Busy $true
     $lblStatus.Text = $L.StatusConnecting; $form.Update()
@@ -1470,13 +1576,12 @@ function Invoke-Connect {
             $script:NeedReload = $true
         }
         $script:ConnectedAs = $who
-        $lblAccount.Text = $L.ConnectedAs -f $ctx.Account, $ctx.TenantId
-        $lblAccount.ForeColor = [System.Drawing.SystemColors]::ControlText
-        $btnConnect.Text = $L.BtnReconnect
+        Set-AccountDisplay $ctx
         $lblStatus.Text = ''
         if ($chkFilterNames.Checked) { Update-FilterNames }
     } catch {
         $script:Connected = $false
+        Set-AccountDisplay $null   # a failed connect ends the previous session too (Connect-MgGraph logs out on error)
         [void][System.Windows.Forms.MessageBox]::Show(($L.ConnectFailed -f (Get-GraphErrorText $_)), $L.TitleError, 'OK', 'Error')
         $lblStatus.Text = ''
     } finally {
@@ -1681,17 +1786,17 @@ function Show-GroupPicker {
 function Add-SelectedItems {
     # Move the selected objects of the left list to "assigned". Objects without an intent get ''.
     param([string]$Intent, [bool]$Exclude)
-    $entries = @($lbLeft.SelectedItems)
-    if (-not $entries) { return }
-    foreach ($e in $entries) {
-        $it = $script:ItemByKey[$e.Key]
+    $keys = @($gridLeft.SelectedRows | ForEach-Object { [string]$_.Tag })
+    if (-not $keys) { return }
+    foreach ($k in $keys) {
+        $it = $script:ItemByKey[$k]
         $want = $Intent
         if (-not $it.HasIntent) { $want = '' }
-        $o = $script:Original[$e.Key]
+        $o = $script:Original[$k]
         if ($o -and $o.Intent -eq $want -and [bool]$o.Exclude -eq $Exclude) {
-            $script:Desired[$e.Key] = [PSCustomObject]@{ Intent = $o.Intent; Exclude = $o.Exclude }
+            $script:Desired[$k] = [PSCustomObject]@{ Intent = $o.Intent; Exclude = $o.Exclude }
         } else {
-            $script:Desired[$e.Key] = [PSCustomObject]@{ Intent = $want; Exclude = $Exclude }
+            $script:Desired[$k] = [PSCustomObject]@{ Intent = $want; Exclude = $Exclude }
         }
     }
     Update-Views
@@ -1712,8 +1817,9 @@ $btnRemove.Add_Click({
     }
     Update-Views
 })
-$lbLeft.Add_DoubleClick({
-    if ($script:CurrentCat -eq 'all') { return }
+$gridLeft.Add_CellDoubleClick({
+    param($s, $e)
+    if ($e.RowIndex -lt 0 -or $script:CurrentCat -eq 'all') { return }
     if ($script:CurrentCat -eq 'apps') { Add-SelectedItems 'required' $false } else { Add-SelectedItems '' $false }
 })
 
@@ -1739,6 +1845,13 @@ $grid.Add_CellValueChanged({
     Update-Status
 })
 $grid.Add_DataError({ param($s, $e) $e.ThrowException = $false })
+$gridLeft.Add_ColumnHeaderMouseClick({
+    param($s, $e)
+    $name = $gridLeft.Columns[$e.ColumnIndex].Name
+    if ($script:SortLeftColumn -eq $name) { $script:SortLeftDesc = -not $script:SortLeftDesc }
+    else { $script:SortLeftColumn = $name; $script:SortLeftDesc = $false }
+    Update-Views
+})
 # Header click sorts by that column; a second click on the same column reverses the order
 $grid.Add_ColumnHeaderMouseClick({
     param($s, $e)
@@ -1757,7 +1870,7 @@ $lbCat.Add_SelectedIndexChanged({
     if ($key -ne $script:CurrentCat -or $missing) { Select-Category $key }
 })
 $txtSearch.Add_TextChanged({ Update-Views })
-$cmbPlatform.Add_SelectedIndexChanged({ if (-not $script:Rebuilding) { Update-Views } })
+$cmbPlatform.Add_SelectedIndexChanged({ if (-not $script:Rebuilding) { Update-ColumnVisibility; Update-Views } })
 $chkFilterNames.Add_CheckedChanged({
     if ($script:Rebuilding) { return }
     if (-not $script:Connected) { return }   # applied at the next connect
@@ -1875,8 +1988,7 @@ $btnDisconnect.Add_Click({
     $script:Connected = $false; $script:ConnectedAs = ''; $script:NeedConfig = $false
     $script:ItemByKey = @{}; $script:Original = @{}; $script:Desired = @{}; $script:LoadedCats = @{}
     $script:LastSent = @{}; $script:FilterNames = @{}
-    $lblAccount.Text = $L.NotConnected; $lblAccount.ForeColor = [System.Drawing.SystemColors]::GrayText
-    $btnConnect.Text = $L.BtnConnect
+    Set-AccountDisplay $null
     Set-Busy $false
     Update-ButtonMode; Update-Views
     $lblStatus.Text = $L.StatusSignedOut

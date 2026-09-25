@@ -1,18 +1,18 @@
 # Intune Tools
 
-Werkzeuge für Microsoft Intune, ein Ordner pro Tool. Windows PowerShell 5.1, Microsoft Graph.
+Tools for Microsoft Intune, one folder per tool. Windows PowerShell 5.1, Microsoft Graph.
 
-| Tool | Was es macht |
+| Tool | What it does |
 | --- | --- |
-| [**GroupAppAssignment**](GroupAppAssignment/README.md) | Intune-Zuweisungen aus Sicht einer Gruppe (oder Alle Benutzer / Alle Geräte): Apps, Konfigurationsprofile (Vorlagen und Einstellungskatalog), Compliance, App-Konfiguration, App-Schutz, Richtliniensätze – was in welchem Modus zugewiesen ist, dazu hinzufügen, ändern, entfernen. Plattform-Filter (Standard iOS). |
+| [**GroupAppAssignment**](GroupAppAssignment/README.md) | Intune assignments seen from a group (or All users / All devices): apps, configuration profiles (templates and settings catalog), compliance, app configuration, app protection, policy sets – what is assigned in which mode, plus adding, changing and removing assignments. Platform filter (default iOS). |
 
-## Repository-Konventionen
+## Repository conventions
 
-Alle `.ps1` sind UTF-8 mit BOM (sonst zerlegt PowerShell 5.1 die Umlaute) und laufen unter
-Windows PowerShell 5.1. Zeilenenden: CRLF über `.gitattributes`.
+All `.ps1` files are UTF-8 with BOM (otherwise Windows PowerShell 5.1 mangles non-ASCII characters) and run
+on Windows PowerShell 5.1. Line endings: CRLF via `.gitattributes`.
 
-Autor: Alexander Zarenko IT Consulting (AZITC).
+Author: Alexander Zarenko IT Consulting (AZITC).
 
-## Lizenz
+## License
 
-MIT – siehe `LICENSE`.
+MIT – see `LICENSE`.
