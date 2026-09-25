@@ -12,9 +12,11 @@ Tools for Microsoft Intune, one folder per tool. Windows PowerShell 5.1, Microso
 All `.ps1` files are UTF-8 with BOM (otherwise Windows PowerShell 5.1 mangles non-ASCII characters) and run
 on Windows PowerShell 5.1. Line endings: CRLF via `.gitattributes`.
 
-Each tool carries its own `VERSION` file, one line. The `pre-commit` hook raises its last number for
-every tool a commit touches, so builds can be told apart; a `VERSION` already staged - a deliberate
-jump to 2.1.0 - is left alone. The same hook runs a tool's `Tests/Invoke-RepoChecks.ps1` if it has
+Each tool carries its own `VERSION` file, one line, read by the tool and shown in its window title.
+The `pre-commit` hook raises its last number for every tool a commit touches, so builds can be told
+apart; a `VERSION` already staged - a deliberate jump to 2.1.0 - is left alone. The hook refuses a
+commit when a `VERSION` does not end in a number, or when no `.ps1` of that tool reads it - a number
+nobody sees would grow forever. The same hook runs a tool's `Tests/Invoke-RepoChecks.ps1` if it has
 one and refuses the commit when a check fails.
 
 Activate the hooks once per clone:

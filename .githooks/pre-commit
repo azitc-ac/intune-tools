@@ -1,4 +1,4 @@
-#!/bin/sh
+﻿#!/bin/sh
 # Pre-commit für dieses Monorepo: ein Ordner pro Tool, eine VERSION pro Tool.
 #
 #   1. Für jedes Tool mit Änderungen im Commit werden dessen Strukturchecks
@@ -50,17 +50,31 @@ done
 for tool in $tools; do
     version_file="$tool/VERSION"
     [ -f "$version_file" ] || continue
-    # Schon im Commit? Dann ist es ein bewusster Sprung und bleibt, wie es ist.
-    git diff --cached --quiet -- "$version_file" || continue
+
     v=$(tr -d '\r\n' < "$version_file")
     base=${v%.*}
     patch=${v##*.}
+
+    # Diese beiden Prüfungen laufen IMMER - auch wenn die VERSION in diesem
+    # Commit neu ist oder bewusst gesetzt wurde. Standen sie hinter der
+    # Überspringen-Klausel, entging ihnen genau der erste Commit.
     case "$patch" in
         ''|*[!0-9]*)
             echo "pre-commit: $version_file enthält '$v' und endet nicht auf einer Zahl" >&2
             exit 1
             ;;
     esac
+    # Eine VERSION, die kein Skript des Tools liest, wäre ein Knopf ohne
+    # Gegenstück - dann wächst eine Zahl, die niemand sieht.
+    # In Anführungszeichen, damit ein Kommentar, der VERSION nur erwähnt, nicht zählt.
+    if ! grep -rq --include='*.ps1' -E "['\"]VERSION['\"]" "$tool" 2>/dev/null; then
+        echo "pre-commit: kein .ps1 in $tool liest VERSION - die Zahl wäre wirkungslos" >&2
+        exit 1
+    fi
+
+    # Schon im Commit? Dann ist es ein bewusster Sprung und bleibt, wie es ist.
+    git diff --cached --quiet -- "$version_file" || continue
+
     printf '%s.%s\n' "$base" "$((patch + 1))" > "$version_file"
     git add "$version_file"
     echo "pre-commit: $version_file -> $base.$((patch + 1))"

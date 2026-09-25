@@ -1002,9 +1002,33 @@ function Test-HasScope {
 }
 #endregion
 
+#region Tool version
+# Die Version steht in VERSION, eine Zeile; der pre-commit-Hook des Repos hebt
+# ihre letzte Zahl bei jedem Commit. Sie gehoert in den Fenstertitel, damit an
+# einem Screenshot ablesbar ist, welcher Build lief. Fehlt die Datei - etwa weil
+# das Skript aus einer Auswahl heraus laeuft - bleibt der Titel ohne Version.
+$script:ToolVersion = ''
+if ($PSScriptRoot) {
+    $versionFile = Join-Path $PSScriptRoot 'VERSION'
+    if (Test-Path -LiteralPath $versionFile) {
+        $script:ToolVersion = ([string](Get-Content -LiteralPath $versionFile -TotalCount 1)).Trim()
+    }
+}
+
+<#
+    Die einzige Stelle, die den Fenstertitel setzt. Vorher geschah das an drei
+    Stellen; eine davon haette die Version sonst irgendwann nicht mehr getragen.
+#>
+function Set-FormTitle {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    if ($script:ToolVersion) { $form.Text = '{0}  -  {1}' -f $Text, $script:ToolVersion }
+    else                     { $form.Text = $Text }
+}
+#endregion
+
 #region Form
 $form = New-Object System.Windows.Forms.Form
-$form.Text          = $L.FormTitleNoGroup
+Set-FormTitle $L.FormTitleNoGroup
 $form.Size          = New-Object System.Drawing.Size(1320, 780)
 $form.MinimumSize   = New-Object System.Drawing.Size(1000, 560)   # widened in Shown to fit the top strip
 $form.StartPosition = 'CenterScreen'
@@ -1544,10 +1568,10 @@ function Set-SelectionText {
     if ($script:Selection) {
         $s = $script:Selection
         $txtGroup.Text = if ($s.Kind -eq 'group') { "$($s.Name)  [$($s.Id)]" } else { $s.Name }
-        $form.Text = $L.FormTitle -f $s.Name
+        Set-FormTitle ($L.FormTitle -f $s.Name)
     } else {
         $txtGroup.Text = $L.NoGroupSelected
-        $form.Text = $L.FormTitleNoGroup
+        Set-FormTitle $L.FormTitleNoGroup
     }
 }
 #endregion
