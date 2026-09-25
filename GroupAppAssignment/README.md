@@ -73,6 +73,8 @@ including their filter; the test script checks this explicitly and it is confirm
   segment 'assign'" – `iosManagedAppProtections/{id}/assign` (or android/windows) works.
 - Policy sets: neither `GET` nor `POST …/assignments` exists, and the list does not allow `$expand` –
   each set is read via `?$expand=assignments` and written via `/update`.
+- App protection and policy sets: with `$select`, Graph sends no `@odata.type` for these collections – type
+  and platform come from the collection the object was read from.
 - **MAM (app protection, MAM app configuration) is only eventually consistent:** after `/assign`,
   inclusions show up at once, **exclusions only now and then for minutes** – measured: after setting an
   exclusion, 11 of 13 reads over 2 minutes did not show it, and two reads in a row were stale too. A

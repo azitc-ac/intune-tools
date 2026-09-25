@@ -306,14 +306,17 @@ function New-Source {
     # the documentation for compliance, app configuration, app protection and policy sets.
     param([string]$List, [string]$ItemPath, [string]$Write, [string]$AssignmentType,
           [string]$AssignAction = '', [string]$NameProp = 'displayName', [bool]$UsersOnly = $false, [string]$TypeName = '',
-          [ValidateSet('Collection', 'Expand')][string]$ReadVia = 'Collection', [bool]$Eventual = $false)
+          [ValidateSet('Collection', 'Expand')][string]$ReadVia = 'Collection', [bool]$Eventual = $false,
+          [string]$DefaultType = '')
+    #   DefaultType    type when Graph sends no @odata.type (a $select on a collection of one type, measured
+    #                  live for app protection and policy sets) - also drives the platform
     #   Eventual       reads lag behind writes and may flip between old and new for 20 s and more, writes
     #                  shortly after a change fail with ConditionNotMet / ResourceNotFound (MAM, measured
     #                  live): read until stable, retry the write, wait for the result
     [PSCustomObject]@{
         List = $List; ItemPath = $ItemPath; Write = $Write; AssignmentType = $AssignmentType
         AssignAction = $AssignAction; NameProp = $NameProp; UsersOnly = $UsersOnly; TypeName = $TypeName; ReadVia = $ReadVia
-        Eventual = $Eventual
+        Eventual = $Eventual; DefaultType = $DefaultType
     }
 }
 
@@ -391,10 +394,12 @@ function Get-CategoryTable {
         Key = 'appProtection'; Icon = 'AppProtection'; Label = $L.CatAppProtection; HasIntent = $false; NeedsConfigScope = $true
         Sources = @(
             foreach ($coll in @('iosManagedAppProtections', 'androidManagedAppProtections', 'windowsManagedAppProtections')) {
+                $single = $coll.Substring(0, $coll.Length - 1)   # iosManagedAppProtection ...
                 New-Source -List "deviceAppManagement/$coll`?`$select=id,displayName" `
                            -ItemPath "deviceAppManagement/$coll/{0}" -Write 'Replace' `
                            -AssignAction "deviceAppManagement/$coll/{0}/assign" `
-                           -AssignmentType '#microsoft.graph.targetedManagedAppPolicyAssignment' -UsersOnly $true -Eventual $true
+                           -AssignmentType '#microsoft.graph.targetedManagedAppPolicyAssignment' -UsersOnly $true -Eventual $true `
+                           -DefaultType $single
             }
         )
     }
@@ -406,7 +411,7 @@ function Get-CategoryTable {
         Sources = @(
             (New-Source -List 'deviceAppManagement/policySets?$select=id,displayName' `
                         -ItemPath 'deviceAppManagement/policySets/{0}' -Write 'Replace' `
-                        -AssignAction 'deviceAppManagement/policySets/{0}/update' -ReadVia 'Expand' `
+                        -AssignAction 'deviceAppManagement/policySets/{0}/update' -ReadVia 'Expand' -DefaultType 'policySet' `
                         -AssignmentType '#microsoft.graph.policySetAssignment')
         )
     }
@@ -475,6 +480,7 @@ function ConvertTo-Item {
     param($Raw, $Category, $Source)
     $id    = [string]$Raw.id
     $odata = ([string]$Raw.'@odata.type') -replace '^#microsoft\.graph\.', ''
+    if (-not $odata -and $Source.DefaultType) { $odata = $Source.DefaultType }
     $type  = $odata
     if ($Source.TypeName) { $type = $Source.TypeName }
     $action = ''

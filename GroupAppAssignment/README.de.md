@@ -72,6 +72,8 @@ ihrem Filter unverändert mit; das prüft das Testskript ausdrücklich und es is
   segment 'assign'“ – `iosManagedAppProtections/{id}/assign` (bzw. android/windows) funktioniert.
 - Richtliniensätze: weder `GET` noch `POST …/assignments` existieren, die Liste erlaubt kein `$expand` –
   gelesen wird je Satz über `?$expand=assignments`, geschrieben über `/update`.
+- App-Schutz und Richtliniensätze: Mit `$select` liefert Graph bei diesen Listen kein `@odata.type` – Typ und
+  Plattform kommen aus der Liste, aus der das Objekt gelesen wurde.
 - **MAM (App-Schutz, MAM-App-Konfiguration) ist nur verzögert konsistent:** Nach `/assign` erscheinen
   Einschlüsse sofort, **Ausschlüsse aber minutenlang nur zeitweise** – gemessen: nach dem Setzen eines
   Ausschlusses zeigten 11 von 13 Lesungen über 2 Minuten ihn nicht an, auch zwei Lesungen hintereinander waren

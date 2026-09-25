@@ -295,6 +295,12 @@ foreach ($src in $cats['appProtection'].Sources) {
 $itemAp = ConvertTo-Item @{ id = 'ap1'; displayName = 'iOS MAM'; '@odata.type' = '#microsoft.graph.iosManagedAppProtection' } $cats['appProtection'] $cats['appProtection'].Sources[0]
 Assert ($itemAp.AssignPath -eq 'deviceAppManagement/iosManagedAppProtections/ap1/assignments' -and $itemAp.AssignAction -eq 'deviceAppManagement/iosManagedAppProtections/ap1/assign') 'app protection item: read and write per platform collection'
 Assert (($itemAp.Platforms -join ',') -eq 'iOS' -and $itemAp.UsersOnly) 'app protection item: platform iOS, users only'
+# measured live: with $select, Graph sends no @odata.type for these collections - the source's type is used
+$apNoType = @(foreach ($src in $cats['appProtection'].Sources) { ConvertTo-Item @{ id = 'x'; displayName = 'P' } $cats['appProtection'] $src })
+Assert ((($apNoType | ForEach-Object { $_.Platforms -join '' }) -join ',') -eq 'iOS,Android,Windows') 'app protection without @odata.type: platform from the collection'
+Assert ((($apNoType | ForEach-Object { $_.Type }) -join ',') -eq 'iosManagedAppProtection,androidManagedAppProtection,windowsManagedAppProtection') 'app protection without @odata.type: type from the collection'
+$psNoType = ConvertTo-Item @{ id = 'p'; displayName = 'S' } $cats['policySets'] $cats['policySets'].Sources[0]
+Assert ($psNoType.Type -eq 'policySet' -and ($psNoType.Platforms -join '') -eq '*') 'policy set without @odata.type: type policySet, no platform'
 Assert (($cats['appProtection'].Sources[1].List) -eq 'deviceAppManagement/androidManagedAppProtections?$select=id,displayName') 'app protection list path built correctly'
 # phase 3: policy sets - assigned one by one like apps, no intent
 Assert ($cats.Contains('policySets') -and $cats['policySets'].Sources[0].Write -eq 'Replace' -and $cats['policySets'].Sources[0].AssignAction -eq 'deviceAppManagement/policySets/{0}/update' -and $cats['policySets'].Sources[0].ReadVia -eq 'Expand' -and $cats['policySets'].Sources[0].AssignmentType -eq '#microsoft.graph.policySetAssignment') 'policy sets: read via $expand, complete list through /update (live-verified)'
