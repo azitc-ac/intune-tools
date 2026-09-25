@@ -41,6 +41,10 @@ $outpath=$apppath + "\out"
 $drive = Get-FirstFreeDriveLetter
 subst $drive $inpath
 $shortsourcepath = $drive + "\"
+# Pfadlaengen melden, BEVOR gepackt wird: beim Packen faellt nichts auf, weil
+# die Quelle per subst kurz ist - auf dem Client entscheidet der IMECache-Pfad.
+Write-PackagePathWarning -ContentPath $inpath
+
 try {
     # Create the intunewin file from source and destination variables
     $installer="Invoke-AppDeployToolkit.ps1"
@@ -61,7 +65,15 @@ finally {
 $DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile ($apppath + "\detection.ps1")
 
 # Create Requirement Rule
-$RequirementRule = New-IntuneWin32AppRequirementRule -Architecture x64 -MinimumSupportedOperatingSystem W10_20H2
+# Requirement Rule aus Apps.csv statt fuer alle gleich. Bisher bekam JEDE App
+# x64 und W10_20H2 - auf einem ARM64-Geraet kam damit nichts an, und eine App,
+# die ein neueres Windows braucht, wurde trotzdem angeboten.
+$Architecture = "#ARCH#"
+$MinimumOS    = "#MINOS#"
+if (-not $Architecture) { $Architecture = "x64" }
+if (-not $MinimumOS)    { $MinimumOS    = "W10_20H2" }
+Write-Host "Requirement rule: architecture [$Architecture], minimum OS [$MinimumOS]"
+$RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $Architecture -MinimumSupportedOperatingSystem $MinimumOS
 
 # Create a Icon from an image file
 if(Test-Path "$apppath\$appname.png"){$ImageFile = "$apppath\$appname.png"}else{$ImageFile = "$apppath\defaultLogo.png"}

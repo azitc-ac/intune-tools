@@ -521,6 +521,164 @@ foreach ($starter in $starters) {
 }
 
 # ---------------------------------------------------------------------------
+# 16) Keine Syntax, die Windows PowerShell 5.1 nicht parst. Uebernommen aus
+#     Test-GroupAppAssignment.ps1. Das Tool laeuft auf 5.1; ??, ?., &&, || und
+#     der Ternaeroperator kommen erst mit PowerShell 7 und liefern dort einen
+#     Parse-Fehler, also gar keinen Lauf.
+# ---------------------------------------------------------------------------
+$ps7OnlyKinds = @(
+    'QuestionQuestion', 'QuestionQuestionEquals', 'QuestionDot',
+    'QuestionLBracket', 'AndAnd', 'OrOr', 'QuestionMark'
+)
+foreach ($p in $parsed.Values) {
+    $checked++
+    foreach ($token in $p.Tokens) {
+        if ($ps7OnlyKinds -contains $token.Kind.ToString()) {
+            Add-Failure "NoPs7OnlySyntax" ("{0}:{1} '{2}' gibt es erst in PowerShell 7 - unter 5.1 ein Parse-Fehler" -f `
+                $p.File.Name, $token.Extent.StartLineNumber, $token.Text)
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 17) Kein Upload von App-Logos zu Dritten. Ein Logo, dessen URL nicht auf .png
+#     endete, ging zu Cloudinary - mit leeren Zugangsdaten (wie in
+#     config.sample.json) brach dabei der Paketbau ab. Geprueft ueber
+#     String-Literale, damit ein erklaerender Kommentar nicht anschlaegt.
+# ---------------------------------------------------------------------------
+foreach ($p in $parsed.Values) {
+    $checked++
+    # Dieses Prüfskript selbst nennt die verbotenen Namen als Suchmuster - es
+    # würde sich sonst selbst melden.
+    if ($p.File.FullName -eq $PSCommandPath) { continue }
+
+    $literals = $p.Ast.FindAll({
+        param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst]
+    }, $true)
+    foreach ($s in $literals) {
+        if ($s.Value -match 'cloudinary') {
+            Add-Failure "NoThirdPartyUpload" ("{0}:{1} verweist auf Cloudinary: {2}" -f `
+                $p.File.Name, $s.Extent.StartLineNumber, $s.Value)
+        }
+    }
+
+    $funcs = $p.Ast.FindAll({
+        param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]
+    }, $true)
+    foreach ($fn in $funcs) {
+        if ($fn.Name -match 'Cloudinary') {
+            Add-Failure "NoThirdPartyUpload" ("{0}:{1} Funktion {2} lädt Logos zu einem Drittanbieter" -f `
+                $p.File.Name, $fn.Extent.StartLineNumber, $fn.Name)
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 18) Logos laufen ueber Resolve-PackageLogo, und das normalisiert. Vorher lag
+#     Herunterladen und Umwandeln offen im Ablauf von createApps und konnte den
+#     Paketbau abbrechen; Logos gingen ausserdem unveraendert ins Paket -
+#     defaultlogo.png allein mit 632 KB.
+# ---------------------------------------------------------------------------
+foreach ($p in $parsed.Values) {
+    $checked++
+    $requests = $p.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'Invoke-WebRequest'
+    }, $true)
+    foreach ($r in $requests) {
+        $fn = & $enclosingFunction $r
+        if ($fn -ne 'Resolve-PackageLogo') {
+            Add-Failure "LogoOnePath" ("{0}:{1} Invoke-WebRequest in '{2}' - Logos laufen über Resolve-PackageLogo" -f `
+                $p.File.Name, $r.Extent.StartLineNumber, $fn)
+        }
+    }
+}
+
+$checked++
+$functionsFile = $parsed.Values | Where-Object { $_.File.Name -eq 'functions.ps1' } | Select-Object -First 1
+if ($functionsFile) {
+    $resolve = $functionsFile.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -eq 'Resolve-PackageLogo'
+    }, $true)
+    if (-not $resolve) {
+        Add-Failure "LogoOnePath" "Resolve-PackageLogo fehlt - ohne sie kann der Logo-Pfad den Paketbau wieder abbrechen"
+    }
+    elseif ($resolve[0].Extent.Text -notmatch 'Resize-IconFile') {
+        Add-Failure "LogoOnePath" "Resolve-PackageLogo ruft Resize-IconFile nicht auf - Logos gingen unveraendert ins Paket"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 19) Die Requirement Rule kommt je App aus Apps.csv. Bisher bekam JEDE App
+#     x64 und W10_20H2 fest verdrahtet: auf ARM64 kam nichts an, und eine App,
+#     die ein neueres Windows braucht, wurde trotzdem angeboten.
+# ---------------------------------------------------------------------------
+$checked++
+if (Test-Path -LiteralPath $templatePath) {
+    $tplAst3 = $parsed[(Get-Item -LiteralPath $templatePath).FullName].Ast
+    $rules = $tplAst3.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'New-IntuneWin32AppRequirementRule'
+    }, $true)
+
+    if (-not $rules) {
+        Add-Failure "RequirementRulePerApp" "deploy_template.ps1 baut keine Requirement Rule mehr"
+    }
+    foreach ($rule in $rules) {
+        $elements = @($rule.CommandElements)
+        for ($i = 0; $i -lt $elements.Count - 1; $i++) {
+            $element = $elements[$i]
+            if ($element -isnot [System.Management.Automation.Language.CommandParameterAst]) { continue }
+            if ($element.ParameterName -notin @('Architecture', 'MinimumSupportedOperatingSystem')) { continue }
+            $value = $elements[$i + 1]
+            if ($value -isnot [System.Management.Automation.Language.VariableExpressionAst]) {
+                Add-Failure "RequirementRulePerApp" ("deploy_template.ps1:{0} -{1} ist fest verdrahtet ({2}) statt aus Apps.csv" -f `
+                    $rule.Extent.StartLineNumber, $element.ParameterName, $value.Extent.Text)
+            }
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 20) Pfadlaengen werden gemeldet. Beim Packen faellt nichts auf, weil die
+#     Quelle per subst kurz ist; auf dem Client entscheidet der IMECache-Pfad,
+#     und der Fehler lautet dort "Datei nicht gefunden".
+# ---------------------------------------------------------------------------
+$checked++
+if (Test-Path -LiteralPath $templatePath) {
+    $tplAst4 = $parsed[(Get-Item -LiteralPath $templatePath).FullName].Ast
+    $warn = $tplAst4.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'Write-PackagePathWarning'
+    }, $true)
+    if (-not $warn) {
+        Add-Failure "PathLengthReported" "deploy_template.ps1 ruft Write-PackagePathWarning nicht auf - zu lange Pfade fallen erst auf dem Client auf"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 21) Die WinGet-Erkennung prueft die Version mit. "winget list" allein meldet
+#     die App, sobald die ID vorhanden ist - eine veraltete Fassung galt damit
+#     als aktuell und wurde nie erneuert.
+# ---------------------------------------------------------------------------
+$checked++
+$wingetDetection = Join-Path (Join-Path $RepoRoot "Templates") "detection_template-WinGetApp.ps1"
+if (-not (Test-Path -LiteralPath $wingetDetection)) {
+    Add-Failure "WingetDetectionChecksVersion" "Templates\detection_template-WinGetApp.ps1 fehlt"
+}
+else {
+    $wgText = Get-Content -LiteralPath $wingetDetection -Raw
+    if ($wgText -notmatch 'upgrade\s+--id') {
+        Add-Failure "WingetDetectionChecksVersion" "detection_template-WinGetApp.ps1 fragt 'winget upgrade' nicht ab - die Erkennung ist damit versionsblind"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

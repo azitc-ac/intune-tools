@@ -1,5 +1,4 @@
 {
-    "apiKey":  "",
     "packetRoot":  "C:\\IntuneApps",
     "tenants":  [
                     {
@@ -13,7 +12,5 @@
                         "clientSecret":  "some generated secret"
                     }
                 ],
-    "apiSecret":  "",
-    "removeExistingPacketDirOnEachRun":  true,
-    "cloudName":  ""
+    "removeExistingPacketDirOnEachRun":  true
 }

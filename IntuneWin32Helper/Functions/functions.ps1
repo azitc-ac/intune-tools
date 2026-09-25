@@ -236,6 +236,277 @@ function Initialize-IntuneConnection {
     return $Tenant
 }
 
+function Get-ImageExtensionFromUrl {
+    <#
+        Die Endung einer Logo-URL, ohne Query und Fragment. Bisher galt
+        "endet nicht auf .png" als "ist webp" - ein .jpg oder eine URL mit ?v=2
+        landete dadurch im webp-Zweig und damit in einem Upload zu einem
+        Drittanbieter.
+    #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Url)
+
+    if ([string]::IsNullOrWhiteSpace($Url)) { return '' }
+    $withoutQuery = ($Url -split '[?#]')[0]
+    $ext = [System.IO.Path]::GetExtension($withoutQuery)
+    if (-not $ext) { return '' }
+    return $ext.ToLowerInvariant()
+}
+
+function Resize-IconFile {
+    <#
+        .SYNOPSIS
+        Normalisiert ein Logo auf ein Quadrat und schreibt es als PNG.
+
+        .DESCRIPTION
+        Muster aus SCCMAppHelper. Ohne Normalisierung wanderten Logos in
+        Originalgroesse ins Paket - defaultlogo.png allein war 632 KB, und das
+        fuer jede App ohne eigenes Logo. Das Seitenverhaeltnis bleibt erhalten,
+        der Rest ist transparent.
+
+        Laesst sich die Datei nicht oeffnen (fehlender Codec bei webp, svg,
+        kaputte Datei), gibt die Funktion $false zurueck. Ist System.Drawing auf
+        der Maschine selbst unbenutzbar (PowerShell 7 unter Linux), kann die
+        .NET-Typinitialisierung eine Ausnahme werfen, die sich hier nicht fangen
+        laesst - Aufrufer kapseln den Aufruf deshalb. Resolve-PackageLogo tut das.
+        Mit -CopyOnFailure wird die Quelle unveraendert kopiert - das ist nur
+        sinnvoll, wenn sie schon ein brauchbares PNG ist.
+
+        .OUTPUTS
+        [bool] $true, wenn wirklich umgerechnet wurde.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [int]$Size = 256,
+        [switch]$CopyOnFailure
+    )
+
+    # Nicht-terminierende Fehler hier terminierend machen, sonst laeuft ein
+    # fehlgeschlagenes New-Object ungefangen weiter und die Ausnahme entkommt
+    # dem catch - genau so kam "The type initializer for '<Module>' threw an
+    # exception" aus dieser Funktion heraus.
+    $ErrorActionPreference = 'Stop'
+
+    $temp = $Destination + '.resize.tmp'
+
+    # Probe in eigenem try: auf einer Maschine ohne benutzbares System.Drawing
+    # (PowerShell 7 unter Linux) scheitert erst die Typinitialisierung, und dieser
+    # Fehler entkam einem catch weiter unten. Deshalb hier ein echter Mini-Aufruf.
+    try {
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        $probe = New-Object System.Drawing.Bitmap 1, 1
+        $probe.Dispose()
+    }
+    catch {
+        Write-Host ("System.Drawing is not usable here ({0}) - icon left unchanged." -f $_.Exception.Message) -ForegroundColor Yellow
+        if ($CopyOnFailure -and $Path -ne $Destination) {
+            Copy-Item -LiteralPath $Path -Destination $Destination -Force
+        }
+        return $false
+    }
+
+    try {
+        $sourcePath = (Resolve-Path -LiteralPath $Path).Path
+        $source = [System.Drawing.Image]::FromFile($sourcePath)
+        try {
+            $bitmap = New-Object System.Drawing.Bitmap $Size, $Size
+            try {
+                $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+                try {
+                    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                    $graphics.Clear([System.Drawing.Color]::Transparent)
+                    $scale = [Math]::Min($Size / $source.Width, $Size / $source.Height)
+                    $w = [int][Math]::Round($source.Width * $scale)
+                    $h = [int][Math]::Round($source.Height * $scale)
+                    $graphics.DrawImage($source, [int](($Size - $w) / 2), [int](($Size - $h) / 2), $w, $h)
+                }
+                finally { $graphics.Dispose() }
+                # Erst in eine temporaere Datei: Quelle und Ziel duerfen derselbe
+                # Pfad sein, und die Quelle ist noch geoeffnet.
+                $bitmap.Save($temp, [System.Drawing.Imaging.ImageFormat]::Png)
+            }
+            finally { $bitmap.Dispose() }
+        }
+        finally { $source.Dispose() }
+
+        Move-Item -LiteralPath $temp -Destination $Destination -Force
+        Write-Host ("Icon normalised to {0}x{0}." -f $Size) -ForegroundColor DarkGray
+        return $true
+    }
+    catch {
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+        Write-Host ("Icon could not be resized ({0})." -f $_.Exception.Message) -ForegroundColor Yellow
+        if ($CopyOnFailure -and $Path -ne $Destination) {
+            Copy-Item -LiteralPath $Path -Destination $Destination -Force
+        }
+        return $false
+    }
+}
+
+function Resolve-PackageLogo {
+    <#
+        .SYNOPSIS
+        Legt das Logo einer App im Paketordner als <AppName>.png ab.
+
+        .DESCRIPTION
+        EIN Pfad fuer den ganzen Weg: vorhandenes Logo, Download, Normalisierung,
+        Rueckfall. Vorher lag das offen im Ablauf von createApps und konnte den
+        Paketbau abbrechen - eine Logo-URL, die nicht auf .png endete, ging in
+        einen Upload zu Cloudinary, und mit leeren Zugangsdaten (so wie in
+        config.sample.json) wirft PowerShell dort "Cannot bind argument ...
+        because it is an empty string".
+
+        Es wird nichts mehr zu Dritten hochgeladen. Ein Format, das sich lokal
+        nicht oeffnen laesst, fuehrt zum Standardlogo - ohne Logo ist eine App
+        verteilbar, ohne Paket nicht.
+
+        .OUTPUTS
+        [string] Dateiname des Logos im Paketordner, '' wenn selbst das
+        Standardlogo nicht ablegbar war.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$AppFolder,
+        [Parameter(Mandatory = $true)][string]$AppName,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LogoUrl,
+        [Parameter(Mandatory = $true)][string]$RootDir
+    )
+
+    $logoDir     = Join-Path $RootDir 'Logos'
+    $defaultLogo = Join-Path $logoDir 'defaultlogo.png'
+    $target      = Join-Path $AppFolder ($AppName + '.png')
+
+    # Erst kopieren, dann normalisieren - in dieser Reihenfolge. Das Template
+    # braucht die Datei; ob sie auch auf 256x256 gebracht werden konnte, ist
+    # zweitrangig. Vorher hing die Existenz am Umrechnen, und auf einer Maschine
+    # ohne benutzbares System.Drawing landete gar kein Logo im Paket - womit
+    # New-IntuneWin32AppIcon und damit das ganze Deployment gescheitert waere.
+    $copyThenResize = {
+        param([string]$Source)
+        Copy-Item -LiteralPath $Source -Destination $target -Force
+        # Das Normalisieren darf das Ergebnis nicht gefaehrden: die Datei liegt
+        # schon richtig, der Rest ist Kosmetik.
+        try { $null = Resize-IconFile -Path $target -Destination $target } catch { }
+        return (Split-Path -Leaf $target)
+    }
+
+    $useDefault = {
+        if (-not (Test-Path -LiteralPath $defaultLogo)) {
+            Write-Host ("Default logo missing ({0})." -f $defaultLogo) -ForegroundColor Yellow
+            return ''
+        }
+        return (& $copyThenResize $defaultLogo)
+    }
+
+    try {
+        $existing = Join-Path $logoDir ($AppName + '.png')
+        if (Test-Path -LiteralPath $existing) {
+            Write-Host ("Using existing logo [{0}]" -f $existing)
+            return (& $copyThenResize $existing)
+        }
+
+        if ([string]::IsNullOrWhiteSpace($LogoUrl)) {
+            Write-Host "No logo URL specified. Taking default logo."
+            return (& $useDefault)
+        }
+
+        $ext = Get-ImageExtensionFromUrl -Url $LogoUrl
+        if (-not $ext) { $ext = '.img' }
+        $download = Join-Path $AppFolder ($AppName + '.download' + $ext)
+
+        Write-Host ("Trying logo download ({0})..." -f $ext)
+        Invoke-WebRequest -Uri $LogoUrl -OutFile $download -UseBasicParsing -ErrorAction Stop
+
+        if (Resize-IconFile -Path $download -Destination $target) {
+            Remove-Item -LiteralPath $download -Force -ErrorAction SilentlyContinue
+            # Ins Logos-Verzeichnis uebernehmen, damit der naechste Lauf nicht
+            # erneut herunterlaedt.
+            Copy-Item -LiteralPath $target -Destination $logoDir -Force
+            return (Split-Path -Leaf $target)
+        }
+
+        Write-Host ("Logo format {0} cannot be read on this machine - taking the default logo." -f $ext) -ForegroundColor Yellow
+        Remove-Item -LiteralPath $download -Force -ErrorAction SilentlyContinue
+        return (& $useDefault)
+    }
+    catch {
+        Write-Host ("Logo handling failed ({0}) - taking the default logo." -f $_.Exception.Message) -ForegroundColor Yellow
+        try { return (& $useDefault) } catch { return '' }
+    }
+}
+
+function Measure-PackageContentPath {
+    <#
+        .SYNOPSIS
+        Der laengste Pfad, den dieses Paket auf dem Client erzeugt.
+
+        .DESCRIPTION
+        Muster aus SCCMAppHelper, auf Intune uebertragen. Windows bricht bei 260
+        Zeichen ab, 259 sind nutzbar. Beim Packen faellt das nicht auf, weil das
+        Quellverzeichnis per subst an einem Laufwerksbuchstaben haengt und
+        dadurch kurz ist. Auf dem Client entpackt die Intune Management Extension
+        nach C:\Windows\IMECache\<guid>\ - erst dort entscheidet die Laenge, und
+        der Fehler lautet dann "Datei nicht gefunden", nicht "Pfad zu lang".
+
+        AssumedPrefixLength ist eine ANNAHME, nicht gemessen:
+        "C:\Windows\IMECache\" sind 20 Zeichen, eine GUID 36, plus ein
+        Trennzeichen - 57. Weicht das auf einem Geraet ab, verschiebt sich die
+        Grenze; die Ausgabe nennt die Annahme deshalb mit.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ContentPath,
+        [int]$Limit = 259,
+        [int]$AssumedPrefixLength = 57
+    )
+
+    $root = (Resolve-Path -LiteralPath $ContentPath).Path.TrimEnd('\', '/')
+    $longest = 0
+    $offenders = @()
+
+    foreach ($item in @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        $relative = $item.FullName.Substring($root.Length).TrimStart('\', '/')
+        $total = $AssumedPrefixLength + $relative.Length
+        if ($total -gt $longest) { $longest = $total }
+        if ($total -gt $Limit) { $offenders += [pscustomobject]@{ Relative = $relative; Length = $total } }
+    }
+
+    return [pscustomobject]@{
+        Longest             = $longest
+        Limit               = $Limit
+        AssumedPrefixLength = $AssumedPrefixLength
+        Offenders           = @($offenders)
+    }
+}
+
+function Write-PackagePathWarning {
+    <#
+        Meldet das Ergebnis von Measure-PackageContentPath. Nur eine Warnung,
+        kein Abbruch: die Annahme ueber den IMECache-Pfad kann abweichen, und
+        eine Fehlmeldung darf kein Paket verhindern.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$ContentPath)
+
+    try { $scan = Measure-PackageContentPath -ContentPath $ContentPath }
+    catch {
+        Write-Host ("Path length could not be measured ({0})." -f $_.Exception.Message) -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host ("Longest client-side path: {0} of {1} characters (assuming a {2}-character IMECache prefix)." -f `
+        $scan.Longest, $scan.Limit, $scan.AssumedPrefixLength) -ForegroundColor DarkGray
+
+    if ($scan.Offenders.Count -eq 0) { return }
+
+    Write-Host ("{0} file(s) exceed the limit. On the client this surfaces as 'file not found', not as a path length problem:" -f `
+        $scan.Offenders.Count) -ForegroundColor Yellow
+    foreach ($o in @($scan.Offenders | Sort-Object Length -Descending | Select-Object -First 5)) {
+        Write-Host ("  {0} chars  {1}" -f $o.Length, $o.Relative) -ForegroundColor Yellow
+    }
+}
+
 function Write-DeployScript {
     <#
         .SYNOPSIS
@@ -254,7 +525,13 @@ function Write-DeployScript {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Publisher,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Description,
         [Parameter(Mandatory = $true)][string]$RootDir,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ToolVersion
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ToolVersion,
+
+        # Requirement Rule je App. Leer bedeutet die bisherigen Vorgaben
+        # x64 / W10_20H2 - bestehende Apps.csv-Zeilen ohne diese Spalten
+        # verhalten sich also unveraendert.
+        [AllowEmptyString()][string]$Architecture = '',
+        [AllowEmptyString()][string]$MinimumOS = ''
     )
 
     $templatePath = Join-Path (Join-Path $RootDir "Templates") "deploy_template.ps1"
@@ -265,7 +542,8 @@ function Write-DeployScript {
     $template = Get-Content -LiteralPath $templatePath
     $template -replace "#ROOT#", $RootDir -replace "#DN#", $AppName -replace "#PN#", $AppName `
         -replace "#PUB#", $Publisher -replace "#DM#", "DetectionScript" -replace "#VER#", $AppVersion `
-        -replace "#DESC#", $Description -replace "#TOOLVER#", $ToolVersion |
+        -replace "#DESC#", $Description -replace "#TOOLVER#", $ToolVersion `
+        -replace "#ARCH#", $Architecture -replace "#MINOS#", $MinimumOS |
         Out-File (Join-Path $AppFolder "deploy.ps1") -Encoding utf8 -Force
 }
 
@@ -312,6 +590,10 @@ function Update-DeployScript {
     $appVersion  = & $readValue $raw "AppVersion"
     $publisher   = & $readValue $raw "Publisher"
     $description = & $readValue $raw "Description"
+    # In aelteren Skripten gibt es diese beiden nicht - dann bleiben sie leer
+    # und Write-DeployScript setzt die Vorgaben.
+    $architecture = & $readValue $raw "Architecture"
+    $minimumOS    = & $readValue $raw "MinimumOS"
 
     # Fallback: Werte aus dem Ordnernamen ableiten - ueber dieselbe Funktion, die
     # auch Get-DeployScripts benutzt, statt einer zweiten Zerlegung.
@@ -325,7 +607,8 @@ function Update-DeployScript {
     Write-Host ("Updating outdated deploy.ps1 from template: {0} (backup: deploy.ps1.bak)" -f $DeployScriptPath) -ForegroundColor Yellow
 
     Write-DeployScript -AppFolder $appFolder -AppName $appName -AppVersion $appVersion `
-        -Publisher $publisher -Description $description -RootDir $RootDir -ToolVersion $ToolVersion
+        -Publisher $publisher -Description $description -RootDir $RootDir -ToolVersion $ToolVersion `
+        -Architecture $architecture -MinimumOS $minimumOS
 
     return $true
 }
@@ -609,48 +892,14 @@ function createApps{
             $desc = "Installed using PSADT"
         }
 
-        #Logo download from Appstore
-        $logoURL = $app.logoURL
-        $appfolder = $SourcePath
-        #schaue nach, ob es schon ein logo gibt und falls ja, nimm es, kein DL
-        $existingLogo = "$rootDir\Logos\$AppName.png"
-        if(test-path $existingLogo){
-            write-host "Using existing logo [$existingLogo]"
-            cp $existingLogo "$appfolder\"
-        }
-        else{
-            if(-not $logoURL){
-                #copy default logo
-                Write-Host "No logo URL specified. Taking default logo."
-                cp "$rootDir\Logos\defaultlogo.png" $appfolder
-            }
-            else{
-                #try DL
-                if($logoURL -like "*.png"){$LogoFileName = "$AppName.png"}else{$LogoFileName = "$AppName.webp"}
-                Write-Host "Trying logo download..."
-                Invoke-WebRequest -Uri $logoURL -D -OutFile $appfolder\$LogoFileName
-                if(Test-Path $appfolder\$LogoFileName){
-                    Write-Host "Logo download successful."
-                    if($LogoFileName -eq "$AppName.webp"){
-                        # convert webp to png
-                        Write-Host "Converting logo from .webp to .png"
-                        Convert-WebPToPngCloudinary "$appfolder\$LogoFileName" -CloudName $cloudName -ApiKey $ApiKey -ApiSecret $ApiSecret
-                        $LogoFileName = "$AppName.png"
-                    }
-                    cp "$appfolder\$LogoFileName" "$rootDir\Logos\" -Force
-                }
-                else{
-                    #copy default logo
-                    Write-Host "Error during logo download. Using default logo."
-                    cp "$rootDir\Logos\defaultlogo.png" $appfolder
-                }
-            }
-        }
+        # Logo: ein Pfad, der nie abbricht und nichts zu Dritten hochlaedt.
+        $null = Resolve-PackageLogo -AppFolder $SourcePath -AppName $AppName -LogoUrl $app.logoURL -RootDir $rootDir
 
         #deploy template an App anpassen und kopieren
         # Gemeinsamer Pfad mit Update-DeployScript - Anlegen und Erneuern nutzen EINE Quelle.
         Write-DeployScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion `
-            -Publisher $AppPublisher -Description $desc -RootDir $rootDir -ToolVersion $toolVersion
+            -Publisher $AppPublisher -Description $desc -RootDir $rootDir -ToolVersion $toolVersion `
+            -Architecture ([string]$app.Architecture) -MinimumOS ([string]$app.MinimumOS)
   
         # manuell: files reinpacken, install u uninstall routine einpflegen
         if($AppVersion -ne "LatestAvailable"){
@@ -1816,9 +2065,6 @@ function Edit-SettingsDialog {
             $obj = [PSCustomObject]@{
                 packetRoot = "$env:TEMP\IntuneWin32Helper\out"
                 removeExistingPacketDirOnEachRun = $false
-                cloudName = ""
-                apiKey    = ""
-                apiSecret = ""
                 tenants   = @()
             }
         }
@@ -1904,11 +2150,8 @@ function Edit-SettingsDialog {
     # 0: packetRoot
     # 1: removeExistingPacketDirOnEachRun
     # 2: Überschrift "Logo image conversion"
-    # 3: cloudName
-    # 4: apiKey
-    # 5: apiSecret
     # 6: Hyperlink (Cloudinary)
-    for ($i=0; $i -lt 7; $i++) { $r = New-Object Windows.Controls.RowDefinition; $r.Height = [Windows.GridLength]::Auto; $null = $generalGrid.RowDefinitions.Add($r) }
+    for ($i=0; $i -lt 2; $i++) { $r = New-Object Windows.Controls.RowDefinition; $r.Height = [Windows.GridLength]::Auto; $null = $generalGrid.RowDefinitions.Add($r) }
 
     # packetRoot (mit Browse)
     $lblPacketRoot = New-Object Windows.Controls.TextBlock; $lblPacketRoot.Text = "packageRoot:"; $lblPacketRoot.VerticalAlignment = "Center"
@@ -1936,67 +2179,11 @@ function Edit-SettingsDialog {
     }
     [Windows.Controls.Grid]::SetRow($cbRemove,1); [Windows.Controls.Grid]::SetColumn($cbRemove,1)
 
-    # --- Überschrift-Gruppe: Logo image conversion ---
-    $lblLogoHeader = New-Object Windows.Controls.TextBlock
-    $lblLogoHeader.Text = "Logo image conversion"
-    $lblLogoHeader.FontWeight = "Bold"
-    $lblLogoHeader.Margin = "0,12,0,4"
-    [Windows.Controls.Grid]::SetRow($lblLogoHeader,2); [Windows.Controls.Grid]::SetColumnSpan($lblLogoHeader,2)
-
-    # cloudName
-    $lblCloud = New-Object Windows.Controls.TextBlock; $lblCloud.Text = "cloudName:"; $lblCloud.VerticalAlignment = "Center"
-    [Windows.Controls.Grid]::SetRow($lblCloud,3); [Windows.Controls.Grid]::SetColumn($lblCloud,0)
-    $tbCloud = New-Object Windows.Controls.TextBox; $tbCloud.Margin = "6,0,0,0"; $tbCloud.Text = $cfg.cloudName
-    [Windows.Controls.Grid]::SetRow($tbCloud,3); [Windows.Controls.Grid]::SetColumn($tbCloud,1)
-
-    # apiKey
-    $lblApiKey = New-Object Windows.Controls.TextBlock; $lblApiKey.Text = "apiKey:"; $lblApiKey.VerticalAlignment = "Center"
-    [Windows.Controls.Grid]::SetRow($lblApiKey,4); [Windows.Controls.Grid]::SetColumn($lblApiKey,0)
-    $tbApiKey = New-Object Windows.Controls.TextBox; $tbApiKey.Margin = "6,0,0,0"; $tbApiKey.Text = $cfg.apiKey
-    [Windows.Controls.Grid]::SetRow($tbApiKey,4); [Windows.Controls.Grid]::SetColumn($tbApiKey,1)
-
-    # apiSecret
-    $lblApiSecret = New-Object Windows.Controls.TextBlock; $lblApiSecret.Text = "apiSecret:"; $lblApiSecret.VerticalAlignment = "Center"
-    [Windows.Controls.Grid]::SetRow($lblApiSecret,5); [Windows.Controls.Grid]::SetColumn($lblApiSecret,0)
-    $tbApiSecret = New-Object Windows.Controls.TextBox; $tbApiSecret.Margin = "6,0,0,0"; $tbApiSecret.Text = $cfg.apiSecret
-    [Windows.Controls.Grid]::SetRow($tbApiSecret,5); [Windows.Controls.Grid]::SetColumn($tbApiSecret,1)
-
-    # Hyperlink (Cloudinary)
-    $linkTextBlock = New-Object Windows.Controls.TextBlock
-    $linkTextBlock.Margin = "0,6,0,0"
-    $hyperlink = New-Object System.Windows.Documents.Hyperlink
-    $hyperlink.NavigateUri = [Uri]::new("https://cloudinary.com/users/register_free")
-    $run = New-Object System.Windows.Documents.Run
-    $run.Text = "https://cloudinary.com/users/register_free"
-    $null = $hyperlink.Inlines.Add($run)
-    $hyperlink.Foreground = [System.Windows.Media.Brushes]::Blue
-    $hyperlink.Cursor = [System.Windows.Input.Cursors]::Hand
-    # Klick öffnet Systembrowser
-    $hyperlink.Add_Click({
-        param($sender, $e)
-        try {
-            $url = $sender.NavigateUri.AbsoluteUri
-            Start-Process $url
-        } catch {
-            [System.Windows.MessageBox]::Show(("Konnte den Link nicht öffnen: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
-        }
-    })
-    $null = $linkTextBlock.Inlines.Add($hyperlink)
-    [Windows.Controls.Grid]::SetRow($linkTextBlock,6); [Windows.Controls.Grid]::SetColumnSpan($linkTextBlock,2)
-
     # Controls in Tab "Allgemein" einfügen
     $null = $generalGrid.Children.Add($lblPacketRoot)
     $null = $generalGrid.Children.Add($cellGrid)
     $null = $generalGrid.Children.Add($lblRemove)
     $null = $generalGrid.Children.Add($cbRemove)
-    $null = $generalGrid.Children.Add($lblLogoHeader)
-    $null = $generalGrid.Children.Add($lblCloud)
-    $null = $generalGrid.Children.Add($tbCloud)
-    $null = $generalGrid.Children.Add($lblApiKey)
-    $null = $generalGrid.Children.Add($tbApiKey)
-    $null = $generalGrid.Children.Add($lblApiSecret)
-    $null = $generalGrid.Children.Add($tbApiSecret)
-    $null = $generalGrid.Children.Add($linkTextBlock)
 
     $tabGeneral.Content = $generalGrid
     $null = $tabs.Items.Add($tabGeneral)
@@ -2171,9 +2358,6 @@ function Edit-SettingsDialog {
                 if ($valLower -eq "true") { $cbRemove.IsChecked = $true }
                 if ($valLower -eq "false") { $cbRemove.IsChecked = $false }
             }
-            $tbCloud.Text = $cfg.cloudName
-            $tbApiKey.Text = $cfg.apiKey
-            $tbApiSecret.Text = $cfg.apiSecret
             # Tenants
             $tenantItems = @()
             foreach ($t in $cfg.tenants) {
@@ -2222,9 +2406,6 @@ function Edit-SettingsDialog {
             $data = @{
                 packetRoot = $tbPacketRoot.Text
                 removeExistingPacketDirOnEachRun = $removeBool
-                cloudName = $tbCloud.Text
-                apiKey    = $tbApiKey.Text
-                apiSecret = $tbApiSecret.Text
                 tenants   = $tenantArray
             }
 
@@ -2461,58 +2642,6 @@ function check-prereqs{
         }
     }
     #end function
-}
-
-function Convert-WebPToPngCloudinary {
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$InputFile,
-
-        [Parameter(Mandatory = $true)]
-        [string]$CloudName,
-
-        [Parameter(Mandatory = $true)]
-        [string]$ApiKey,
-
-        [Parameter(Mandatory = $true)]
-        [string]$ApiSecret
-    )
-
-    $fileName = [System.IO.Path]::GetFileNameWithoutExtension($InputFile)
-    $dirname = [System.IO.Path]::GetDirectoryName($InputFile)
-    $timestamp = [int][double]::Parse((Get-Date -UFormat %s))
-    $paramsToSign = "public_id=$fileName&timestamp=$timestamp$ApiSecret"
-
-    $sha1 = New-Object System.Security.Cryptography.SHA1Managed
-    $signatureBytes = $sha1.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($paramsToSign))
-    $signature = [BitConverter]::ToString($signatureBytes) -replace "-", ""
-
-    $uploadUrl = "https://api.cloudinary.com/v1_1/$CloudName/image/upload"
-
-    # Datei als Base64 kodieren
-    $bytes = [System.IO.File]::ReadAllBytes($InputFile)
-    $base64 = [Convert]::ToBase64String($bytes)
-    $base64File = "data:image/webp;base64,$base64"
-
-    $body = @{
-        file       = $base64File
-        api_key    = $ApiKey
-        timestamp  = $timestamp
-        public_id  = $fileName
-        signature  = $signature
-    }
-
-    try {
-        $response = Invoke-RestMethod -Uri $uploadUrl -Method Post -Body $body
-        $pngUrl = "https://res.cloudinary.com/$CloudName/image/upload/f_png/$fileName"
-        Write-Host "PNG-URL: $pngUrl"
-
-        $outputFile = "$fileName.png"
-        Invoke-WebRequest -Uri $pngUrl -OutFile "$dirname\$outputFile"
-        Write-Host "PNG-Datei erfolgreich heruntergeladen: $outputFile"
-    } catch {
-        Write-Error "Error: $_"
-    }
 }
 
 function Get-FirstFreeDriveLetter {

@@ -54,14 +54,36 @@ if ($wingetPaths.Count -gt 1) {
     exit 1
 }
 
+# 1. Ist die App ueberhaupt da?
 $wingetPrg_Existing = & $wingetPath list --id $PackageID --exact --accept-source-agreements
-if ($wingetPrg_Existing -like "*$PackageID*"){
-    Write-Log "App $PackageID found!"
-    Write-Log "$Action finished."
-    exit 0
-}
-else{
+if ($wingetPrg_Existing -notlike "*$PackageID*"){
     Write-Log "App $PackageID NOT found!"
     Write-Log "$Action finished."
     exit 1
 }
+Write-Log "App $PackageID found."
+
+# 2. Ist sie aktuell? Dieser Schritt fehlte, und deshalb hat die Erkennung
+#    gelogen: "winget list" meldet die App, sobald die ID irgendwie vorhanden
+#    ist - eine drei Jahre alte Fassung galt damit als aktuell, Intune zeigte
+#    gruen, und die App wurde nie erneuert. Das widerspricht dem Sinn von
+#    Version "LatestAvailable".
+#
+#    Liegt ein Upgrade vor, wird "nicht installiert" gemeldet. Intune installiert
+#    dann neu, und die Installationsroutine des Pakets holt per winget die
+#    aktuelle Fassung.
+#
+#    Wichtig, absichtlich so: erreicht winget seine Quelle nicht (kein Netz,
+#    Quelle gesperrt), erscheint die ID in der Upgrade-Liste nicht und die App
+#    gilt als aktuell. Das ist die sichere Richtung - offline soll kein Geraet
+#    in eine Neuinstallationsschleife laufen.
+$wingetPrg_Upgrade = & $wingetPath upgrade --id $PackageID --exact --accept-source-agreements
+if ($wingetPrg_Upgrade -like "*$PackageID*"){
+    Write-Log "An upgrade is available for $PackageID - reporting as NOT installed so it gets renewed."
+    Write-Log "$Action finished."
+    exit 1
+}
+
+Write-Log "No upgrade available - $PackageID is current."
+Write-Log "$Action finished."
+exit 0

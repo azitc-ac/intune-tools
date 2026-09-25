@@ -23,9 +23,6 @@ $null = Start-ToolTranscript -RootDir $rootDir
 
 $config = Get-ToolConfig -RootDir $rootDir
 
-$cloudName = $config.cloudName
-$ApiKey = $config.apiKey
-$ApiSecret = $config.apiSecret
 $packetRoot = $config.packetRoot
 
 if (-not (Test-Path $packetRoot)) { md $packetRoot }

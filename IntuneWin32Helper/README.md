@@ -11,6 +11,29 @@ and `packetRoot`. It is **not** version controlled, because the client secret is
 clear text. On first start it is created automatically from `Config/config.sample.json`;
 fill it in via the gear icon in the start dialog or by editing the file.
 
+App logos are resolved locally from `Logos\` and normalised to 256x256; nothing is uploaded
+anywhere. A format this machine cannot read (webp without a codec, svg) falls back to
+`Logos\defaultlogo.png` rather than failing the build.
+
+## Apps.csv
+
+Two columns beyond the obvious ones:
+
+| Column | Empty means |
+| --- | --- |
+| `Architecture` | `x64` |
+| `MinimumOS` | `W10_20H2` |
+
+Both go into the app's requirement rule, so an ARM64 or x86 app and an app that needs a newer
+Windows no longer have to share one hard-coded rule. Values must be ones
+`New-IntuneWin32AppRequirementRule` accepts.
+
+`Version = LatestAvailable` marks a WinGet app: the package is a thin wrapper that installs
+through `winget` on the endpoint. Its detection checks **both** that the package id is present
+and that no upgrade is available - otherwise an outdated version would count as current and the
+app would never be renewed. When winget cannot reach its source, the app counts as current, so
+an offline device does not loop through reinstalls.
+
 ## Third-party components
 
 `ServiceUI.exe` in this folder is a Microsoft component and is **not** covered by this
@@ -31,7 +54,10 @@ result), `Out-GridView`/`ogv` usage, parameters that the called function does no
 `break`/`continue` outside a loop of the same function, a `deploy_template.ps1` that no
 longer routes tenant selection through `Initialize-IntuneConnection`, config reads that
 bypass `Get-ToolConfig` (including a missing `.gitignore` entry for `Config/config.json`),
-and `Start-Transcript` calls that bypass `Start-ToolTranscript`.
+`Start-Transcript` calls that bypass `Start-ToolTranscript`, syntax Windows PowerShell 5.1
+cannot parse (`??`, `?.`, `&&`, `||`, ternary), any upload of logos to a third party, logo
+handling outside `Resolve-PackageLogo`, a hard-coded requirement rule, a missing path-length
+report, and a WinGet detection that does not check for an upgrade.
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the
 check red.
