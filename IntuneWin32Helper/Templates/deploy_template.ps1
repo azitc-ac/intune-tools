@@ -62,7 +62,26 @@ finally {
 }
 
 # Create Detection Rule
-$DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile ($apppath + "\detection.ps1")
+# Erkennung: bei einem MSI nativ ueber den ProductCode, sonst per Skript.
+# Nativ heisst: der Intune-Client prueft selbst - kein PowerShell-Host, kein
+# Timeout, kein Skript, das bei einem Fehler "nicht installiert" meldet.
+# Die Version wird mitgeprueft, sonst gilt eine aeltere Fassung als aktuell -
+# genau der Fehler, den die WinGet-Erkennung hatte.
+$MsiProductCode = "#MSIPRODUCTCODE#"
+if ($MsiProductCode) {
+    if ($AppVersion -and $AppVersion -ne "LatestAvailable") {
+        Write-Host "Detection rule: native MSI product code [$MsiProductCode], version >= [$AppVersion]"
+        $DetectionRule = New-IntuneWin32AppDetectionRuleMSI -ProductCode $MsiProductCode -ProductVersionOperator greaterThanOrEqual -ProductVersion $AppVersion
+    }
+    else {
+        Write-Host "Detection rule: native MSI product code [$MsiProductCode] (no version to compare)"
+        $DetectionRule = New-IntuneWin32AppDetectionRuleMSI -ProductCode $MsiProductCode
+    }
+}
+else {
+    Write-Host "Detection rule: script (detection.ps1)"
+    $DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile ($apppath + "\detection.ps1")
+}
 
 # Create Requirement Rule
 # Requirement Rule aus Apps.csv statt fuer alle gleich. Bisher bekam JEDE App

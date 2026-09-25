@@ -679,6 +679,54 @@ else {
 }
 
 # ---------------------------------------------------------------------------
+# 22) Bei einem MSI wird nativ ueber den ProductCode erkannt. Vorher lief JEDE
+#     App ueber ein Erkennungsskript - auch die, deren ProductCode schon
+#     vorliegt. Nativ prueft der Client selbst: kein PowerShell-Host, kein
+#     Timeout, und kein Skript, das bei einem Fehler "nicht installiert" meldet.
+# ---------------------------------------------------------------------------
+$checked++
+if (Test-Path -LiteralPath $templatePath) {
+    $tplAst5 = $parsed[(Get-Item -LiteralPath $templatePath).FullName].Ast
+
+    $msiRules = $tplAst5.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'New-IntuneWin32AppDetectionRuleMSI'
+    }, $true)
+    if (-not $msiRules) {
+        Add-Failure "MsiDetectionNative" "deploy_template.ps1 baut keine native MSI-Erkennung - ein vorliegender ProductCode bleibt ungenutzt"
+    }
+
+    # Die native Regel muss an den ProductCode gebunden sein, sonst bekaeme auch
+    # eine App ohne MSI eine MSI-Regel.
+    # Die BEDINGUNG muss den ProductCode pruefen, nicht irgendeine Stelle im
+    # Block: $MsiProductCode steht auch als Argument darin, ein "if ($true)"
+    # waere sonst durchgegangen. (Genau das hat die Gegenprobe gezeigt.)
+    $guarded = $tplAst5.FindAll({
+        param($n)
+        if ($n -isnot [System.Management.Automation.Language.IfStatementAst]) { return $false }
+        if ($n.Extent.Text -notmatch 'New-IntuneWin32AppDetectionRuleMSI') { return $false }
+        foreach ($clause in $n.Clauses) {
+            if ($clause.Item1.Extent.Text -match '\$MsiProductCode') { return $true }
+        }
+        return $false
+    }, $true)
+    if ($msiRules -and -not $guarded) {
+        Add-Failure "MsiDetectionNative" 'die native MSI-Erkennung haengt nicht an $MsiProductCode - Apps ohne MSI bekaemen sie auch'
+    }
+
+    # Der Skript-Weg muss als Rueckfall erhalten bleiben.
+    $scriptRules = $tplAst5.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'New-IntuneWin32AppDetectionRuleScript'
+    }, $true)
+    if (-not $scriptRules) {
+        Add-Failure "MsiDetectionNative" "der Skript-Rueckfall fuer Nicht-MSI-Apps fehlt"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

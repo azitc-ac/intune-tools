@@ -531,7 +531,11 @@ function Write-DeployScript {
         # x64 / W10_20H2 - bestehende Apps.csv-Zeilen ohne diese Spalten
         # verhalten sich also unveraendert.
         [AllowEmptyString()][string]$Architecture = '',
-        [AllowEmptyString()][string]$MinimumOS = ''
+        [AllowEmptyString()][string]$MinimumOS = '',
+
+        # MSI-ProductCode aus Apps.csv. Ist er gesetzt, erkennt Intune die App
+        # nativ ueber den ProductCode statt ueber ein Skript.
+        [AllowEmptyString()][string]$MsiProductCode = ''
     )
 
     $templatePath = Join-Path (Join-Path $RootDir "Templates") "deploy_template.ps1"
@@ -543,7 +547,8 @@ function Write-DeployScript {
     $template -replace "#ROOT#", $RootDir -replace "#DN#", $AppName -replace "#PN#", $AppName `
         -replace "#PUB#", $Publisher -replace "#DM#", "DetectionScript" -replace "#VER#", $AppVersion `
         -replace "#DESC#", $Description -replace "#TOOLVER#", $ToolVersion `
-        -replace "#ARCH#", $Architecture -replace "#MINOS#", $MinimumOS |
+        -replace "#ARCH#", $Architecture -replace "#MINOS#", $MinimumOS `
+        -replace "#MSIPRODUCTCODE#", $MsiProductCode |
         Out-File (Join-Path $AppFolder "deploy.ps1") -Encoding utf8 -Force
 }
 
@@ -592,8 +597,9 @@ function Update-DeployScript {
     $description = & $readValue $raw "Description"
     # In aelteren Skripten gibt es diese beiden nicht - dann bleiben sie leer
     # und Write-DeployScript setzt die Vorgaben.
-    $architecture = & $readValue $raw "Architecture"
-    $minimumOS    = & $readValue $raw "MinimumOS"
+    $architecture   = & $readValue $raw "Architecture"
+    $minimumOS      = & $readValue $raw "MinimumOS"
+    $msiProductCode = & $readValue $raw "MsiProductCode"
 
     # Fallback: Werte aus dem Ordnernamen ableiten - ueber dieselbe Funktion, die
     # auch Get-DeployScripts benutzt, statt einer zweiten Zerlegung.
@@ -608,7 +614,7 @@ function Update-DeployScript {
 
     Write-DeployScript -AppFolder $appFolder -AppName $appName -AppVersion $appVersion `
         -Publisher $publisher -Description $description -RootDir $RootDir -ToolVersion $ToolVersion `
-        -Architecture $architecture -MinimumOS $minimumOS
+        -Architecture $architecture -MinimumOS $minimumOS -MsiProductCode $msiProductCode
 
     return $true
 }
@@ -899,7 +905,8 @@ function createApps{
         # Gemeinsamer Pfad mit Update-DeployScript - Anlegen und Erneuern nutzen EINE Quelle.
         Write-DeployScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion `
             -Publisher $AppPublisher -Description $desc -RootDir $rootDir -ToolVersion $toolVersion `
-            -Architecture ([string]$app.Architecture) -MinimumOS ([string]$app.MinimumOS)
+            -Architecture ([string]$app.Architecture) -MinimumOS ([string]$app.MinimumOS) `
+            -MsiProductCode ([string]$app.MsiProductCode)
   
         # manuell: files reinpacken, install u uninstall routine einpflegen
         if($AppVersion -ne "LatestAvailable"){
