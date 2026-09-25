@@ -114,6 +114,50 @@ function Start-ToolTranscript {
     return $logPath
 }
 
+function Remove-PackageFolder {
+    <#
+        .SYNOPSIS
+        Loescht einen Paketordner, aber nur wenn er plausibel ist.
+
+        .DESCRIPTION
+        Der Pfad wird aus CSV-Feldern zusammengesetzt ("<Name> - <Version>").
+        Sind die Felder leer, entsteht "<packetRoot>\ - " oder die Wurzel selbst -
+        ein rekursives Loeschen wuerde dann den gesamten Paketbestand treffen.
+        Geprueft wird daher: der Ordner muss echt UNTERHALB der Wurzel liegen,
+        einen Namen mit Substanz haben und existieren.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path,
+        [Parameter(Mandatory = $true)][string]$PacketRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "Refusing to delete: the package folder path is empty."
+    }
+
+    $full = [System.IO.Path]::GetFullPath($Path.TrimEnd('\','/'))
+    $root = [System.IO.Path]::GetFullPath($PacketRoot.TrimEnd('\','/'))
+    $sep  = [System.IO.Path]::DirectorySeparatorChar
+
+    if ($full -eq $root) {
+        throw ("Refusing to delete: the path IS the package root ({0}). Check DisplayName/Version in Apps.csv." -f $root)
+    }
+    if (-not $full.ToLower().StartsWith($root.ToLower() + $sep)) {
+        throw ("Refusing to delete: {0} is not below the package root {1}." -f $full, $root)
+    }
+
+    $leaf = Split-Path -Leaf $full
+    if ([string]::IsNullOrWhiteSpace(($leaf -replace '[-\s]', ''))) {
+        throw ("Refusing to delete: the folder name '{0}' carries no app name or version. Check Apps.csv." -f $leaf)
+    }
+    if (-not (Test-Path -LiteralPath $full)) { return $false }
+
+    Write-Host ("Removing existing package folder: {0}" -f $full) -ForegroundColor Yellow
+    Remove-Item -LiteralPath $full -Recurse -Force
+    return $true
+}
+
 function Write-DeploymentSummary {
     <#
         .SYNOPSIS
@@ -269,15 +313,12 @@ function Update-DeployScript {
     $publisher   = & $readValue $raw "Publisher"
     $description = & $readValue $raw "Description"
 
-    # Fallback: Werte aus dem Ordnernamen "<Name> - <Version>" ableiten.
+    # Fallback: Werte aus dem Ordnernamen ableiten - ueber dieselbe Funktion, die
+    # auch Get-DeployScripts benutzt, statt einer zweiten Zerlegung.
     if (-not $appName) {
-        $leaf = Split-Path -Leaf $appFolder
-        $idx  = $leaf.LastIndexOf(" - ")
-        if ($idx -ge 0) {
-            $appName = $leaf.Substring(0, $idx).Trim()
-            if (-not $appVersion) { $appVersion = $leaf.Substring($idx + 3).Trim() }
-        }
-        else { $appName = $leaf }
+        $parsed = Parse-AppFolderName -FolderName (Split-Path -Leaf $appFolder)
+        $appName = $parsed.AppName
+        if (-not $appVersion) { $appVersion = $parsed.AppVersion }
     }
 
     Copy-Item -LiteralPath $DeployScriptPath -Destination ($DeployScriptPath + ".bak") -Force
@@ -289,96 +330,104 @@ function Update-DeployScript {
     return $true
 }
 
+# ============================================================================
+#  Paketordner lesen
+#  Diese beiden Funktionen lagen INNERHALB von deployApps und waren dadurch
+#  nirgends sonst aufrufbar - Update-DeployScript musste das Zerlegen des
+#  Ordnernamens eigenstaendig nachbauen. Jetzt auf oberster Ebene, eine Quelle.
+# ============================================================================
+
+function Parse-AppFolderName {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$FolderName,
+        [Parameter(Mandatory=$false)]
+        [string]$Delimiter = ' - '
+    )
+
+    # Standardwerte
+    $appName = $FolderName
+    $appVersion = ''
+
+    if ($FolderName -and $Delimiter -and $FolderName.Contains($Delimiter)) {
+        $lastIndex = $FolderName.LastIndexOf($Delimiter)
+        if ($lastIndex -ge 0) {
+            $left  = $FolderName.Substring(0, $lastIndex)
+            $right = $FolderName.Substring($lastIndex + $Delimiter.Length)
+            if ($left)  { $appName    = $left.Trim() }
+            if ($right) { $appVersion = $right.Trim() }
+        }
+    }
+
+    # Rückgabe als Objekt
+    return [pscustomobject]@{
+        AppName    = $appName
+        AppVersion = $appVersion
+    }
+}
+    
+function Get-DeployScripts {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PacketRoot,
+
+        [Parameter(Mandatory = $false)]
+        [string]$Delimiter = ' - ',
+
+        [Parameter(Mandatory = $false)]
+        [switch]$Recurse,
+
+        [Parameter(Mandatory = $false)]
+        [string]$ExportCsvPath
+    )
+
+    if (-not (Test-Path -LiteralPath $PacketRoot)) {
+        throw "PacketRoot does not exist: $PacketRoot"
+    }
+
+    # Unterverzeichnisse holen (optional rekursiv)
+    if ($Recurse) {
+        $dirs = Get-ChildItem -LiteralPath $PacketRoot -Directory -Recurse
+    } else {
+        $dirs = Get-ChildItem -LiteralPath $PacketRoot -Directory
+    }
+
+    $results = @()
+
+    foreach ($dir in $dirs) {
+        $deployPath = Join-Path -Path $dir.FullName -ChildPath 'deploy.ps1'
+
+        if (Test-Path -LiteralPath $deployPath) {
+            $parsed = Parse-AppFolderName -FolderName $dir.Name -Delimiter $Delimiter
+
+            $fi = Get-Item -LiteralPath $deployPath
+            $obj = [pscustomobject]@{
+                AppName      = $parsed.AppName
+                AppVersion   = $parsed.AppVersion
+                LastModified = $fi.LastWriteTime
+                FullPath     = $fi.FullName
+            }
+
+            $results += $obj
+        }
+    }
+
+    # Optional: CSV exportieren
+    if ($ExportCsvPath -and $ExportCsvPath.Trim().Length -gt 0) {
+        try {
+            $results | Export-Csv -Path $ExportCsvPath -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        } catch {
+            Write-Warning ("Konnte CSV nicht schreiben: {0}" -f $_.Exception.Message)
+        }
+    }
+
+    return $results
+}
+
+
 function deployApps{    
     
-    function Parse-AppFolderName {
-        param(
-            [Parameter(Mandatory=$true)]
-            [string]$FolderName,
-            [Parameter(Mandatory=$false)]
-            [string]$Delimiter = ' - '
-        )
-
-        # Standardwerte
-        $appName = $FolderName
-        $appVersion = ''
-
-        if ($FolderName -and $Delimiter -and $FolderName.Contains($Delimiter)) {
-            $lastIndex = $FolderName.LastIndexOf($Delimiter)
-            if ($lastIndex -ge 0) {
-                $left  = $FolderName.Substring(0, $lastIndex)
-                $right = $FolderName.Substring($lastIndex + $Delimiter.Length)
-                if ($left)  { $appName    = $left.Trim() }
-                if ($right) { $appVersion = $right.Trim() }
-            }
-        }
-
-        # Rückgabe als Objekt
-        return [pscustomobject]@{
-            AppName    = $appName
-            AppVersion = $appVersion
-        }
-    }
-        
-    function Get-DeployScripts {
-        [CmdletBinding()]
-        param(
-            [Parameter(Mandatory = $true)]
-            [string]$PacketRoot,
-
-            [Parameter(Mandatory = $false)]
-            [string]$Delimiter = ' - ',
-
-            [Parameter(Mandatory = $false)]
-            [switch]$Recurse,
-
-            [Parameter(Mandatory = $false)]
-            [string]$ExportCsvPath
-        )
-
-        if (-not (Test-Path -LiteralPath $PacketRoot)) {
-            throw "PacketRoot does not exist: $PacketRoot"
-        }
-
-        # Unterverzeichnisse holen (optional rekursiv)
-        if ($Recurse) {
-            $dirs = Get-ChildItem -LiteralPath $PacketRoot -Directory -Recurse
-        } else {
-            $dirs = Get-ChildItem -LiteralPath $PacketRoot -Directory
-        }
-
-        $results = @()
-
-        foreach ($dir in $dirs) {
-            $deployPath = Join-Path -Path $dir.FullName -ChildPath 'deploy.ps1'
-
-            if (Test-Path -LiteralPath $deployPath) {
-                $parsed = Parse-AppFolderName -FolderName $dir.Name -Delimiter $Delimiter
-
-                $fi = Get-Item -LiteralPath $deployPath
-                $obj = [pscustomobject]@{
-                    AppName      = $parsed.AppName
-                    AppVersion   = $parsed.AppVersion
-                    LastModified = $fi.LastWriteTime
-                    FullPath     = $fi.FullName
-                }
-
-                $results += $obj
-            }
-        }
-
-        # Optional: CSV exportieren
-        if ($ExportCsvPath -and $ExportCsvPath.Trim().Length -gt 0) {
-            try {
-                $results | Export-Csv -Path $ExportCsvPath -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-            } catch {
-                Write-Warning ("Konnte CSV nicht schreiben: {0}" -f $_.Exception.Message)
-            }
-        }
-
-        return $results
-    }
-
     $deployableApps = Get-DeployScripts -PacketRoot $packetRoot #-Recurse
     $appsToDeploy = Open-SelectDialog -data $deployableApps -title "Select Apps to deploy" -large
     
@@ -488,7 +537,9 @@ function createApps{
         $winGetParams = $app.WinGetParams -replace "`"",""
 
         Write-Host "Creating PSADT application: $AppNameCombined" -ForegroundColor Cyan
-        if((Test-Path $SourcePath) -and ($config.removeExistingPacketDirOnEachRun -eq $true)){del $SourcePath -Recurse -Force}
+        if($config.removeExistingPacketDirOnEachRun -eq $true){
+            $null = Remove-PackageFolder -Path $SourcePath -PacketRoot $packetRoot
+        }
         New-ADTTemplate -Destination $packetRoot -Name $AppNameCombined
 
         Write-Host "Wait 5 seconds..."

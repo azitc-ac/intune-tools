@@ -403,6 +403,92 @@ if (Test-Path -LiteralPath $templatePath) {
 }
 
 # ---------------------------------------------------------------------------
+# 12) Keine fest verdrahteten Benutzerpfade. Das Startskript trug den
+#     OneDrive-Pfad eines einzelnen Rechners als Fallback - auf jeder anderen
+#     Maschine zeigt er ins Leere.
+# ---------------------------------------------------------------------------
+foreach ($p in $parsed.Values) {
+    $checked++
+    $strings = $p.Ast.FindAll({
+        param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst]
+    }, $true)
+
+    foreach ($s in $strings) {
+        if ($s.Value -match '^[A-Za-z]:\\Users\\') {
+            Add-Failure "NoHardcodedUserPath" ("{0}:{1} fest verdrahteter Benutzerpfad: {2}" -f `
+                $p.File.Name, $s.Extent.StartLineNumber, $s.Value)
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 13) Rekursives Loeschen nur ueber Remove-PackageFolder. Der Paketpfad wird aus
+#     CSV-Feldern gebaut; sind sie leer, zeigt er auf die Paketwurzel selbst.
+#     Remove-PackageFolder prueft das, ein nacktes "del -Recurse" nicht.
+# ---------------------------------------------------------------------------
+foreach ($p in $parsed.Values) {
+    $checked++
+    $deletes = $p.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -in @("Remove-Item", "del", "erase", "rd", "ri", "rmdir")
+    }, $true)
+
+    foreach ($d in $deletes) {
+        $recurse = $false
+        foreach ($element in $d.CommandElements) {
+            if ($element -is [System.Management.Automation.Language.CommandParameterAst] -and
+                $element.ParameterName -like "Recurse*") { $recurse = $true }
+        }
+        if (-not $recurse) { continue }
+
+        $fn = & $enclosingFunction $d
+        if ($fn -ne "Remove-PackageFolder") {
+            Add-Failure "RecursiveDeleteGuarded" ("{0}:{1} rekursives Loeschen in '{2}' statt ueber Remove-PackageFolder" -f `
+                $p.File.Name, $d.Extent.StartLineNumber, $fn)
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 14) Das temporaere subst-Laufwerk muss in einem finally freigegeben werden.
+#     Bricht das Packen ab, blieb der Laufwerksbuchstabe sonst bis zum Abmelden
+#     belegt und jeder Lauf verbrauchte den naechsten.
+# ---------------------------------------------------------------------------
+$checked++
+if (Test-Path -LiteralPath $templatePath) {
+    $tplAst2 = $parsed[(Get-Item -LiteralPath $templatePath).FullName].Ast
+
+    $substCalls = $tplAst2.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq "subst"
+    }, $true)
+
+    # Der Freigabe-Aufruf ist der mit /d
+    $release = @($substCalls | Where-Object { $_.Extent.Text -match '/d\b' })
+
+    if (@($release).Count -eq 0) {
+        Add-Failure "SubstReleasedInFinally" "deploy_template.ps1 gibt das subst-Laufwerk nirgends frei (subst <drive> /d fehlt)"
+    }
+    foreach ($r in $release) {
+        $inFinally = $false
+        $node = $r.Parent
+        while ($node -ne $null) {
+            if ($node -is [System.Management.Automation.Language.TryStatementAst]) {
+                if ($node.Finally -and $node.Finally.Extent.Text.Contains($r.Extent.Text)) { $inFinally = $true }
+                break
+            }
+            $node = $node.Parent
+        }
+        if (-not $inFinally) {
+            Add-Failure "SubstReleasedInFinally" ("deploy_template.ps1:{0} 'subst /d' liegt nicht in einem finally - bricht das Packen ab, bleibt das Laufwerk belegt" -f `
+                $r.Extent.StartLineNumber)
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

@@ -1,6 +1,8 @@
 ﻿$toolVersion = "2.0"
 $rootDir = $PSScriptRoot
-if (-not $PSScriptRoot) { $rootDir = "C:\Users\alex\OneDrive - AZITC\Tools\Administration\IntuneWin32Helper" }
+# Ohne $PSScriptRoot (markierter Code in der ISE) das aktuelle Verzeichnis nehmen -
+# kein fest verdrahteter Pfad eines einzelnen Rechners. Muster aus SCCMAppHelper.
+if (-not $rootDir) { $rootDir = (Get-Location).Path }
 
 # Funktionen zuerst laden: Protokoll und Konfiguration laufen ueber gemeinsame
 # Helfer (Start-ToolTranscript / Get-ToolConfig), nicht ueber eigene Pfade.

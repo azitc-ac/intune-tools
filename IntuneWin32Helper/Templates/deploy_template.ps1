@@ -41,16 +41,21 @@ $outpath=$apppath + "\out"
 $drive = Get-FirstFreeDriveLetter
 subst $drive $inpath
 $shortsourcepath = $drive + "\"
-# Create the intunewin file from source and destination variables
-$installer="Invoke-AppDeployToolkit.ps1"
-$SetupFile = $installer
-$Destination = $outpath
-$CreateAppPackage = New-IntuneWin32AppPackage -SourceFolder $shortsourcepath -SetupFile $SetupFile -OutputFolder $Destination -Force -Verbose
-# Get intunewin file Meta data and assign intunewin file location variable
-$IntuneWinFile = $CreateAppPackage.Path
-$IntuneWinMetaData = Get-IntuneWin32AppMetaData -FilePath $IntuneWinFile
-# remove the temporary short source path again
-subst $drive /d 
+try {
+    # Create the intunewin file from source and destination variables
+    $installer="Invoke-AppDeployToolkit.ps1"
+    $SetupFile = $installer
+    $Destination = $outpath
+    $CreateAppPackage = New-IntuneWin32AppPackage -SourceFolder $shortsourcepath -SetupFile $SetupFile -OutputFolder $Destination -Force -Verbose
+    # Get intunewin file Meta data and assign intunewin file location variable
+    $IntuneWinFile = $CreateAppPackage.Path
+    $IntuneWinMetaData = Get-IntuneWin32AppMetaData -FilePath $IntuneWinFile
+}
+finally {
+    # Immer freigeben: bricht das Packen ab, blieb der Laufwerksbuchstabe sonst
+    # bis zum Abmelden belegt und der naechste Lauf griff zum naechsten Buchstaben.
+    subst $drive /d
+}
 
 # Create Detection Rule
 $DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile ($apppath + "\detection.ps1")

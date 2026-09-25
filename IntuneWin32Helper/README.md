@@ -11,6 +11,12 @@ and `packetRoot`. It is **not** version controlled, because the client secret is
 clear text. On first start it is created automatically from `Config/config.sample.json`;
 fill it in via the gear icon in the start dialog or by editing the file.
 
+## Third-party components
+
+`ServiceUI.exe` in this folder is a Microsoft component and is **not** covered by this
+repository's MIT license - see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), which also
+records that its redistribution terms have not been established.
+
 ## Checks
 
 Before committing, run the structural checks from this folder:
