@@ -7,6 +7,12 @@ Tools for Microsoft Intune, one folder per tool. Windows PowerShell 5.1, Microso
 | [**GroupAppAssignment**](GroupAppAssignment/README.md) | Intune assignments seen from a group (or All users / All devices): apps, configuration profiles (templates and settings catalog), compliance, app configuration, app protection, policy sets – what is assigned in which mode, plus adding, changing and removing assignments. Platform filter (default iOS). |
 | [**IntuneWin32Helper**](IntuneWin32Helper/README.md) | Create and deploy Intune Win32 apps with PSADT: packages the source, builds detection and requirement rules, uploads to Intune and updates existing apps. WinGet apps supported; the target tenant is picked once per run across several apps. |
 
+## Rückkehrpunkte
+
+Stände, die nachweislich gegen einen echten Tenant gelaufen sind, stehen mit
+Beleg und bekannten Mängeln in [RELEASES.md](RELEASES.md). Dort steht auch, wie
+man dorthin zurückkehrt, wenn die Weiterentwicklung etwas bricht.
+
 ## Repository conventions
 
 All `.ps1` files are UTF-8 with BOM (otherwise Windows PowerShell 5.1 mangles non-ASCII characters) and run
