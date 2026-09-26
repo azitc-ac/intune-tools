@@ -5,6 +5,10 @@
     # Ist er gesetzt, erscheint in diesem Skript kein Auswahldialog mehr.
     $Tenant
 )
+# Vorlagen-Stempel, gesetzt beim Erzeugen. Das Inventar vergleicht ihn gegen den
+# aktuellen Vorlagenstand und zeigt so, welches Paket nachgezogen werden sollte.
+# ToolTemplateFingerprint: #TPLFP#
+
 $rootDir = "#ROOT#"
 
 # Funktionen zuerst laden: die Konfiguration kommt ueber Get-ToolConfig.

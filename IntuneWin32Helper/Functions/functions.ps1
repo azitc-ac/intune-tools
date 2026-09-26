@@ -660,6 +660,199 @@ function Open-ScriptForEditing {
     Start-Process -FilePath 'notepad.exe' -ArgumentList $Path
 }
 
+function Get-TemplateFingerprint {
+    <#
+        .SYNOPSIS
+        Kurz-Hash ueber die Vorlagen, aus denen ein Paket erzeugt wird.
+
+        .DESCRIPTION
+        Wird beim Erstellen in das erzeugte deploy.ps1 gestempelt. Das Inventar
+        vergleicht den Stempel gegen den aktuellen Stand und zeigt damit, welches
+        Paket aus einer aelteren Vorlage stammt.
+
+        Ohne das ist "veraltet" nicht sichtbar. Genau daran hing die Entscheidung,
+        die Artefakte weiter im Paket zu lassen: unveraenderliche Pakete sind gut,
+        aber nur wenn man sieht, welche nachgezogen werden sollten.
+
+        Gehasht wird der INHALT, nicht der Zeitstempel - ein Kopieren des Repos
+        darf den Fingerprint nicht veraendern.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$RootDir)
+
+    $templateDir = Join-Path $RootDir 'Templates'
+    $names = @('deploy_template.ps1', 'detection_template.ps1', 'detection_template-WinGetApp.ps1') | Sort-Object
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $builder = New-Object System.Text.StringBuilder
+        foreach ($name in $names) {
+            $path = Join-Path $templateDir $name
+            if (-not (Test-Path -LiteralPath $path)) { continue }
+            $hash = $sha.ComputeHash([System.IO.File]::ReadAllBytes($path))
+            $null = $builder.Append($name).Append(':').Append([BitConverter]::ToString($hash).Replace('-', '')).Append(';')
+        }
+        if ($builder.Length -eq 0) { return '' }
+        $final = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($builder.ToString()))
+        return ([BitConverter]::ToString($final).Replace('-', '').Substring(0, 12).ToLowerInvariant())
+    }
+    finally { $sha.Dispose() }
+}
+
+function Get-PackageTemplateFingerprint {
+    <#
+        Liest den Vorlagen-Stempel aus einem erzeugten deploy.ps1. Leer heisst:
+        das Paket stammt aus einer Zeit vor dem Stempel - das ist ein anderer
+        Zustand als "veraltet" und wird im Inventar auch anders angezeigt.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$DeployScriptPath)
+
+    if ([string]::IsNullOrWhiteSpace($DeployScriptPath)) { return '' }
+    if (-not (Test-Path -LiteralPath $DeployScriptPath)) { return '' }
+
+    $raw = Get-Content -LiteralPath $DeployScriptPath -Raw
+    $match = [regex]::Match($raw, '(?m)^#\s*ToolTemplateFingerprint:\s*(\S+)')
+    if (-not $match.Success) { return '' }
+
+    $value = $match.Groups[1].Value
+    # Der unersetzte Platzhalter ist kein Fingerprint.
+    if ($value -eq '#TPLFP#') { return '' }
+    return $value
+}
+
+function Get-AppInventory {
+    <#
+        .SYNOPSIS
+        Eine Zeile pro App, mit dem Zustand aller drei Dinge, die es zu einer App gibt.
+
+        .DESCRIPTION
+        Muster aus SCCMAppHelper. Drei Dinge existieren pro App, und die Aufgabe
+        des Werkzeugs ist es, sie in Deckung zu halten:
+
+            Definition   eine Zeile in Apps.csv
+            Paket        "<Name> - <Version>\" unter packetRoot, mit deploy.ps1
+            App          ein Win32-App-Eintrag im Tenant
+
+        Bisher war nichts davon sichtbar: deployApps listete Ordner, die zufaellig
+        ein deploy.ps1 enthielten. Welche Definition kein Paket hat, welches Paket
+        nicht veroeffentlicht ist, welches aus einer aelteren Vorlage stammt und wo
+        dieselbe App mehrfach in Intune liegt - alles nicht erkennbar. Die
+        Geister-App nach einem fehlgeschlagenen Upload fiel deshalb nur im
+        Transcript auf.
+
+        Reine Funktion ueber ihre Eingaben: der Tenant-Zustand wird
+        hineingegeben, nicht hier geholt. Damit pruefbar ohne Tenant.
+
+        $IntuneApps = $null bedeutet "nicht abgefragt" und ist ein anderer
+        Zustand als "keine gefunden".
+    #>
+    [CmdletBinding()]
+    param(
+        $Definitions = @(),
+        [Parameter(Mandatory = $true)][string]$PacketRoot,
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        $IntuneApps = $null
+    )
+
+    $currentFingerprint = Get-TemplateFingerprint -RootDir $RootDir
+
+    # Pakete ueber Get-DeployScripts - eine Quelle fuer "welche Pakete gibt es".
+    $packages = @()
+    if (Test-Path -LiteralPath $PacketRoot) {
+        try { $packages = @(Get-DeployScripts -PacketRoot $PacketRoot) } catch { $packages = @() }
+    }
+
+    # Intune-Apps nach Anzeigenamen zaehlen. Mehr als eine ist bemerkenswert:
+    # so sehen Dubletten und Geister-Apps aus.
+    $intuneByName = @{}
+    $intuneChecked = ($null -ne $IntuneApps)
+    if ($intuneChecked) {
+        foreach ($app in @($IntuneApps)) {
+            $name = [string]$app.displayName
+            if (-not $name) { continue }
+            if ($intuneByName.ContainsKey($name)) { $intuneByName[$name] = $intuneByName[$name] + 1 }
+            else { $intuneByName[$name] = 1 }
+        }
+    }
+
+    # Schluessel ist "<Name> - <Version>", genau wie der Paketordner heisst.
+    $rows = @{}
+    $order = New-Object System.Collections.ArrayList
+
+    $touch = {
+        param([string]$name, [string]$version)
+        $key = ('{0} - {1}' -f $name, $version)
+        if (-not $rows.ContainsKey($key)) {
+            $rows[$key] = [pscustomobject]@{
+                AppName     = $name
+                AppVersion  = $version
+                Definition  = '-'
+                Package     = '-'
+                Template    = '-'
+                Intune      = $(if ($intuneChecked) { '-' } else { 'not checked' })
+                Next        = ''
+                FullPath    = ''
+            }
+            $null = $order.Add($key)
+        }
+        return $rows[$key]
+    }
+
+    foreach ($definition in @($Definitions)) {
+        $name = [string]$definition.DisplayName
+        if (-not $name) { continue }
+        $row = & $touch $name ([string]$definition.Version)
+        $row.Definition = 'yes'
+    }
+
+    foreach ($package in $packages) {
+        $row = & $touch ([string]$package.AppName) ([string]$package.AppVersion)
+        $row.Package  = 'yes'
+        $row.FullPath = [string]$package.FullPath
+
+        $stamp = Get-PackageTemplateFingerprint -DeployScriptPath $package.FullPath
+        if (-not $stamp)                            { $row.Template = 'unstamped' }
+        elseif ($stamp -eq $currentFingerprint)     { $row.Template = 'current' }
+        else                                        { $row.Template = 'outdated' }
+    }
+
+    foreach ($key in $order) {
+        $row = $rows[$key]
+        if ($intuneChecked -and $intuneByName.ContainsKey($row.AppName)) {
+            $count = $intuneByName[$row.AppName]
+            $row.Intune = $(if ($count -eq 1) { 'yes' } else { ('yes ({0}x)' -f $count) })
+        }
+
+        # Der naechste sinnvolle Schritt folgt aus dem Zustand der Zeile.
+        if ($row.Package -ne 'yes') {
+            $row.Next = 'create package'
+        }
+        elseif ($row.Definition -ne 'yes') {
+            $row.Next = 'package without a row in Apps.csv'
+        }
+        elseif ($row.Intune -like 'yes (*') {
+            $row.Next = 'check duplicates in Intune'
+        }
+        elseif ($row.Intune -eq '-') {
+            $row.Next = 'deploy'
+        }
+        elseif ($row.Template -eq 'outdated' -or $row.Template -eq 'unstamped') {
+            $row.Next = 'renew from template, then deploy'
+        }
+        elseif ($intuneChecked) {
+            $row.Next = 'up to date'
+        }
+        else {
+            # Ohne Tenant-Abfrage ist "up to date" eine Behauptung ueber etwas,
+            # das niemand nachgesehen hat - dann bleibt nur der Vorschlag.
+            $row.Next = 'deploy'
+        }
+    }
+
+    return @($order | ForEach-Object { $rows[$_] })
+}
+
 function Write-DeployScript {
     <#
         .SYNOPSIS
@@ -701,7 +894,8 @@ function Write-DeployScript {
         -replace "#PUB#", $Publisher -replace "#DM#", "DetectionScript" -replace "#VER#", $AppVersion `
         -replace "#DESC#", $Description -replace "#TOOLVER#", $ToolVersion `
         -replace "#ARCH#", $Architecture -replace "#MINOS#", $MinimumOS `
-        -replace "#MSIPRODUCTCODE#", $MsiProductCode |
+        -replace "#MSIPRODUCTCODE#", $MsiProductCode `
+        -replace "#TPLFP#", (Get-TemplateFingerprint -RootDir $RootDir) |
         Out-File (Join-Path $AppFolder "deploy.ps1") -Encoding utf8 -Force
 }
 
@@ -870,24 +1064,44 @@ function Get-DeployScripts {
 
 function deployApps{    
     
-    $deployableApps = Get-DeployScripts -PacketRoot $packetRoot #-Recurse
-    $appsToDeploy = Open-SelectDialog -data $deployableApps -title "Select Apps to deploy" -large
-    
-    # Rückgabe bereinigen (bekannter Workaround gegen int-Werte in Collections)
-    if ($appsToDeploy -ne $null) {
-        $appsToDeploy = $appsToDeploy | Where-Object { $_ -is [System.Management.Automation.PSCustomObject] }
+    # Tenant ZUERST: ohne Anmeldung kann das Inventar den Intune-Zustand nicht
+    # zeigen, und der ist die Haelfte der Information. Die Auswahl wird an jedes
+    # deploy.ps1 uebergeben, damit dort kein weiterer Dialog kommt.
+    $tenant = Initialize-IntuneConnection -Tenants $config.tenants
+
+    # Den Tenant-Zustand einmal holen. Scheitert das, bleibt die Spalte leer -
+    # das Inventar ist auch ohne Intune brauchbar.
+    $intuneApps = $null
+    try {
+        Write-Host "Reading the Win32 apps of the tenant..."
+        $intuneApps = @(Get-IntuneWin32App -ErrorAction Stop)
+        Write-Host ("{0} Win32 app(s) in the tenant." -f @($intuneApps).Count)
+    }
+    catch {
+        Write-Host ("Tenant state could not be read ({0}) - the Intune column stays empty." -f $_.Exception.Message) -ForegroundColor Yellow
     }
 
-    # Abbruchbedingung: wenn Nutzer "Cancel" klickt oder Fenster schließt → keine gültigen Items
+    $definitions = @()
+    try { $definitions = @(Import-Csv -Path (Join-Path $rootDir 'apps.csv') -Delimiter ';') }
+    catch { Write-Host ("Apps.csv could not be read ({0}) - the Definition column stays empty." -f $_.Exception.Message) -ForegroundColor Yellow }
+
+    $inventory = Get-AppInventory -Definitions $definitions -PacketRoot $packetRoot -RootDir $rootDir -IntuneApps $intuneApps
+
+    $selection = Get-DialogSelection -Value (Open-SelectDialog -data @($inventory) `
+        -title "Inventory - definition, package, tenant. Select what to deploy" -large)
+
+    # Abbruchbedingung: Cancel oder Fenster geschlossen.
     # return, NICHT break: deployApps hat keine eigene Schleife, ein break wuerde die
     # while-Schleife im Startskript beenden und damit das ganze Tool schliessen.
-    if ($appsToDeploy -eq $null -or ($appsToDeploy | Measure-Object).Count -eq 0) {
-        return
-    }
+    if (@($selection).Count -eq 0) { return }
 
-    # Ziel-Tenant EINMAL fuer den gesamten Lauf waehlen und anmelden. Die Auswahl
-    # wird an jedes deploy.ps1 uebergeben, damit dort kein weiterer Dialog kommt.
-    $tenant = Initialize-IntuneConnection -Tenants $config.tenants
+    # Verteilen kann nur, was ein Paket hat.
+    $appsToDeploy = @($selection | Where-Object { $_.FullPath })
+    $withoutPackage = @($selection).Count - @($appsToDeploy).Count
+    if ($withoutPackage -gt 0) {
+        Write-Host ("{0} selected row(s) have no package yet and are skipped - create them first." -f $withoutPackage) -ForegroundColor Yellow
+    }
+    if (@($appsToDeploy).Count -eq 0) { return }
 
     # Verarbeitung der ausgewählten Apps
     $isBulk = (@($appsToDeploy).Count -gt 1)

@@ -774,6 +774,57 @@ foreach ($p in $parsed.Values) {
 }
 
 # ---------------------------------------------------------------------------
+# 24) Inventar und Vorlagen-Stempel. Ohne das war nicht sichtbar, welche
+#     Definition kein Paket hat, welches Paket nicht veroeffentlicht ist,
+#     welches aus einer aelteren Vorlage stammt und wo dieselbe App mehrfach in
+#     Intune liegt. Der Stempel ist die Bedingung dafuer, die Artefakte
+#     ueberhaupt im Paket lassen zu koennen: unveraenderlich ist nur brauchbar,
+#     wenn man sieht, was nachgezogen werden sollte.
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    foreach ($needed in 'Get-AppInventory', 'Get-TemplateFingerprint', 'Get-PackageTemplateFingerprint') {
+        $found = $functionsFile.Ast.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $n.Name -eq $needed
+        }, $true)
+        if (-not $found) {
+            Add-Failure "InventoryAndFingerprint" ("{0} fehlt" -f $needed)
+        }
+    }
+
+    # deployApps muss das Inventar benutzen, nicht wieder nur die Ordnerliste.
+    $deploy = $functionsFile.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -eq 'deployApps'
+    }, $true)
+    if ($deploy -and $deploy[0].Extent.Text -notmatch 'Get-AppInventory') {
+        Add-Failure "InventoryAndFingerprint" "deployApps benutzt Get-AppInventory nicht - die Auswahl zeigt dann wieder nur Ordner"
+    }
+
+    # Der Stempel muss beim Rendern ersetzt werden, sonst steht der Platzhalter
+    # im Paket und jedes Paket gilt als ungestempelt.
+    $write = $functionsFile.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -eq 'Write-DeployScript'
+    }, $true)
+    if ($write -and $write[0].Extent.Text -notmatch 'Get-TemplateFingerprint') {
+        Add-Failure "InventoryAndFingerprint" "Write-DeployScript setzt den Vorlagen-Stempel nicht - jedes Paket erschiene als ungestempelt"
+    }
+}
+
+$checked++
+if (Test-Path -LiteralPath $templatePath) {
+    $tplText = Get-Content -LiteralPath $templatePath -Raw
+    if ($tplText -notmatch '(?m)^#\s*ToolTemplateFingerprint:\s*#TPLFP#') {
+        Add-Failure "InventoryAndFingerprint" "deploy_template.ps1 traegt die Zeile 'ToolTemplateFingerprint: #TPLFP#' nicht - ohne sie gibt es keinen Stempel zu vergleichen"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

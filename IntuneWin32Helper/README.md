@@ -4,6 +4,31 @@ See https://blog.zarenko.net/intune-apps-verteilen-leicht-gemacht/<br><br>
 <img width="726" height="443" alt="Screenshot 2025-12-09 12-42-03" src="https://github.com/user-attachments/assets/6537dcc9-3a4a-4c34-a831-f73432481e03" />
 
 
+## Inventory
+
+"Deploy existing apps" no longer lists folders that happen to hold a `deploy.ps1`. It shows one row
+per app with the state of all three things that exist per app, and you pick from that list what to
+deploy:
+
+| Column | Meaning |
+| --- | --- |
+| `Definition` | a row in `Apps.csv` |
+| `Package` | the folder `<Name> - <Version>\` under `packetRoot`, with `deploy.ps1` |
+| `Template` | `current`, `outdated` or `unstamped` - see below |
+| `Intune` | present in the tenant; `yes (2x)` means duplicates |
+| `Next` | the sensible next step, derived from the row |
+
+The generated `deploy.ps1` and `detection.ps1` stay **inside** the package on purpose: the package
+is then a record of what was actually deployed, a template change cannot silently alter a package
+that was already tested, and a single app can be given a special case by hand. The price is that a
+template fix does not reach old packages by itself - which is exactly what the `Template` column
+makes visible. `Write-DeployScript` stamps every package with a short hash over the templates
+(`# ToolTemplateFingerprint:`), and the inventory compares it against the current state.
+`unstamped` means the package predates the stamp.
+
+Renewing happens on deploy (`Update-DeployScript`, with a `deploy.ps1.bak` backup) and only for
+packages that need it.
+
 ## Configuration
 
 `Config/config.json` holds the tenants (tenant name, app registration id, client secret)
