@@ -727,6 +727,53 @@ if (Test-Path -LiteralPath $templatePath) {
 }
 
 # ---------------------------------------------------------------------------
+# 23) Install- und Uninstall-Befehle werden abgeleitet, und die ISE wird nicht
+#     mehr direkt aufgerufen. Vorher musste der Benutzer die Befehle von Hand
+#     tippen; der Ablauf hielt dafuer zweimal mit "pause" an, womit
+#     Massenerstellung fuer Nicht-WinGet-Apps konstruktiv unmoeglich war.
+#     powershell_ise ist abgekuendigt und fehlt auf Server Core - daher nur
+#     ueber Open-ScriptForEditing, das auf Notepad zurueckfaellt.
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    foreach ($needed in 'Get-DerivedInstallCommands', 'Get-InstallerEngine', 'Find-PackageInstaller', 'Open-ScriptForEditing') {
+        $found = $functionsFile.Ast.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $n.Name -eq $needed
+        }, $true)
+        if (-not $found) {
+            Add-Failure "InstallCommandsDerived" ("{0} fehlt - ohne sie muessen die Befehle wieder von Hand getippt werden" -f $needed)
+        }
+    }
+
+    $usedInCreate = $functionsFile.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'Get-DerivedInstallCommands'
+    }, $true)
+    if (-not $usedInCreate) {
+        Add-Failure "InstallCommandsDerived" "Get-DerivedInstallCommands wird nirgends aufgerufen - eine Funktion, die niemand benutzt"
+    }
+}
+
+foreach ($p in $parsed.Values) {
+    $checked++
+    $ise = $p.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -in @('powershell_ise', 'powershell_ise.exe')
+    }, $true)
+    foreach ($call in $ise) {
+        $fn = & $enclosingFunction $call
+        if ($fn -ne 'Open-ScriptForEditing') {
+            Add-Failure "InstallCommandsDerived" ("{0}:{1} ruft powershell_ise direkt auf (in '{2}') - Open-ScriptForEditing verwenden" -f `
+                $p.File.Name, $call.Extent.StartLineNumber, $fn)
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

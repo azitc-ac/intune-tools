@@ -507,6 +507,159 @@ function Write-PackagePathWarning {
     }
 }
 
+function Get-InstallerEngineSwitch {
+    <#
+        Die Silent-Schalter je Installer-Engine. Uebernommen aus SCCMAppHelper.
+        'unknown' bekommt /S - den NSIS-Schalter - und einen Vermerk, dass das
+        geraten ist. Der Vermerk landet als Kommentar im erzeugten Befehl, damit
+        beim Nachlesen niemand eine Sicherheit unterstellt, die es nicht gibt.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Engine)
+
+    switch ($Engine.ToLower()) {
+        'inno'           { return [pscustomobject]@{ Engine = 'inno';           Install = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'; Uninstall = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'; Note = '' } }
+        'nsis'           { return [pscustomobject]@{ Engine = 'nsis';           Install = '/S';                                       Uninstall = '/S';                                       Note = '' } }
+        '7zip'           { return [pscustomobject]@{ Engine = '7zip';           Install = '/S';                                       Uninstall = '/S';                                       Note = '' } }
+        'burn'           { return [pscustomobject]@{ Engine = 'burn';           Install = '/quiet /norestart';                        Uninstall = '/quiet /norestart';                        Note = '' } }
+        'installshield'  { return [pscustomobject]@{ Engine = 'installshield';  Install = '/s /v"/qn REBOOT=ReallySuppress"';         Uninstall = '/s';                                       Note = 'InstallShield: /s /v"/qn" bei MSI-basierten Setups, /s bei InstallScript - Herstellerdoku pruefen' } }
+        'vsbootstrapper' { return [pscustomobject]@{ Engine = 'vsbootstrapper'; Install = '--quiet --norestart --wait';               Uninstall = '--quiet --norestart --wait';               Note = 'Visual-Studio-Bootstrapper: --wait ist noetig, sonst kehrt der Installer vor dem Ende zurueck' } }
+        default          { return [pscustomobject]@{ Engine = 'unknown';        Install = '/S';                                       Uninstall = '/S';                                       Note = 'Engine nicht erkannt - /S ist der NSIS-Schalter, vor dem Verteilen pruefen' } }
+    }
+}
+
+function Get-InstallerEngine {
+    <#
+        Erkennt die Installer-Engine an der Datei selbst: Versionsressource plus
+        die ersten 6 MB als ASCII und als Unicode. Uebernommen aus SCCMAppHelper.
+
+        Der Sinn: die Silent-Schalter muessen nicht mehr von Hand in Apps.csv
+        getippt werden. Was nicht erkannt wird, ist ausdruecklich geraten und
+        sagt das auch.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $engine = 'unknown'
+    try {
+        $info = (Get-Item -LiteralPath $Path).VersionInfo
+        $description = [string]$info.FileDescription + ' ' + [string]$info.InternalName + ' ' + [string]$info.ProductName
+
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $length = [int][Math]::Min($stream.Length, 6MB)
+            $buffer = New-Object byte[] $length
+            $null = $stream.Read($buffer, 0, $length)
+        }
+        finally { $stream.Close() }
+
+        $ascii   = [System.Text.Encoding]::ASCII.GetString($buffer)
+        $unicode = [System.Text.Encoding]::Unicode.GetString($buffer)
+
+        if     ($ascii -match 'Inno Setup'    -or $unicode -match 'Inno Setup')    { $engine = 'inno' }
+        elseif ($ascii -match 'Nullsoft'      -or $unicode -match 'Nullsoft')      { $engine = 'nsis' }
+        elseif ($ascii -match '\.wixburn')                                         { $engine = 'burn' }
+        elseif ($ascii -match 'InstallShield' -or $unicode -match 'InstallShield') { $engine = 'installshield' }
+        elseif ($description -match '7-Zip Installer')                             { $engine = '7zip' }
+        elseif ($description -match '^vs_|SSMS Installer|Visual Studio Installer') { $engine = 'vsbootstrapper' }
+    }
+    catch { $engine = 'unknown' }
+
+    return (Get-InstallerEngineSwitch -Engine $engine)
+}
+
+function Find-PackageInstaller {
+    <#
+        Der Installer eines Pakets: genau ein MSI oder genau eine EXE in Files\.
+        Sind es mehrere, wird nichts geliefert - ein geratener Installer haette
+        die falsche Engine und damit die falschen Schalter.
+    #>
+    param([Parameter(Mandatory = $true)][string]$ContentPath)
+
+    $files = Join-Path $ContentPath 'Files'
+    if (-not (Test-Path -LiteralPath $files)) { return $null }
+
+    $msi = @(Get-ChildItem -LiteralPath $files -Filter '*.msi' -File -ErrorAction SilentlyContinue)
+    if ($msi.Count -eq 1) { return [pscustomobject]@{ Kind = 'msi'; File = $msi[0] } }
+    if ($msi.Count -gt 1) { return $null }
+
+    $exe = @(Get-ChildItem -LiteralPath $files -Filter '*.exe' -File -ErrorAction SilentlyContinue)
+    if ($exe.Count -eq 1) { return [pscustomobject]@{ Kind = 'exe'; File = $exe[0] } }
+    return $null
+}
+
+function Get-DerivedInstallCommands {
+    <#
+        .SYNOPSIS
+        Leitet Install- und Uninstall-Befehl aus dem Installer im Paket ab.
+
+        .DESCRIPTION
+        Bisher musste der Benutzer sie von Hand in Apps.csv tippen oder in der
+        ISE ins PSADT-Skript schreiben - mit zwei "pause" im Ablauf. Damit war
+        Massenerstellung fuer Nicht-WinGet-Apps konstruktiv unmoeglich.
+
+        Die Befehlsformen sind die des Schwester-Tools SCCMAppHelper:
+        MSI ueber Start-ADTMsiProcess, EXE ueber Start-ADTProcess und
+        Uninstall-ADTApplication.
+
+        .OUTPUTS
+        Objekt mit Install, Uninstall, Engine, FileName und Note - oder $null,
+        wenn kein eindeutiger Installer gefunden wurde.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ContentPath,
+        [Parameter(Mandatory = $true)][string]$AppName
+    )
+
+    $installer = Find-PackageInstaller -ContentPath $ContentPath
+    if (-not $installer) { return $null }
+
+    $name = $installer.File.Name
+
+    if ($installer.Kind -eq 'msi') {
+        return [pscustomobject]@{
+            Engine    = 'msi'
+            FileName  = $name
+            Install   = "Start-ADTMsiProcess -Action Install -FilePath '$name'"
+            Uninstall = "Start-ADTMsiProcess -Action Uninstall -FilePath '$name'"
+            Note      = ''
+            Certain   = $true
+        }
+    }
+
+    $engine = Get-InstallerEngine -Path $installer.File.FullName
+    $searchName = $AppName.Replace("'", "''")
+
+    $install   = "Start-ADTProcess -FilePath '$name' -ArgumentList '$($engine.Install)'"
+    $uninstall = "Uninstall-ADTApplication -Name '$searchName' -ApplicationType EXE -AdditionalArgumentList '$($engine.Uninstall)'"
+    if ($engine.Note) {
+        $install   += "   # " + $engine.Note
+        $uninstall += "   # " + $engine.Note
+    }
+
+    return [pscustomobject]@{
+        Engine    = $engine.Engine
+        FileName  = $name
+        Install   = $install
+        Uninstall = $uninstall
+        Note      = $engine.Note
+        Certain   = ($engine.Engine -ne 'unknown')
+    }
+}
+
+function Open-ScriptForEditing {
+    <#
+        Oeffnet ein Skript zum Nachbessern. powershell_ise ist abgekuendigt und
+        auf Server Core nicht vorhanden - deshalb erst ISE, sonst Notepad.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (Get-Command -Name 'powershell_ise.exe' -ErrorAction SilentlyContinue) {
+        Start-Process -FilePath 'powershell_ise.exe' -ArgumentList $Path
+        return
+    }
+    Start-Process -FilePath 'notepad.exe' -ArgumentList $Path
+}
+
 function Write-DeployScript {
     <#
         .SYNOPSIS
@@ -908,14 +1061,41 @@ function createApps{
             -Architecture ([string]$app.Architecture) -MinimumOS ([string]$app.MinimumOS) `
             -MsiProductCode ([string]$app.MsiProductCode)
   
-        # manuell: files reinpacken, install u uninstall routine einpflegen
+        # Dateien muss weiterhin ein Mensch bereitstellen - fuer eine
+        # Nicht-WinGet-App gibt es keine Quelle, aus der das Tool sie holen
+        # koennte. Die Befehle dagegen leitet es jetzt selbst ab.
         if($AppVersion -ne "LatestAvailable"){
             Write-Host "ToDo: now add/copy all required files for setup, then press ENTER" -ForegroundColor Cyan
             explorer "$SourcePath\in\Files"
             pause
-            Write-Host "ToDo: fill Install & Uninstall sections with life, then press ENTER. Deployment to Intune will begin if previously selected." -ForegroundColor Cyan
-            powershell_ise $SourcePath\in\Invoke-AppDeployToolkit.ps1
-            pause
+
+            $needsEditor = $true
+            if(-not $InstallCmdInternal -and -not $UninstallCmdInternal){
+                $derived = Get-DerivedInstallCommands -ContentPath "$SourcePath\in" -AppName $AppName
+                if($derived){
+                    Write-Host ("Derived from {0} (engine: {1}):" -f $derived.FileName, $derived.Engine) -ForegroundColor Green
+                    Write-Host ("  Install:   {0}" -f $derived.Install)
+                    Write-Host ("  Uninstall: {0}" -f $derived.Uninstall)
+                    Insert-Commands -Install $derived.Install -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+                    Insert-Commands -Uninstall $derived.Uninstall -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+                    # Nur wenn geraten wurde, muss noch jemand draufschauen.
+                    $needsEditor = -not $derived.Certain
+                    if($derived.Note){ Write-Host ("  Note: {0}" -f $derived.Note) -ForegroundColor Yellow }
+                }
+                else{
+                    Write-Host "No single installer found in Files\ - fill the Install and Uninstall sections by hand." -ForegroundColor Yellow
+                }
+            }
+            else{
+                # Apps.csv gibt die Befehle vor, die stehen schon im Skript.
+                $needsEditor = $false
+            }
+
+            if($needsEditor){
+                Write-Host "ToDo: check the Install & Uninstall sections, then press ENTER. Deployment to Intune will begin if previously selected." -ForegroundColor Cyan
+                Open-ScriptForEditing -Path "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+                pause
+            }
         }
         if($createAndDeploy){
             #deploy.ps1 aufrufen - der Tenant kommt aus dem Lauf, daher kein weiterer Dialog
