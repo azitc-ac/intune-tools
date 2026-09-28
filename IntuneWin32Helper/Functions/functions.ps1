@@ -788,6 +788,19 @@ function Get-PackageTemplateFingerprint {
     return $value
 }
 
+function Test-IntuneAppHasContent {
+    <#
+        Hat ein Win32-App-Eintrag Inhalt? Ein fehlgeschlagener Upload hinterlaesst
+        einen Eintrag mit publishingState "notPublished" und ohne
+        committedContentVersion (im Feld 2026-09-28: uploadState 0, size 0).
+        Beide Felder liefert schon die Liste von Get-IntuneWin32App mit.
+    #>
+    param([Parameter(Mandatory = $true)]$App)
+    if ([string]::IsNullOrEmpty([string]$App.committedContentVersion)) { return $false }
+    if ($App.publishingState -and [string]$App.publishingState -ne 'published') { return $false }
+    return $true
+}
+
 function Get-AppInventory {
     <#
         .SYNOPSIS
@@ -831,8 +844,12 @@ function Get-AppInventory {
     }
 
     # Intune-Apps nach Anzeigenamen zaehlen. Mehr als eine ist bemerkenswert:
-    # so sehen Dubletten und Geister-Apps aus.
+    # so sehen Dubletten aus. Getrennt gezaehlt werden Eintraege OHNE Inhalt -
+    # das hinterlaesst ein fehlgeschlagener Upload (Geister-App). Frueher zaehlten
+    # sie einfach als "yes", und das Inventar meldete im Feld "up to date" fuer
+    # eine App, die nie verteilt werden kann.
     $intuneByName = @{}
+    $intuneEmptyByName = @{}
     $intuneChecked = ($null -ne $IntuneApps)
     if ($intuneChecked) {
         foreach ($app in @($IntuneApps)) {
@@ -840,6 +857,10 @@ function Get-AppInventory {
             if (-not $name) { continue }
             if ($intuneByName.ContainsKey($name)) { $intuneByName[$name] = $intuneByName[$name] + 1 }
             else { $intuneByName[$name] = 1 }
+            if (-not (Test-IntuneAppHasContent -App $app)) {
+                if ($intuneEmptyByName.ContainsKey($name)) { $intuneEmptyByName[$name] = $intuneEmptyByName[$name] + 1 }
+                else { $intuneEmptyByName[$name] = 1 }
+            }
         }
     }
 
@@ -886,13 +907,22 @@ function Get-AppInventory {
 
     foreach ($key in $order) {
         $row = $rows[$key]
+        $emptyCount = 0
         if ($intuneChecked -and $intuneByName.ContainsKey($row.AppName)) {
             $count = $intuneByName[$row.AppName]
-            $row.Intune = $(if ($count -eq 1) { 'yes' } else { ('yes ({0}x)' -f $count) })
+            if ($intuneEmptyByName.ContainsKey($row.AppName)) { $emptyCount = $intuneEmptyByName[$row.AppName] }
+            if ($count -eq 1 -and $emptyCount -eq 1) { $row.Intune = 'no content' }
+            elseif ($count -eq 1)                    { $row.Intune = 'yes' }
+            elseif ($emptyCount -gt 0)               { $row.Intune = ('yes ({0}x, {1} without content)' -f $count, $emptyCount) }
+            else                                     { $row.Intune = ('yes ({0}x)' -f $count) }
         }
 
         # Der naechste sinnvolle Schritt folgt aus dem Zustand der Zeile.
-        if ($row.Package -ne 'yes') {
+        if ($emptyCount -gt 0) {
+            # Zuerst: ein inhaltsloser Eintrag verdeckt sonst jeden anderen Befund.
+            $row.Next = 'remove the entry without content in Intune'
+        }
+        elseif ($row.Package -ne 'yes') {
             $row.Next = 'create package'
         }
         elseif ($row.Definition -ne 'yes') {
@@ -972,13 +1002,18 @@ function Update-DeployScript {
         Zieht ein vorhandenes deploy.ps1 auf die aktuelle Vorlage nach.
 
         .DESCRIPTION
-        Aeltere deploy.ps1 fragen den Tenant selbst ab und koennen keinen
-        uebergebenen Tenant annehmen - in einem Bulk-Lauf erscheint der Dialog
-        dadurch pro App. Hier wird ein solches Skript neu erzeugt; die
-        app-spezifischen Werte werden aus dem alten Skript uebernommen und eine
-        Sicherung als deploy.ps1.bak angelegt. Ein Skript, das den Parameter
-        schon kennt, bleibt unberuehrt - hand-angepasste aktuelle Skripte werden
-        also nicht ueberschrieben.
+        Erneuert wird, was das Inventar als "outdated" oder "unstamped" fuehrt:
+        der Vorlagen-Stempel im Skript weicht vom aktuellen Stand ab oder fehlt.
+        Die app-spezifischen Werte werden aus dem alten Skript uebernommen, das
+        alte als deploy.ps1.bak gesichert. Ein Skript mit aktuellem Stempel
+        bleibt unberuehrt - auch wenn es von Hand angepasst wurde.
+
+        Frueher entschied hier ein anderes Merkmal als im Inventar: erneuert
+        wurde nur ein Skript OHNE $Tenant/Initialize-IntuneConnection. Das kennt
+        aber schon die Vorlage von 2.0.0 - im Feld (2026-09-28) wurde dadurch
+        weder ein Paket aus 2.0.0 noch eines mit veraltetem Stempel erneuert,
+        obwohl das Inventar "renew from template" anzeigte. Vorlagen-Korrekturen
+        erreichten bestehende Pakete nie.
 
         .OUTPUTS
         [bool] $true, wenn erneuert wurde.
@@ -992,10 +1027,13 @@ function Update-DeployScript {
 
     if (-not (Test-Path -LiteralPath $DeployScriptPath)) { return $false }
 
-    $raw = Get-Content -LiteralPath $DeployScriptPath -Raw
+    # Schon aktuell? Dann nichts anfassen. Dasselbe Merkmal wie im Inventar
+    # (Get-AppInventory, Spalte Template) - sonst zeigt das eine "outdated" und
+    # das andere erneuert trotzdem nicht.
+    $stamp = Get-PackageTemplateFingerprint -DeployScriptPath $DeployScriptPath
+    if ($stamp -and $stamp -eq (Get-TemplateFingerprint -RootDir $RootDir)) { return $false }
 
-    # Schon aktuell? Dann nichts anfassen.
-    if (($raw -match '\$Tenant') -and ($raw -match 'Initialize-IntuneConnection')) { return $false }
+    $raw = Get-Content -LiteralPath $DeployScriptPath -Raw
 
     $readValue = {
         param($text, $name)

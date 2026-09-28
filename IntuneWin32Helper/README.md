@@ -15,7 +15,7 @@ deploy:
 | `Definition` | a row in `Apps.csv` |
 | `Package` | the folder `<Name> - <Version>\` under `packetRoot`, with `deploy.ps1` |
 | `Template` | `current`, `outdated` or `unstamped` - see below |
-| `Intune` | present in the tenant; `yes (2x)` means duplicates |
+| `Intune` | present in the tenant; `yes (2x)` means duplicates; `no content` means an entry a failed upload left behind (not published, no committed content) |
 | `Next` | the sensible next step, derived from the row |
 
 The generated `deploy.ps1` and `detection.ps1` stay **inside** the package on purpose: the package
@@ -27,7 +27,8 @@ makes visible. `Write-DeployScript` stamps every package with a short hash over 
 `unstamped` means the package predates the stamp.
 
 Renewing happens on deploy (`Update-DeployScript`, with a `deploy.ps1.bak` backup) and only for
-packages that need it.
+packages that need it - by the same stamp the inventory shows: `outdated` and `unstamped` are
+renewed, `current` is left alone even if it was edited by hand.
 
 ## Configuration
 

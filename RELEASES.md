@@ -203,11 +203,39 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
       erscheint, die Spalte `Intune` stimmt gegen das Portal — und wie lange der Abruf
       beim echten App-Bestand dauert, gehört notiert. Das ist die einzige Neuerung, die
       bei jedem Start Zeit kostet.
-- [ ] **Vorlagen-Fingerprint** (`Get-TemplateFingerprint`,
+      **Zwischenstand — offen, weil den Dialog noch kein Mensch gesehen hat:**
+      Mit den echten Funktionen (ohne Dialog), Transcripts `…\2026-09-28_11-42-26.log`
+      (Test) und `…\2026-09-28_11-42-47.log` (PROD, nur lesend):
+      Abrufdauer `Get-IntuneWin32App` — **PROD `zarenko.onmicrosoft.com`: 63 Win32-Apps
+      in 17,7 s**; Test-Tenant: 16 in 3,7–4,1 s. `Get-AppInventory` selbst: 0,1 s.
+      Spalte `Intune` gegen Graph: die drei veröffentlichten Test-Apps `yes`, eine
+      Definition ohne Paket `create package`.
+      **Dabei gefundener Fehler, behoben:** der inhaltslose Eintrag aus dem
+      Upload-Abbruch stand als `yes` / `up to date` im Inventar — genau die
+      „Geister-App", für die das Inventar gebaut wurde, blieb unsichtbar. Jetzt
+      `no content` / „remove the entry without content in Intune"
+      (`Test-IntuneAppHasContent`: `committedContentVersion` leer oder
+      `publishingState` ≠ `published`; beides liefert die Liste schon mit). Im
+      Test-Tenant gibt es zwei solche Einträge — unseren und einen älteren.
+      Belegt durch `Tests/Test-InventoryAndRenewal.ps1`; Gegenprobe gefahren.
+- [x] **Vorlagen-Fingerprint** (`Get-TemplateFingerprint`,
       `Get-PackageTemplateFingerprint`). Beleg: ein altes Paket wird in der Spalte
       `Template` als veraltet geführt, `Update-DeployScript` zieht es nach und legt
       `deploy.ps1.bak` an; im erzeugten `deploy.ps1` steht ein echter Hash und nicht
       mehr der Platzhalter `#TPLFP#`.
+      **Im Feld zuerst gescheitert** (Transcript `…\2026-09-28_11-38-27.log`): zwei
+      echte alte Pakete — gerendert aus den Vorlagen von `1b6e2f0` (Stempel
+      `e55bbacf73f3`) und des Tags v2.0.0 (ohne Stempel). Das Inventar führte sie
+      richtig als `outdated` / `unstamped`, aber `Update-DeployScript` lieferte für
+      **beide** `False`, keine `.bak`, alter Stempel. Ursache: es erneuerte nur Skripte
+      ohne `$Tenant` — das kennt schon die Vorlage von 2.0.0. Vorlagen-Korrekturen
+      (etwa `Invoke-IntuneModuleCall`) hätten kein bestehendes Paket erreicht.
+      Behoben: `Update-DeployScript` entscheidet jetzt nach demselben Stempel wie das
+      Inventar; Test `Tests/Test-InventoryAndRenewal.ps1`, Gegenprobe gefahren.
+      **Beleg danach** (`…\2026-09-28_11-42-26.log`): beide → `True`, `.bak` angelegt,
+      Stempel `e55bbacf73f3` bzw. leer → `10f1ec2ad1dd` (= aktueller Stand), `#TPLFP#`
+      nicht mehr im Skript, das erneuerte Skript nutzt `Invoke-IntuneModuleCall`;
+      Architektur/MinimumOS (`x64`/`W11_22H2`) blieben erhalten.
 - [x] **Pfadlängen-Warnung** (`Measure-PackageContentPath`). Beleg: eine tief
       verschachtelte Quelle löst die Warnung aus.
       **Beleg (Lauf 2):** Paket „MSI" mit einer Datei 204 Zeichen unter `in\`. Z. 324–326
