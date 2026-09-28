@@ -15,20 +15,26 @@ dass Intune den Aufruf annimmt.
 | | |
 |---|---|
 | Commit | `dd47702` |
-| Branch | `release/IntuneWin32Helper-v2.0.0` |
+| Tag | `IntuneWin32Helper-v2.0.0` |
+| Branch (Zweitzeiger) | `release/IntuneWin32Helper-v2.0.0` |
 | Belegt am | 2026-09-25 |
 | Vom Tool selbst gemeldet | `$toolVersion = "2.0"` in `start-IntuneWin32Helper.ps1` |
 
 Zurückkehren:
 
 ```powershell
-git fetch origin release/IntuneWin32Helper-v2.0.0
-git checkout release/IntuneWin32Helper-v2.0.0
+git fetch origin --tags
+git checkout IntuneWin32Helper-v2.0.0
 ```
 
-Der Branch ist ein reiner Zeiger auf `dd47702` und wird nicht weiterentwickelt.
-Er ist **nicht** nach `main` zu mergen — das würde die gesamte Entwicklung
-danach zurückdrehen.
+Der **Tag** ist der verbindliche Rückweg: unveränderlich, zeigt auf `dd47702`.
+Seine Message ist nur eine Zeile — was den Stand ausmacht, steht hier.
+
+Der gleichnamige **Branch** zeigt auf denselben Commit und existiert nur als
+Zweitzeiger. Er wird nicht weiterentwickelt und ist **nicht** nach `main` zu
+mergen — das würde die gesamte Entwicklung danach zurückdrehen. Wer
+sichergehen will, nimmt den Tag: auf einen Branch kann versehentlich gepusht
+werden, auf einen Tag nicht.
 
 In diesem Stand gibt es noch **keine** `VERSION`-Datei — die pro-Tool-Version
 kam erst mit dem pre-commit-Hook danach. Die Zahl 2.0.0 folgt dem, was das Tool
