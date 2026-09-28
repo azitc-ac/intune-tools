@@ -88,3 +88,71 @@ Alles davon ist auf `main` behoben — dort aber noch **nicht gegen echte
 Hardware geprüft**, nur gegen Parser, AST und Logiktests. Sobald ein Lauf auf
 `main` gegen einen echten Tenant erfolgreich war, gehört der neue
 Rückkehrpunkt hierher und dieser Abschnitt wird zur Historie.
+
+---
+
+## Offene Feldprüfung für `main`
+
+Was seit `dd47702` dazugekommen ist, ist gegen Parser, AST und Logiktests geprüft —
+aber **nie auf einer Windows-Maschine gegen einen echten Tenant gelaufen**. Diese Liste
+ist der Weg von „strukturell grün" zu „im Feld belegt". Jeder Punkt nennt, was ihn
+belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
+
+**Schritt 0 — zuerst, weil alles andere daran hängt**
+
+- [ ] Läuft `IntuneWin32Helper/Tests/Invoke-RepoChecks.ps1` überhaupt unter **Windows
+      PowerShell 5.1**? Bisher lief es ausschließlich unter `pwsh` 7.4.6 in einer
+      Linux-Cloud-Session. Beleg: `powershell.exe -NoProfile -File …` endet mit
+      „Alle Pruefungen bestanden." und Exit 0.
+
+**Die Korrekturen, die noch keinen Feldbeleg haben**
+
+- [ ] **Fehlgeschlagener Upload bricht ab** statt „Finished." zu melden
+      (`Templates/deploy_template.ps1`, Guard am Ende). Beleg: ein Lauf mit absichtlich
+      unbrauchbarer Quelle endet mit `throw`, und das Protokoll zeigt den Hinweis auf
+      den möglichen inhaltslosen App-Eintrag. Das war der GIMP-Fall.
+- [ ] **WinGet-Erkennung prüft die Version** (`Templates/detection_template-WinGetApp.ps1`,
+      `& $wingetPath upgrade --id … --exact`). Beleg: auf einem Client mit *veralteter*
+      WinGet-App liefert das Skript Exit 1, mit *aktueller* Exit 0. Nachlesbar im Log
+      `%ProgramData%\Microsoft\IntuneManagementExtension\Logs\<PackageID>_Detect.log`.
+- [ ] **Native MSI-Erkennungsregel** (`New-IntuneWin32AppDetectionRuleMSI` mit
+      `ProductCode` und `greaterThanOrEqual`). Beleg: Intune nimmt die Regel an, das
+      Portal zeigt sie als MSI-Regel statt als Skript, und ein Client erkennt korrekt.
+- [ ] **Requirement Rule pro App** aus den neuen `Apps.csv`-Spalten `Architecture`
+      und `MinimumOS`. Beleg: eine App bewusst abweichend setzen, das Portal zeigt die
+      abweichenden Werte.
+- [ ] **Logo landet immer im Paket** (`Resolve-PackageLogo`, `Resize-IconFile`). Wichtig,
+      weil der Kopier-Fallback unter Windows noch nie gelaufen ist. Beleg: Paketbau mit
+      einer `.png`- **und** einer `.jpg`-URL, in beiden Fällen liegt eine Bilddatei im
+      Paket und das Icon erscheint im Portal.
+- [ ] **Abgeleitete Installationsbefehle** (`Get-InstallerEngine`,
+      `Get-DerivedInstallCommands`). Beleg: je ein Inno-, ein NSIS- und ein
+      wixburn-Setup — erkannte Engine stimmt, und der vorgeschlagene Silent-Switch
+      installiert wirklich ohne Interaktion.
+- [ ] **Inventar** (`Get-AppInventory` über `Get-IntuneWin32App`). Beleg: der Dialog
+      erscheint, die Spalte `Intune` stimmt gegen das Portal — und wie lange der Abruf
+      beim echten App-Bestand dauert, gehört notiert. Das ist die einzige Neuerung, die
+      bei jedem Start Zeit kostet.
+- [ ] **Vorlagen-Fingerprint** (`Get-TemplateFingerprint`,
+      `Get-PackageTemplateFingerprint`). Beleg: ein altes Paket wird in der Spalte
+      `Template` als veraltet geführt, `Update-DeployScript` zieht es nach und legt
+      `deploy.ps1.bak` an; im erzeugten `deploy.ps1` steht ein echter Hash und nicht
+      mehr der Platzhalter `#TPLFP#`.
+- [ ] **Pfadlängen-Warnung** (`Measure-PackageContentPath`). Beleg: eine tief
+      verschachtelte Quelle löst die Warnung aus.
+- [ ] **Löschschutz** (`Remove-PackageFolder`). Beleg: ein Paket über die UI löschen —
+      nur der Paketordner verschwindet, das Paket-Wurzelverzeichnis bleibt.
+
+**Offene Punkte ohne Feldbezug**
+
+- [ ] `ServiceUI.exe` ist ein Microsoft-Binary. Weiterverbreitungsrecht ist **nicht**
+      geklärt, nur dokumentiert (`IntuneWin32Helper/THIRD-PARTY-NOTICES.md`).
+- [ ] Supersedence — bewusst zurückgestellt.
+- [ ] Aktionen direkt aus der Inventarzeile (anlegen / erneuern / entfernen). Am
+      nützlichsten wäre „entfernen": ein Geister-Eintrag ließe sich aus dem Inventar
+      löschen statt im Portal.
+- [ ] Der Zeiger-Branch `release/IntuneWin32Helper-v2.0.0` kann weg, der Tag hält den
+      Commit. Cloud-Sessions dürfen keine Refs löschen.
+
+Sobald ein Lauf auf `main` gegen einen echten Tenant durch ist, gehört ein neuer
+Abschnitt nach oben in diese Datei — mit Commit, Tag und Transcript-Datum.
