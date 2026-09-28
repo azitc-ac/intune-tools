@@ -161,19 +161,34 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
       genau der inhaltslose Eintrag. Nicht im Feld provoziert: die `break`-Pfade des
       Moduls (Token fehlt, Body abgelehnt); belegt nur durch
       `Tests/Test-ModuleCallNoBreak.ps1`.
-- [ ] **WinGet-Erkennung prüft die Version** (`Templates/detection_template-WinGetApp.ps1`,
+- [x] **WinGet-Erkennung prüft die Version** (`Templates/detection_template-WinGetApp.ps1`,
       `& $wingetPath upgrade --id … --exact`). Beleg: auf einem Client mit *veralteter*
       WinGet-App liefert das Skript Exit 1, mit *aktueller* Exit 0. Nachlesbar im Log
       `%ProgramData%\Microsoft\IntuneManagementExtension\Logs\<PackageID>_Detect.log`.
-- [ ] **Native MSI-Erkennungsregel** (`New-IntuneWin32AppDetectionRuleMSI` mit
+      **Vorher gefunden und behoben (`1df2a30`):** seit `c6eb0eb` stand dort
+      `if ($wingetPrg_Existing -notlike …)` — auf dem Zeilen-Array von winget ist das
+      für eine *installierte* App wahr; sie galt als „NOT found", die Versionsprüfung
+      wurde nie erreicht. Test `Tests/Test-WinGetDetection.ps1`, Prüfung 27.
+      **Beleg (Client, PROD `zarenko.onmicrosoft.com`, 2026-09-28, Stand `1df2a30`):**
+      App „IW32H-Feldtest WinGet Everything" (`voidtools.Everything`) auf dem Cloud PC
+      CPC-alexa-LAP19, installiert war Everything 1.4.1.1026.
+      `voidtools.Everything_Detect.log`: 12:26:49 „App voidtools.Everything found.",
+      12:26:55 „An upgrade is available … reporting as NOT installed" (**Exit 1**);
+      nach dem Upgrade durch winget 12:27:03 „found.", 12:27:04 „No upgrade available -
+      voidtools.Everything is current." (**Exit 0**). `AppWorkload.log`: NotDetected →
+      Detected. Programmliste danach: „Everything 1.4.1.1032 (x64)". winget für SYSTEM:
+      `Microsoft.DesktopAppInstaller_1.28.239.0`.
+- [x] **Native MSI-Erkennungsregel** (`New-IntuneWin32AppDetectionRuleMSI` mit
       `ProductCode` und `greaterThanOrEqual`). Beleg: Intune nimmt die Regel an, das
       Portal zeigt sie als MSI-Regel statt als Skript, und ein Client erkennt korrekt.
-      **Zwischenstand (Lauf 2) — offen, weil der Client-Teil fehlt:** Intune nimmt die
-      Regel an. Transcript Z. 335 „Detection rule: native MSI product code
-      [{23170F69-40C1-2702-2409-000001000000}], version >= [24.09.00.0]", Z. 346 App
-      `1207f7e5-…` angelegt. Graph: `win32LobAppProductCodeDetection`,
-      `greaterThanOrEqual 24.09.00.0` (die Skript-Apps desselben Laufs:
-      `win32LobAppPowerShellScriptDetection`). Ein Client hat noch nicht erkannt.
+      **Beleg:** Intune nimmt die Regel an (Lauf 2, Test-Tenant: Transcript Z. 335,
+      Graph `win32LobAppProductCodeDetection`, `greaterThanOrEqual 24.09.00.0`; die
+      Skript-Apps desselben Laufs: `win32LobAppPowerShellScriptDetection`). Client
+      (PROD, App `e739d7af-…` „IW32H-Feldtest 7-Zip MSI"): PSADT 14:15:17
+      `msiexec.exe /i … 7z2409-x64.msi … /QN`, Exit 0; `AppWorkload.log` 12:15:34 UTC
+      „DetectionState NotInstalled → Installed", „detection state: Detected"; in der
+      Programmliste „7-Zip 24.09 (x64 edition) 24.09.00.0". Ins Portal selbst hat noch
+      niemand geschaut — die Regel ist über Graph belegt.
 - [x] **Requirement Rule pro App** aus den neuen `Apps.csv`-Spalten `Architecture`
       und `MinimumOS`. Beleg: eine App bewusst abweichend setzen, das Portal zeigt die
       abweichenden Werte.
@@ -205,6 +220,30 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
       (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`), `npp.8.9.8.1.Installer.x64.exe` →
       `nsis` (`/S`), `vc_redist.x64.exe` (aka.ms/vs/17) → `burn` (`/quiet /norestart`).
       Dazu im Feldlauf 2 das MSI (7-Zip 24.09) → `msi`, Transcript Z. 311–313.
+      **Client (PROD, Cloud PC, 2026-09-28), PSADT-Logs unter
+      `%ProgramData%\Microsoft\IntuneManagementExtension\Logs\Feldtest_IW32H-*_Install.log`,
+      alle „Installation is running in [Silent] mode":**
+      - **NSIS — belegt:** Everything 1.4.1.1026, `… /S`, Exit 0 nach 1,7 s; Intune
+        „Detected"; Programmliste „Everything 1.4.1.1026 (x64)".
+      - **burn — belegt:** VC++ 2013 x64 12.0.40664, `vcredist_x64_2013.exe /quiet
+        /norestart`, Exit 0 nach 19 s; Intune „Detected"; Programmliste
+        „Microsoft Visual C++ 2013 Redistributable (x64) - 12.0.40664". (Der erste
+        Versuch mit VC++ 2015–2022 endete still mit 1638 „andere Version installiert" —
+        auf dem PC lag schon 14.50 unter dem neuen Namen „… v14 Redistributable".)
+      - **Inno — offen:** Greenshot 1.3.315, `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`,
+        Exit 0, Intune „Detected" — **aber ins Profil von SYSTEM installiert**
+        (`HKU\S-1-5-18\…\Uninstall\Greenshot_is1`, `InstallLocation
+        C:\Windows\system32\config\systemprofile\AppData\Local\Programs\Greenshot\`);
+        der Benutzer hatte die App nicht. Die Erkennung durchsuchte HKCU (= die von
+        SYSTEM) und verdeckte das. Behoben in `9ffd02d` (`/ALLUSERS`, Erkennung ohne
+        HKCU, Prüfung 28). Mit `/ALLUSERS` zeigt das Inno-Protokoll
+        (`…\Logs\IW32H-Greenshot-Inno.log`) „Administrative install mode: Yes",
+        „Install mode root key: HKEY_LOCAL_MACHINE" — der Schalter wirkt. Die
+        Installation brach aber ab: „Das Setup hat entdeckt, dass Greenshot zurzeit
+        ausgeführt wird … Defaulting to Cancel" (Exit 1). Es lief die Instanz aus der
+        ersten Fehlinstallation (siehe unten). **Fehlt:** eine vollständige
+        Inno-Installation mit `/ALLUSERS` nach HKLM, auf einem Gerät ohne laufendes
+        Greenshot.
 - [ ] **Inventar** (`Get-AppInventory` über `Get-IntuneWin32App`). Beleg: der Dialog
       erscheint, die Spalte `Intune` stimmt gegen das Portal — und wie lange der Abruf
       beim echten App-Bestand dauert, gehört notiert. Das ist die einzige Neuerung, die
@@ -259,6 +298,36 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
       danach existiert `C:\IntuneFeldtest` weiter, die vier Ordner wurden neu angelegt.
       Die Verweigerungszweige (leerer Pfad, Wurzel, außerhalb) sind nicht im Feld
       ausgelöst worden.
+
+**Im Feld gefunden, nicht behoben — Entscheidung beim Inhaber**
+
+- [ ] **ServiceUI startet den Installer als SYSTEM auf dem Benutzer-Desktop.** Jeder
+      Installationsbefehl lautet `ServiceUi.exe -Process:Explorer.exe
+      Invoke-AppDeployToolkit.exe … -DeployMode Silent`. Greenshots Inno-Setup startet
+      die App nach der Installation selbst — im Feld (2026-09-28, 14:14:41) lief danach
+      `Greenshot.exe` (PID 12412) in der Sitzung des Benutzers (Session 2), dessen
+      Besitzer der Benutzer nicht lesen durfte (`GetOwner` ReturnValue 2; bei
+      `explorer.exe` desselben Benutzers 0) — mit großer Wahrscheinlichkeit SYSTEM. Ein
+      SYSTEM-Prozess mit Dateidialogen auf dem Desktop ist ein Weg zur Rechteausweitung.
+      Da immer `-DeployMode Silent` gilt, bringt ServiceUI hier keinen Nutzen.
+      Vorschlag: ServiceUI aus den Befehlen nehmen; das erledigt auch die offene Frage
+      des Weiterverbreitungsrechts. Auf Wunsch nur dokumentiert.
+- [ ] **Azure-403 beim ersten Chunk.** Bei 3 von 12 Uploads am 2026-09-28 (alle mit
+      2–6 Chunks; gezählt über die Transcripts `…\Logs\2026-09-28_*.log`) scheiterte
+      der erste Chunk mit „(403) AuthenticationFailed"; die Wiederholung in
+      IntuneWin32App 1.5.0 rettete jeden. Das ist das Fehlerbild des
+      GIMP-Falls vom 2026-09-25 (dort 1.4.4, ohne diese Wiederholung). Hinweis darauf,
+      dass 1.5.0 nicht einfach durch 1.4.4 ersetzt werden sollte.
+
+- [ ] **Zurückgelassen vom Feldtest 2026-09-28 — aufräumen:** in PROD die Apps
+      `IW32H-Feldtest *` (7-Zip MSI, Everything (NSIS), Greenshot (Inno), Greenshot
+      Inno-Log, VC++ 2013 x64 (burn), WinGet Everything), alle *required* an die Gruppe
+      `IW32H-Feldtest` (`379dcbdb-bbca-4c45-bde5-0b05e755f23e`, nur CPC-alexa-LAP19);
+      auf dem Cloud PC installiert: 7-Zip 24.09, Everything 1.4.1.1032, VC++ 2013 x64,
+      Greenshot im SYSTEM-Profil (läuft als Prozess, endet mit dem Neustart); lokal
+      `C:\IntuneFeldtest`. Die abgeleiteten Deinstallationsbefehle suchen nach dem
+      Intune-Namen „IW32H-Feldtest …" und greifen deshalb nicht. Der Test-Tenant ist
+      aufgeräumt (auch die GIMP-Geister-App vom 2026-09-25).
 
 **Offene Punkte ohne Feldbezug**
 
