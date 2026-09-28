@@ -129,10 +129,38 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
 
 **Die Korrekturen, die noch keinen Feldbeleg haben**
 
-- [ ] **Fehlgeschlagener Upload bricht ab** statt „Finished." zu melden
+> **Feldlauf 2026-09-28 („Lauf 2")** — Windows 11 Cloud PC (de-DE), PowerShell
+> 5.1.26100.9444, IntuneWin32App 1.5.0, Stand `5566a02` (IntuneWin32Helper 2.0.7),
+> **Test-Tenant** `3jr2s6t19s.onmicrosoft.com`. Transcript
+> `IntuneWin32Helper\Logs\2026-09-28_11-32-29.log` (lokal auf dem Cloud PC, `Logs/`
+> ist nicht versioniert). Gefahren wurde das echte `createApps -createAndDeploy`;
+> ersetzt waren nur die Klickstellen (Auswahl- und Tenant-Dialog, `pause`, Explorer,
+> Editor) und `packetRoot` → `C:\IntuneFeldtest`. Vier Apps, `-bulk`.
+> „Graph" heißt unten: `GET /beta/deviceAppManagement/mobileApps/{id}` im Test-Tenant
+> direkt danach — die Daten, aus denen das Portal liest; ein Blick ins Portal selbst
+> steht aus.
+>
+> Vor Lauf 2 scheiterte Lauf 1 (Transcript `…\2026-09-28_11-27-14.log`) an **jeder**
+> App: `check-prereqs` hatte IntuneWin32App **1.5.0** installiert, das unter de-DE das
+> Token-Ablaufdatum nicht parsen kann — behoben in `5566a02`. Und beim Lesen des
+> Moduls fiel auf, dass sieben Fehlerpfade per `break` den Upload-Guard umgingen —
+> behoben in `883b915`.
+
+- [x] **Fehlgeschlagener Upload bricht ab** statt „Finished." zu melden
       (`Templates/deploy_template.ps1`, Guard am Ende). Beleg: ein Lauf mit absichtlich
       unbrauchbarer Quelle endet mit `throw`, und das Protokoll zeigt den Hinweis auf
       den möglichen inhaltslosen App-Eintrag. Das war der GIMP-Fall.
+      **Beleg (Lauf 2):** Für „IW32H-Feldtest Upload-Abbruch" wurde im Testskript der
+      Blob-Upload unterdrückt (Inhalt kommt nie im Azure-Speicher an, wie beim 403 von
+      GIMP). Transcript Z. 85 „Successfully created Win32 app with ID: 13aa657e-…",
+      Z. 103/104 „CommitFile failed", Z. 105 `throw` „Upload to Intune FAILED … An app
+      entry may exist in Intune without content and should be removed.", Z. 106
+      „FAILED: …". Der Stapel lief weiter; Z. 385–390 „Deployment summary: 3 succeeded,
+      1 failed." mit Hinweis auf inhaltslose Einträge. Graph: `13aa657e-…` hat
+      `uploadState=0`, `publishingState=notPublished`, `committedContentVersion=''` —
+      genau der inhaltslose Eintrag. Nicht im Feld provoziert: die `break`-Pfade des
+      Moduls (Token fehlt, Body abgelehnt); belegt nur durch
+      `Tests/Test-ModuleCallNoBreak.ps1`.
 - [ ] **WinGet-Erkennung prüft die Version** (`Templates/detection_template-WinGetApp.ps1`,
       `& $wingetPath upgrade --id … --exact`). Beleg: auf einem Client mit *veralteter*
       WinGet-App liefert das Skript Exit 1, mit *aktueller* Exit 0. Nachlesbar im Log
@@ -140,13 +168,33 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
 - [ ] **Native MSI-Erkennungsregel** (`New-IntuneWin32AppDetectionRuleMSI` mit
       `ProductCode` und `greaterThanOrEqual`). Beleg: Intune nimmt die Regel an, das
       Portal zeigt sie als MSI-Regel statt als Skript, und ein Client erkennt korrekt.
-- [ ] **Requirement Rule pro App** aus den neuen `Apps.csv`-Spalten `Architecture`
+      **Zwischenstand (Lauf 2) — offen, weil der Client-Teil fehlt:** Intune nimmt die
+      Regel an. Transcript Z. 335 „Detection rule: native MSI product code
+      [{23170F69-40C1-2702-2409-000001000000}], version >= [24.09.00.0]", Z. 346 App
+      `1207f7e5-…` angelegt. Graph: `win32LobAppProductCodeDetection`,
+      `greaterThanOrEqual 24.09.00.0` (die Skript-Apps desselben Laufs:
+      `win32LobAppPowerShellScriptDetection`). Ein Client hat noch nicht erkannt.
+- [x] **Requirement Rule pro App** aus den neuen `Apps.csv`-Spalten `Architecture`
       und `MinimumOS`. Beleg: eine App bewusst abweichend setzen, das Portal zeigt die
       abweichenden Werte.
-- [ ] **Logo landet immer im Paket** (`Resolve-PackageLogo`, `Resize-IconFile`). Wichtig,
+      **Beleg (Lauf 2), Graph:** „Logo PNG" (x64/W11_22H2) →
+      `allowedArchitectures=x64`, `minimumSupportedWindowsRelease=Windows11_22H2`;
+      „Logo JPG" (arm64/W10_22H2) → `arm64`, `Windows10_22H2`; „MSI" (Spalten leer) →
+      `x64`, `2H20` (= W10_20H2). Hinweis: IntuneWin32App 1.5.0 schreibt die
+      Architektur nach `allowedArchitectures` und setzt `applicableArchitectures`
+      absichtlich auf `none` (Modul, `New-IntuneWin32AppRequirementRule.ps1` Z. 107–110)
+      — wer nur `applicableArchitectures` liest, sieht fälschlich „none".
+- [x] **Logo landet immer im Paket** (`Resolve-PackageLogo`, `Resize-IconFile`). Wichtig,
       weil der Kopier-Fallback unter Windows noch nie gelaufen ist. Beleg: Paketbau mit
       einer `.png`- **und** einer `.jpg`-URL, in beiden Fällen liegt eine Bilddatei im
       Paket und das Icon erscheint im Portal.
+      **Beleg (Lauf 2):** Z. 126/127 „Trying logo download (.png)… Icon normalised to
+      256x256.", Z. 213/214 dasselbe für `.jpg`; ohne URL Z. 55/56 und 307/308 „No logo
+      URL specified. Taking default logo." (Kopieren, dann Normalisieren). Im Paket:
+      `IW32H-Feldtest Logo PNG.png` 34907 B, `… Logo JPG.png` 49487 B, Standardlogo
+      133422 B — alle 256×256. Graph `largeIcon` (image/png) je App byte-gleich groß:
+      34907 / 49487 / 133422. Nebenwirkung, gewollt: heruntergeladene Logos werden nach
+      `Logos\` übernommen — ein zweiter Lauf nimmt dann das vorhandene Logo.
 - [ ] **Abgeleitete Installationsbefehle** (`Get-InstallerEngine`,
       `Get-DerivedInstallCommands`). Beleg: je ein Inno-, ein NSIS- und ein
       wixburn-Setup — erkannte Engine stimmt, und der vorgeschlagene Silent-Switch
@@ -160,10 +208,23 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
       `Template` als veraltet geführt, `Update-DeployScript` zieht es nach und legt
       `deploy.ps1.bak` an; im erzeugten `deploy.ps1` steht ein echter Hash und nicht
       mehr der Platzhalter `#TPLFP#`.
-- [ ] **Pfadlängen-Warnung** (`Measure-PackageContentPath`). Beleg: eine tief
+- [x] **Pfadlängen-Warnung** (`Measure-PackageContentPath`). Beleg: eine tief
       verschachtelte Quelle löst die Warnung aus.
-- [ ] **Löschschutz** (`Remove-PackageFolder`). Beleg: ein Paket über die UI löschen —
+      **Beleg (Lauf 2):** Paket „MSI" mit einer Datei 204 Zeichen unter `in\`. Z. 324–326
+      „Longest client-side path: 261 of 259 characters (assuming a 57-character IMECache
+      prefix). 1 file(s) exceed the limit. … 261 chars Files\E1-…\lange-datei-ft.txt".
+      Die übrigen Pakete: „152 of 259", keine Warnung. Der Upload lief trotzdem (nur
+      Warnung, kein Abbruch — so gewollt).
+- [x] **Löschschutz** (`Remove-PackageFolder`). Beleg: ein Paket über die UI löschen —
       nur der Paketordner verschwindet, das Paket-Wurzelverzeichnis bleibt.
+      **Beleg (Lauf 2):** Einen UI-Weg zum Löschen eines *Pakets* gibt es nicht — der
+      „Delete"-Knopf im Auswahldialog entfernt Zeilen aus `Apps.csv`;
+      `Remove-PackageFolder` hat genau einen Aufrufer, `createApps` bei
+      `removeExistingPacketDirOnEachRun = true`. Dieser Weg lief viermal: Z. 37, 108,
+      195, 292 „Removing existing package folder: C:\IntuneFeldtest\IW32H-Feldtest …";
+      danach existiert `C:\IntuneFeldtest` weiter, die vier Ordner wurden neu angelegt.
+      Die Verweigerungszweige (leerer Pfad, Wurzel, außerhalb) sind nicht im Feld
+      ausgelöst worden.
 
 **Offene Punkte ohne Feldbezug**
 
