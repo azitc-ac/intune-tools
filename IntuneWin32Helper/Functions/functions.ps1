@@ -584,7 +584,13 @@ function Get-InstallerEngineSwitch {
     param([Parameter(Mandatory = $true)][string]$Engine)
 
     switch ($Engine.ToLower()) {
-        'inno'           { return [pscustomobject]@{ Engine = 'inno';           Install = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'; Uninstall = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'; Note = '' } }
+        # /ALLUSERS: Intune installiert als SYSTEM. Ein Inno-Setup, das beide
+        # Modi erlaubt, installiert sonst benutzerbezogen - ins Profil von
+        # SYSTEM. Im Feld (2026-09-28, Greenshot 1.3.315) landete die App so in
+        # C:\Windows\system32\config\systemprofile\AppData\Local\Programs\ und
+        # war fuer den Benutzer nicht vorhanden. Setups mit nur einem Modus
+        # ignorieren den Schalter.
+        'inno'           { return [pscustomobject]@{ Engine = 'inno';           Install = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS'; Uninstall = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'; Note = '' } }
         'nsis'           { return [pscustomobject]@{ Engine = 'nsis';           Install = '/S';                                       Uninstall = '/S';                                       Note = '' } }
         '7zip'           { return [pscustomobject]@{ Engine = '7zip';           Install = '/S';                                       Uninstall = '/S';                                       Note = '' } }
         'burn'           { return [pscustomobject]@{ Engine = 'burn';           Install = '/quiet /norestart';                        Uninstall = '/quiet /norestart';                        Note = '' } }

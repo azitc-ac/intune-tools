@@ -989,6 +989,55 @@ foreach ($p in $parsed.Values) {
 }
 
 # ---------------------------------------------------------------------------
+# 28) Installiert wird als SYSTEM - dann muss auch alles dazu passen.
+#     Feld 2026-09-28: das Inno-Setup von Greenshot installierte ohne /ALLUSERS
+#     benutzerbezogen, also ins Profil von SYSTEM; der Benutzer hatte die App
+#     nicht. Die Skript-Erkennung durchsuchte auch HKCU - als SYSTEM ist das die
+#     Registry von SYSTEM - und meldete "installiert". Beides zusammen machte
+#     den Fehler unsichtbar.
+# ---------------------------------------------------------------------------
+$checked++
+$detectionTemplate = Join-Path $RepoRoot 'Templates\detection_template.ps1'
+$installsAsSystem = (Test-Path -LiteralPath $templatePath) -and
+    ((Get-Content -LiteralPath $templatePath -Raw) -match '-InstallExperience\s+"system"')
+if ($installsAsSystem) {
+    if (Test-Path -LiteralPath $detectionTemplate) {
+        $detAst = $parsed[(Get-Item -LiteralPath $detectionTemplate).FullName].Ast
+        $hkcu = $detAst.FindAll({
+            param($n)
+            ($n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+             $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) -and
+            $n.Value -match '^(HKCU:|HKEY_CURRENT_USER|Registry::HKEY_CURRENT_USER)'
+        }, $true)
+        foreach ($h in $hkcu) {
+            Add-Failure "SystemContextInstall" ("detection_template.ps1:{0} durchsucht HKCU - als SYSTEM ist das die Registry von SYSTEM, eine Fehlinstallation gilt dann als erkannt" -f $h.Extent.StartLineNumber)
+        }
+    }
+    if ($functionsFile) {
+        $switchFn = $functionsFile.Ast.Find({
+            param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-InstallerEngineSwitch'
+        }, $true)
+        $innoClause = $null
+        if ($switchFn) {
+            $innoClause = $switchFn.Body.Find({
+                param($n)
+                $n -is [System.Management.Automation.Language.HashtableAst] -and
+                $n.Extent.Text -match "Engine\s*=\s*'inno'"
+            }, $true)
+        }
+        if (-not $innoClause) {
+            Add-Failure "SystemContextInstall" "Get-InstallerEngineSwitch: kein Eintrag fuer 'inno' gefunden"
+        }
+        else {
+            $install = @($innoClause.KeyValuePairs | Where-Object { $_.Item1.Extent.Text -eq 'Install' })
+            if ($install.Count -eq 0 -or $install[0].Item2.Extent.Text -notmatch '/ALLUSERS') {
+                Add-Failure "SystemContextInstall" "Get-InstallerEngineSwitch: der Inno-Installationsschalter enthaelt kein /ALLUSERS - als SYSTEM landet die App sonst im Profil von SYSTEM"
+            }
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

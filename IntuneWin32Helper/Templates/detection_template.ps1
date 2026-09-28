@@ -41,10 +41,14 @@ Function Test-AppInstallation {
 
     $searchPattern = $AppName + "*"
     $targetVersion = [System.Version]::Parse($TargetVersion)
+    # Kein HKCU: das Tool installiert immer als SYSTEM (-InstallExperience
+    # "system"), die Erkennung laeuft ebenso. HKCU ist dann die Registry von
+    # SYSTEM - eine App, die versehentlich ins SYSTEM-Profil installiert wurde,
+    # galt als "installiert", obwohl der Benutzer sie nicht hat (Feld
+    # 2026-09-28, Greenshot).
     $registryPaths = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-        "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+        "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
     )
 
     Try {
