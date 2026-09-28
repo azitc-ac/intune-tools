@@ -100,10 +100,34 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
 
 **Schritt 0 — zuerst, weil alles andere daran hängt**
 
-- [ ] Läuft `IntuneWin32Helper/Tests/Invoke-RepoChecks.ps1` überhaupt unter **Windows
+- [x] Läuft `IntuneWin32Helper/Tests/Invoke-RepoChecks.ps1` überhaupt unter **Windows
       PowerShell 5.1**? Bisher lief es ausschließlich unter `pwsh` 7.4.6 in einer
       Linux-Cloud-Session. Beleg: `powershell.exe -NoProfile -File …` endet mit
       „Alle Pruefungen bestanden." und Exit 0.
+
+      **Beleg (2026-09-28, Windows 11 Cloud PC, PowerShell 5.1.26100.9444):**
+      Auf `84af612` lief es **nicht** — Abbruch vor der ersten Prüfung mit
+      „Split-Path : Das Argument kann nicht an den Parameter "Path" gebunden werden,
+      da es sich um eine leere Zeichenfolge handelt." (`Invoke-RepoChecks.ps1:18`).
+      Ursache: `$PSScriptRoot` ist unter 5.1 im `param()`-Default leer, wenn das
+      Skript per `-File` startet — genau so ruft es der pre-commit-Hook auf. Unter
+      Windows war damit **jeder** Commit an `IntuneWin32Helper/` blockiert. Mit
+      `& .\…ps1` lief es auch vorher (105 Prüfungen, Exit 0).
+      Behoben (Default im Rumpf setzen) plus Prüfung 25 `NoAutoPathInParamDefault`.
+      Danach: `powershell.exe -NoProfile -File IntuneWin32Helper\Tests\Invoke-RepoChecks.ps1`
+      → „Dateien: 6   Pruefungen: 111 / Alle Pruefungen bestanden.", Exit 0.
+      Gegenprobe gefahren: Default zurückgebaut → `-File` bricht wie oben ab (Exit 1),
+      per `&` meldet Prüfung 25 „Invoke-RepoChecks.ps1:18 Default von $RepoRoot
+      benutzt $PSScriptRoot" (Exit 1); Rückbau bytegleich, wieder grün.
+
+      Beifund beim selben Lauf: `GroupAppAssignment/Test-GroupAppAssignment.ps1` unter
+      5.1 „381 passed, 2 failed" („load with $expand: one call", „write Replace: one
+      fresh read, one POST, no DELETE") — ein einzelnes `PSCustomObject` hat unter 5.1
+      kein `.Count`, der Mock-Zähler `Get-Calls` lieferte `$null`. Nur der Test war
+      betroffen; im Tool selbst sind alle 31 `.Count` ohne `@()` Arrays, Listen,
+      Hashtables oder `,$ops.ToArray()` (AST-Suchlauf). Behoben mit `@(Get-Calls …)`.
+      Danach „383 passed, 0 failed", Exit 0; Gegenprobe mit dem Stand von `84af612`
+      wieder „381 passed, 2 failed", Exit 1.
 
 **Die Korrekturen, die noch keinen Feldbeleg haben**
 

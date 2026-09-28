@@ -15,8 +15,13 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot)
+    [string]$RepoRoot
 )
+
+# Nicht als Default im param()-Block: dort ist $PSScriptRoot unter Windows
+# PowerShell 5.1 leer, wenn das Skript per "powershell.exe -File" laeuft - genau
+# so ruft es der pre-commit-Hook auf. Siehe Pruefung 25.
+if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 
 $ErrorActionPreference = "Stop"
 $failures = New-Object System.Collections.ArrayList
@@ -821,6 +826,32 @@ if (Test-Path -LiteralPath $templatePath) {
     $tplText = Get-Content -LiteralPath $templatePath -Raw
     if ($tplText -notmatch '(?m)^#\s*ToolTemplateFingerprint:\s*#TPLFP#') {
         Add-Failure "InventoryAndFingerprint" "deploy_template.ps1 traegt die Zeile 'ToolTemplateFingerprint: #TPLFP#' nicht - ohne sie gibt es keinen Stempel zu vergleichen"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 25) Keine automatische Pfadvariable als Parameter-Default. Unter Windows
+#     PowerShell 5.1 ist $PSScriptRoot (ebenso $PSCommandPath/$MyInvocation) im
+#     param()-Block leer, wenn das Skript per "powershell.exe -File" startet.
+#     Genau so ruft der pre-commit-Hook dieses Skript auf: es brach mit
+#     "Split-Path: ... leere Zeichenfolge" ab, und unter Windows war damit jeder
+#     Commit an IntuneWin32Helper blockiert. Unter pwsh 7 fiel es nie auf.
+# ---------------------------------------------------------------------------
+foreach ($p in $parsed.Values) {
+    $checked++
+    $params = $p.Ast.FindAll({
+        param($n) $n -is [System.Management.Automation.Language.ParameterAst] -and $n.DefaultValue
+    }, $true)
+    foreach ($prm in $params) {
+        $autoVars = $prm.DefaultValue.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.VariableExpressionAst] -and
+            @('PSScriptRoot', 'PSCommandPath', 'MyInvocation') -contains $n.VariablePath.UserPath
+        }, $true)
+        foreach ($v in $autoVars) {
+            Add-Failure "NoAutoPathInParamDefault" ("{0}:{1} Default von {2} benutzt `${3} - unter 5.1 mit -File leer, im Rumpf setzen" -f `
+                $p.File.Name, $prm.Extent.StartLineNumber, $prm.Name.Extent.Text, $v.VariablePath.UserPath)
+        }
     }
 }
 

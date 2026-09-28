@@ -418,7 +418,7 @@ $script:responses = @{ '*configurationPolicies?*expand=assignments' = @{ value =
 $cc = [PSCustomObject]@{ Key = 'config'; Label = 'C'; HasIntent = $false; Sources = @($srcSc) }
 $items = Get-CategoryItems -Category $cc
 Assert ($items.Count -eq 1 -and $items[0].Name -eq 'A' -and @($items[0].Assignments).Count -eq 1) 'load with $expand: item and its assignment'
-Assert ((Get-Calls 'GET').Count -eq 1) 'load with $expand: one call'
+Assert (@(Get-Calls 'GET').Count -eq 1) 'load with $expand: one call'
 # load without $expand support: object by object
 $script:calls = @()
 $script:responses = @{
@@ -451,8 +451,10 @@ $script:calls = @()
 $script:responses = @{ '*configurationPolicies/sc1/assignments' = @{ value = $cur } }
 $opR = [PSCustomObject]@{ Key = 'config|sc1'; Action = 'Remove'; From = $fromG1; To = $null }
 Invoke-ItemWrite -Item $itemSc -Operation $opR -Selection $selG1 -VppDeviceLicensing $true
-$posts = Get-Calls 'POST'
-Assert ((Get-Calls 'GET').Count -eq 1 -and $posts.Count -eq 1 -and (Get-Calls 'DELETE').Count -eq 0) 'write Replace: one fresh read, one POST, no DELETE'
+# @() um jeden Aufruf: ein einzelner Treffer wird beim Zurueckgeben ausgepackt, und
+# ein einzelnes PSCustomObject hat unter Windows PowerShell 5.1 kein .Count.
+$posts = @(Get-Calls 'POST')
+Assert (@(Get-Calls 'GET').Count -eq 1 -and $posts.Count -eq 1 -and @(Get-Calls 'DELETE').Count -eq 0) 'write Replace: one fresh read, one POST, no DELETE'
 Assert ($posts[0].Uri -like '*/deviceManagement/configurationPolicies/sc1/assign') 'write Replace: POST goes to /assign'
 $sent = ($posts[0].Body | ConvertFrom-Json).assignments
 Assert (@($sent).Count -eq 2 -and @($sent | Where-Object { $_.target.groupId -eq $g2 }).Count -eq 1 -and @($sent | Where-Object { $_.target.groupId -eq $g1 }).Count -eq 0) 'write Replace: other group kept, selected group removed'
