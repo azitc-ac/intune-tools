@@ -948,6 +948,47 @@ if ($functionsFile) {
 }
 
 # ---------------------------------------------------------------------------
+# 27) Kein -notlike / -notmatch auf der Ausgabe eines nativen Aufrufs.
+#     "& winget.exe ..." liefert ein ARRAY von Zeilen. Auf einem Array filtert
+#     -notlike: es liefert alle Zeilen OHNE Treffer (Kopfzeile, Trennlinie),
+#     und das ist fast immer nicht leer, also wahr. So meldete die
+#     WinGet-Erkennung seit c6eb0eb eine installierte App als "NOT found"
+#     (Feld 2026-09-28). Treffer ausdruecklich zaehlen:
+#     @($out | Where-Object { $_ -like ... }).Count
+#     Geprueft je Gueltigkeitsbereich (Funktion bzw. Skript), damit eine
+#     gleichnamige Variable einer anderen Funktion nicht zaehlt.
+# ---------------------------------------------------------------------------
+foreach ($p in $parsed.Values) {
+    $checked++
+    $negations = $p.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.BinaryExpressionAst] -and
+        $n.Operator.ToString() -match '^(I|C)?Not(Like|Match)$' -and
+        $n.Left -is [System.Management.Automation.Language.VariableExpressionAst]
+    }, $true)
+    foreach ($neg in $negations) {
+        $scope = $neg.Parent
+        while ($scope -ne $null -and -not ($scope -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $scope.Parent -ne $null) {
+            $scope = $scope.Parent
+        }
+        $name = $neg.Left.VariablePath.UserPath
+        $fromNative = $scope.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            $n.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+            $n.Left.VariablePath.UserPath -eq $name -and
+            $n.Right -is [System.Management.Automation.Language.PipelineAst] -and
+            $n.Right.PipelineElements[0] -is [System.Management.Automation.Language.CommandAst] -and
+            $n.Right.PipelineElements[0].InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand
+        }, $true)
+        if (@($fromNative).Count -gt 0) {
+            Add-Failure "NoNegatedMatchOnNativeOutput" ("{0}:{1} '{2}' - `${3} ist die Ausgabe eines nativen Aufrufs (Array); -not{4} filtert und ist fast immer wahr. Treffer zaehlen." -f `
+                $p.File.Name, $neg.Extent.StartLineNumber, $neg.Extent.Text, $name, ($neg.Operator.ToString() -replace '^(I|C)?Not', ''))
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

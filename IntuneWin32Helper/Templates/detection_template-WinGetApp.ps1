@@ -55,8 +55,12 @@ if ($wingetPaths.Count -gt 1) {
 }
 
 # 1. Ist die App ueberhaupt da?
+#    Die Ausgabe von winget ist ein ARRAY von Zeilen. "-notlike" darauf liefert
+#    alle Zeilen OHNE Treffer (Kopfzeile, Trennlinie) - nicht leer, also wahr:
+#    eine installierte App galt als "NOT found" (seit c6eb0eb, im Feld
+#    2026-09-28 gefunden). Deshalb die Treffer ausdruecklich zaehlen.
 $wingetPrg_Existing = & $wingetPath list --id $PackageID --exact --accept-source-agreements
-if ($wingetPrg_Existing -notlike "*$PackageID*"){
+if (@($wingetPrg_Existing | Where-Object { $_ -like "*$PackageID*" }).Count -eq 0){
     Write-Log "App $PackageID NOT found!"
     Write-Log "$Action finished."
     exit 1
@@ -78,7 +82,7 @@ Write-Log "App $PackageID found."
 #    gilt als aktuell. Das ist die sichere Richtung - offline soll kein Geraet
 #    in eine Neuinstallationsschleife laufen.
 $wingetPrg_Upgrade = & $wingetPath upgrade --id $PackageID --exact --accept-source-agreements
-if ($wingetPrg_Upgrade -like "*$PackageID*"){
+if (@($wingetPrg_Upgrade | Where-Object { $_ -like "*$PackageID*" }).Count -gt 0){
     Write-Log "An upgrade is available for $PackageID - reporting as NOT installed so it gets renewed."
     Write-Log "$Action finished."
     exit 1
