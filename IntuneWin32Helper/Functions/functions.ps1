@@ -39,8 +39,55 @@ function Test-IntuneAccessToken {
         statt den Lauf abzubrechen.
     #>
     if (-not (Get-Command -Name Test-AccessToken -ErrorAction SilentlyContinue)) { return $false }
-    try   { return [bool](Test-AccessToken) }
+    try   { return [bool](Invoke-IntuneModuleCall -Label 'Test-AccessToken' -Operation { Test-AccessToken }) }
     catch { return $false }
+}
+
+function Invoke-IntuneModuleCall {
+    <#
+        .SYNOPSIS
+        Einziger Weg, ein Cmdlet des Moduls IntuneWin32App aufzurufen.
+
+        .DESCRIPTION
+        Das Modul beendet mehrere Fehlerpfade mit "Write-Warning ...; break"
+        statt mit throw (1.5.0: Add-IntuneWin32App kein Token / Body abgelehnt,
+        Get-IntuneWin32App und Update-IntuneWin32AppPackageFile kein Token,
+        Get-IntuneWin32AppMetaData). Ein break ohne umschliessende Schleife sucht
+        sich die naechste Schleife beim AUFRUFER - try/catch faengt es nicht:
+          - im deploy.ps1 lief der Guard "Upload FAILED" dadurch nie, und die
+            foreach-Schleife in createApps/deployApps endete stillschweigend -
+            die restlichen Apps des Stapels wurden nicht versucht, die
+            Zusammenfassung meldete "0 succeeded, 0 failed";
+          - in deployApps haette es die while-Schleife des Startskripts beendet
+            und damit das ganze Tool geschlossen.
+        Die do/while($false)-Huelle hier faengt das break ab; ein so beendeter
+        Aufruf wird zur Exception, die die Aufrufer schon behandeln.
+
+        .PARAMETER Operation
+        Der Aufruf als Scriptblock, z.B. { Get-IntuneWin32App -DisplayName $n }.
+
+        .PARAMETER Label
+        Name fuer die Fehlermeldung, ueblicherweise das Cmdlet.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Operation,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    # Eigene, unverwechselbare Namen: der Scriptblock sieht die Variablen dieser
+    # Funktion (dynamischer Gueltigkeitsbereich) und darf keine davon verdecken.
+    $intuneModuleCallDone   = $false
+    $intuneModuleCallResult = $null
+    do {
+        $intuneModuleCallResult = & $Operation
+        $intuneModuleCallDone   = $true
+    } while ($false)
+
+    if (-not $intuneModuleCallDone) {
+        throw ("{0} was aborted inside the IntuneWin32App module (see the warning above) - no result." -f $Label)
+    }
+    return $intuneModuleCallResult
 }
 
 function Get-ToolConfigPath {
@@ -227,7 +274,9 @@ function Initialize-IntuneConnection {
 
     if ($Force -or (-not (Test-IntuneAccessToken))) {
         Write-Host ("Authenticating against tenant [{0}]" -f $Tenant.name)
-        $null = Connect-MSIntuneGraph -TenantID $Tenant.name -ClientId $Tenant.appid -ClientSecret $Tenant.clientSecret -Verbose
+        $null = Invoke-IntuneModuleCall -Label 'Connect-MSIntuneGraph' -Operation {
+            Connect-MSIntuneGraph -TenantID $Tenant.name -ClientId $Tenant.appid -ClientSecret $Tenant.clientSecret -Verbose
+        }
     }
     else {
         Write-Host ("Access token still valid for tenant [{0}]." -f $Tenant.name)
@@ -1074,7 +1123,7 @@ function deployApps{
     $intuneApps = $null
     try {
         Write-Host "Reading the Win32 apps of the tenant..."
-        $intuneApps = @(Get-IntuneWin32App -ErrorAction Stop)
+        $intuneApps = @(Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -ErrorAction Stop })
         Write-Host ("{0} Win32 app(s) in the tenant." -f @($intuneApps).Count)
     }
     catch {

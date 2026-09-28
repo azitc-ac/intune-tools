@@ -32,6 +32,47 @@ function Add-Failure {
     $null = $failures.Add([PSCustomObject]@{ Check = $Check; Detail = $Detail })
 }
 
+function Test-ResultAssigned {
+    # Wird das Ergebnis des Knotens einer Variablen zugewiesen? Folgt dabei
+    # Scriptbloecken - siehe Pruefung 10.
+    param($Node, $Ast)
+    $n = $Node.Parent
+    while ($n -ne $null) {
+        if ($n -is [System.Management.Automation.Language.AssignmentStatementAst]) { return $true }
+        if ($n -is [System.Management.Automation.Language.StatementBlockAst]) { return $false }
+        if ($n -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) {
+            $holder = $n.Parent
+            # { ... } als Argument eines Befehls (Invoke-IntuneModuleCall -Operation { ... })
+            if ($holder -is [System.Management.Automation.Language.CommandAst]) {
+                if ($holder.GetCommandName() -ne 'Invoke-IntuneModuleCall') { return $false }
+                return (Test-ResultAssigned -Node $holder -Ast $Ast)
+            }
+            # $x = { ... }: jeder Aufruf "& $x" muss zugewiesen sein
+            $assign = $n.Parent
+            while ($assign -ne $null -and -not ($assign -is [System.Management.Automation.Language.AssignmentStatementAst])) {
+                if ($assign -is [System.Management.Automation.Language.StatementBlockAst]) { return $false }
+                $assign = $assign.Parent
+            }
+            if (-not $assign -or -not ($assign.Left -is [System.Management.Automation.Language.VariableExpressionAst])) { return $false }
+            $name = $assign.Left.VariablePath.UserPath
+            $calls = @($Ast.FindAll({
+                param($c)
+                $c -is [System.Management.Automation.Language.CommandAst] -and
+                $c.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand -and
+                $c.CommandElements[0] -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                $c.CommandElements[0].VariablePath.UserPath -eq $name
+            }, $true))
+            if ($calls.Count -eq 0) { return $false }
+            foreach ($c in $calls) {
+                if (-not (Test-ResultAssigned -Node $c -Ast $Ast)) { return $false }
+            }
+            return $true
+        }
+        $n = $n.Parent
+    }
+    return $false
+}
+
 $psFiles = Get-ChildItem -Path $RepoRoot -Filter *.ps1 -Recurse -File |
     Where-Object { $_.FullName -notmatch '\\\.git\\' }
 
@@ -358,13 +399,14 @@ foreach ($p in $parsed.Values) {
 
     foreach ($add in $adds) {
         # Rueckgabe auffangen: die Pipeline muss einer Variablen zugewiesen sein.
-        $assigned = $false
-        $node = $add.Parent
-        while ($node -ne $null) {
-            if ($node -is [System.Management.Automation.Language.AssignmentStatementAst]) { $assigned = $true; break }
-            if ($node -is [System.Management.Automation.Language.StatementBlockAst]) { break }
-            $node = $node.Parent
-        }
+        # Seit Pruefung 26 steckt der Aufruf in Scriptblöcken
+        # ($x = { Invoke-IntuneModuleCall -Operation { Add-IntuneWin32App ... } }).
+        # Die Zuweisung des BLOCKS an $x ist keine Zuweisung des ERGEBNISSES -
+        # so erfuellte sich diese Pruefung einmal leer. Deshalb: ein Scriptblock
+        # als -Operation reicht das Ergebnis an Invoke-IntuneModuleCall weiter
+        # (dort weitersuchen); ein einer Variablen zugewiesener Block zaehlt nur,
+        # wenn JEDER Aufruf "& $x" selbst zugewiesen wird.
+        $assigned = Test-ResultAssigned -Node $add -Ast $p.Ast
         if (-not $assigned) {
             Add-Failure "AddResultChecked" ("{0}:{1} Rueckgabe von Add-IntuneWin32App wird verworfen - bei Fehlschlag gibt es nur eine Warnung, kein Abbruch" -f `
                 $p.File.Name, $add.Extent.StartLineNumber)
@@ -852,6 +894,56 @@ foreach ($p in $parsed.Values) {
             Add-Failure "NoAutoPathInParamDefault" ("{0}:{1} Default von {2} benutzt `${3} - unter 5.1 mit -File leer, im Rumpf setzen" -f `
                 $p.File.Name, $prm.Extent.StartLineNumber, $prm.Name.Extent.Text, $v.VariablePath.UserPath)
         }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 26) Jedes Cmdlet des Moduls IntuneWin32App laeuft ueber
+#     Invoke-IntuneModuleCall. Das Modul beendet Fehlerpfade mit "break" statt
+#     throw; ohne umschliessende Schleife springt das break in die naechste
+#     Schleife des AUFRUFERS. Im Feld hiess das: der Guard "Upload FAILED" im
+#     deploy.ps1 lief nie, die foreach-Schleife in createApps/deployApps endete
+#     stillschweigend (restliche Apps nicht versucht, Zusammenfassung
+#     "0 succeeded, 0 failed"), und in deployApps haette es das Tool beendet.
+#     try/catch faengt ein break nicht - nur eine Schleife tut das.
+# ---------------------------------------------------------------------------
+$moduleCmdPattern = '^(Add|Get|Update|New|Connect|Remove|Set|Expand|Test)-(IntuneWin32App\w*|MSIntuneGraph|AccessToken)$'
+foreach ($p in $parsed.Values) {
+    $checked++
+    $calls = $p.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -match $moduleCmdPattern
+    }, $true)
+    foreach ($call in $calls) {
+        $wrapped = $false
+        $n = $call.Parent
+        while ($n -ne $null) {
+            if ($n -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -and
+                $n.Parent -is [System.Management.Automation.Language.CommandAst] -and
+                $n.Parent.GetCommandName() -eq 'Invoke-IntuneModuleCall') { $wrapped = $true; break }
+            $n = $n.Parent
+        }
+        if (-not $wrapped) {
+            Add-Failure "ModuleCallNoBreak" ("{0}:{1} {2} direkt aufgerufen - ein break des Moduls springt in die Schleife des Aufrufers; ueber Invoke-IntuneModuleCall aufrufen" -f `
+                $p.File.Name, $call.Extent.StartLineNumber, $call.GetCommandName())
+        }
+    }
+}
+
+# Die Huelle selbst muss eine Schleife sein - sonst faengt sie kein break.
+$checked++
+if ($functionsFile) {
+    $wrapper = $functionsFile.Ast.Find({
+        param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -eq 'Invoke-IntuneModuleCall'
+    }, $true)
+    if (-not $wrapper) {
+        Add-Failure "ModuleCallNoBreak" "Invoke-IntuneModuleCall fehlt in functions.ps1"
+    }
+    elseif (-not $wrapper.Body.Find({ param($n) $n -is [System.Management.Automation.Language.LoopStatementAst] }, $true)) {
+        Add-Failure "ModuleCallNoBreak" "Invoke-IntuneModuleCall ruft die Operation nicht in einer Schleife auf - ein break des Moduls wuerde nicht abgefangen"
     }
 }
 

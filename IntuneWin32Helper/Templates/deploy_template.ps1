@@ -54,10 +54,16 @@ try {
     $installer="Invoke-AppDeployToolkit.ps1"
     $SetupFile = $installer
     $Destination = $outpath
-    $CreateAppPackage = New-IntuneWin32AppPackage -SourceFolder $shortsourcepath -SetupFile $SetupFile -OutputFolder $Destination -Force -Verbose
+    # Jedes Cmdlet des Moduls ueber Invoke-IntuneModuleCall: das Modul beendet
+    # Fehlerpfade mit "break" statt throw - ohne Huelle liefe hier kein Guard.
+    $CreateAppPackage = Invoke-IntuneModuleCall -Label 'New-IntuneWin32AppPackage' -Operation {
+        New-IntuneWin32AppPackage -SourceFolder $shortsourcepath -SetupFile $SetupFile -OutputFolder $Destination -Force -Verbose
+    }
     # Get intunewin file Meta data and assign intunewin file location variable
     $IntuneWinFile = $CreateAppPackage.Path
-    $IntuneWinMetaData = Get-IntuneWin32AppMetaData -FilePath $IntuneWinFile
+    $IntuneWinMetaData = Invoke-IntuneModuleCall -Label 'Get-IntuneWin32AppMetaData' -Operation {
+        Get-IntuneWin32AppMetaData -FilePath $IntuneWinFile
+    }
 }
 finally {
     # Immer freigeben: bricht das Packen ab, blieb der Laufwerksbuchstabe sonst
@@ -75,16 +81,22 @@ $MsiProductCode = "#MSIPRODUCTCODE#"
 if ($MsiProductCode) {
     if ($AppVersion -and $AppVersion -ne "LatestAvailable") {
         Write-Host "Detection rule: native MSI product code [$MsiProductCode], version >= [$AppVersion]"
-        $DetectionRule = New-IntuneWin32AppDetectionRuleMSI -ProductCode $MsiProductCode -ProductVersionOperator greaterThanOrEqual -ProductVersion $AppVersion
+        $DetectionRule = Invoke-IntuneModuleCall -Label 'New-IntuneWin32AppDetectionRuleMSI' -Operation {
+            New-IntuneWin32AppDetectionRuleMSI -ProductCode $MsiProductCode -ProductVersionOperator greaterThanOrEqual -ProductVersion $AppVersion
+        }
     }
     else {
         Write-Host "Detection rule: native MSI product code [$MsiProductCode] (no version to compare)"
-        $DetectionRule = New-IntuneWin32AppDetectionRuleMSI -ProductCode $MsiProductCode
+        $DetectionRule = Invoke-IntuneModuleCall -Label 'New-IntuneWin32AppDetectionRuleMSI' -Operation {
+            New-IntuneWin32AppDetectionRuleMSI -ProductCode $MsiProductCode
+        }
     }
 }
 else {
     Write-Host "Detection rule: script (detection.ps1)"
-    $DetectionRule = New-IntuneWin32AppDetectionRuleScript -ScriptFile ($apppath + "\detection.ps1")
+    $DetectionRule = Invoke-IntuneModuleCall -Label 'New-IntuneWin32AppDetectionRuleScript' -Operation {
+        New-IntuneWin32AppDetectionRuleScript -ScriptFile ($apppath + "\detection.ps1")
+    }
 }
 
 # Create Requirement Rule
@@ -96,11 +108,13 @@ $MinimumOS    = "#MINOS#"
 if (-not $Architecture) { $Architecture = "x64" }
 if (-not $MinimumOS)    { $MinimumOS    = "W10_20H2" }
 Write-Host "Requirement rule: architecture [$Architecture], minimum OS [$MinimumOS]"
-$RequirementRule = New-IntuneWin32AppRequirementRule -Architecture $Architecture -MinimumSupportedOperatingSystem $MinimumOS
+$RequirementRule = Invoke-IntuneModuleCall -Label 'New-IntuneWin32AppRequirementRule' -Operation {
+    New-IntuneWin32AppRequirementRule -Architecture $Architecture -MinimumSupportedOperatingSystem $MinimumOS
+}
 
 # Create a Icon from an image file
 if(Test-Path "$apppath\$appname.png"){$ImageFile = "$apppath\$appname.png"}else{$ImageFile = "$apppath\defaultLogo.png"}
-$Icon = New-IntuneWin32AppIcon -FilePath $ImageFile
+$Icon = Invoke-IntuneModuleCall -Label 'New-IntuneWin32AppIcon' -Operation { New-IntuneWin32AppIcon -FilePath $ImageFile }
 
 #Install and Uninstall Commands
 $InstallCommandLine = "ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe -DeploymentType Install -DeployMode Silent"
@@ -112,46 +126,56 @@ $UninstallCommandLine = "ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToo
 # ohne Inhalt in Intune liegt - in einem Bulk-Lauf faellt das niemandem auf.
 $uploadResult = $null
 
+# Der Upload einer neuen App - an EINER Stelle, drei Wege fuehren hierher.
+$addNewApp = {
+    Invoke-IntuneModuleCall -Label 'Add-IntuneWin32App' -Operation {
+        Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
+    }
+}
+
 # check if there is an app with the same name already which could be updated
 $existingapps = $null
-$existingapps = Get-IntuneWin32App -DisplayName $Displayname
+$existingapps = Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -DisplayName $Displayname }
 
 if($existingapps){
     Add-Type -AssemblyName Microsoft.VisualBasic
     # if the parameter bulk is not set, ask if a new app should be created
     if($bulk -ne $true){
-    
+
         $result = [Microsoft.VisualBasic.Interaction]::MsgBox('An existing application with the same name has been detected. Create a new application? Select "No" to update an existing one. ','YesNoCancel,SystemModal,Information', 'Create or update an application')
         if($result -eq "Yes"){
             #BULK IS NOT SET
             #ANSWER WAS "YES, CREATE A NEW APP"
             #Builds the App and Uploads to Intune
-            $uploadResult = Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
+            $uploadResult = & $addNewApp
         }
         if($result -eq "No"){
             #BULK IS NOT SET
             #ANSWER WAS "NO, UPDATE an existing APP"
             #Builds the App and Uploads to Intune
-            #Updates the App 
+            #Updates the App
             # Auswahl ueber den Dialog des Tools statt Out-GridView (ogv):
             # ogv braucht einen STA-Host und fehlt in PowerShell 7 ohne Zusatzmodul.
-            $updateCandidates = Get-IntuneWin32App -DisplayName $Displayname |
+            $updateCandidates = Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -DisplayName $Displayname } |
                 Select-Object id, displayName, displayVersion, createdDateTime
             $app = Get-SingleDialogSelection -Value (Open-SelectDialog -data @($updateCandidates) -title "Select the app to update" -size medium)
             if (-not $app) { throw "No application selected for update - aborting." }
-            Update-IntuneWin32AppPackageFile -ID $app.id -FilePath $IntuneWinFile
-            # Anders als Add-IntuneWin32App ist fuer Update-IntuneWin32AppPackageFile nicht
-            # geprueft, wie es einen Fehlschlag meldet - dieser Pfad bleibt daher ungeprueft.
+            # Bricht das Modul hier per break ab (kein Token, contentVersions nicht
+            # angelegt), wirft Invoke-IntuneModuleCall. Ob es auch bei einem
+            # fehlgeschlagenen Commit etwas Pruefbares zurueckgibt, ist ungeprueft.
+            $null = Invoke-IntuneModuleCall -Label 'Update-IntuneWin32AppPackageFile' -Operation {
+                Update-IntuneWin32AppPackageFile -ID $app.id -FilePath $IntuneWinFile
+            }
             $uploadResult = $app
         }
     }
     else{
         #BULK IS SET, always build a NEW App without asking
-        $uploadResult = Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
+        $uploadResult = & $addNewApp
     }
 }
-else{    
-    $uploadResult = Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
+else{
+    $uploadResult = & $addNewApp
 }
 if (-not $uploadResult) {
     throw ("Upload to Intune FAILED for '{0}' - see the warnings above. An app entry may exist in Intune without content and should be removed." -f $Displayname)
