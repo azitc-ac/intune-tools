@@ -16,7 +16,6 @@ dass Intune den Aufruf annimmt.
 |---|---|
 | Commit | `dd47702` |
 | Tag | `IntuneWin32Helper-v2.0.0` |
-| Branch (Zweitzeiger) | `release/IntuneWin32Helper-v2.0.0` |
 | Belegt am | 2026-09-25 |
 | Vom Tool selbst gemeldet | `$toolVersion = "2.0"` in `start-IntuneWin32Helper.ps1` |
 
@@ -30,11 +29,10 @@ git checkout IntuneWin32Helper-v2.0.0
 Der **Tag** ist der verbindliche Rückweg: unveränderlich, zeigt auf `dd47702`.
 Seine Message ist nur eine Zeile — was den Stand ausmacht, steht hier.
 
-Der gleichnamige **Branch** zeigt auf denselben Commit und existiert nur als
-Zweitzeiger. Er wird nicht weiterentwickelt und ist **nicht** nach `main` zu
-mergen — das würde die gesamte Entwicklung danach zurückdrehen. Wer
-sichergehen will, nimmt den Tag: auf einen Branch kann versehentlich gepusht
-werden, auf einen Tag nicht.
+Den gleichnamigen Zweitzeiger-Branch `release/IntuneWin32Helper-v2.0.0` gibt es
+nicht mehr (gelöscht am 2026-09-28; er zeigte auf denselben Commit, `git rev-list
+--count Tag..Branch` war 0). Der Tag ist der einzige Rückweg — auf einen Branch
+kann versehentlich gepusht werden, auf einen Tag nicht.
 
 In diesem Stand gibt es noch **keine** `VERSION`-Datei — die pro-Tool-Version
 kam erst mit dem pre-commit-Hook danach. Die Zahl 2.0.0 folgt dem, was das Tool
@@ -175,8 +173,14 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
 - [ ] Aktionen direkt aus der Inventarzeile (anlegen / erneuern / entfernen). Am
       nützlichsten wäre „entfernen": ein Geister-Eintrag ließe sich aus dem Inventar
       löschen statt im Portal.
-- [ ] Der Zeiger-Branch `release/IntuneWin32Helper-v2.0.0` kann weg, der Tag hält den
+- [x] Der Zeiger-Branch `release/IntuneWin32Helper-v2.0.0` kann weg, der Tag hält den
       Commit. Cloud-Sessions dürfen keine Refs löschen.
+      **Beleg (2026-09-28):** vorher Tag und Branch beide auf
+      `dd4770225c9644f2fe9eee66d5dd2802a58d4d23`, `git rev-list --count
+      IntuneWin32Helper-v2.0.0..origin/release/IntuneWin32Helper-v2.0.0` = 0.
+      `git push origin --delete release/IntuneWin32Helper-v2.0.0` → „[deleted]";
+      danach `git branch -r` nur noch `origin/main`, `git ls-remote --tags`
+      zeigt den Tag weiterhin.
 
 Sobald ein Lauf auf `main` gegen einen echten Tenant durch ist, gehört ein neuer
 Abschnitt nach oben in diese Datei — mit Commit, Tag und Transcript-Datum.
