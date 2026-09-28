@@ -63,6 +63,17 @@ function Invoke-IntuneModuleCall {
         Die do/while($false)-Huelle hier faengt das break ab; ein so beendeter
         Aufruf wird zur Exception, die die Aufrufer schon behandeln.
 
+        Zweitens laeuft der Aufruf unter der InvariantCulture. IntuneWin32App
+        1.5.0 liest das Token-Ablaufdatum per
+        [DateTimeOffset]::Parse($Global:AccessToken.ExpiresOn.ToString(), InvariantCulture, ...)
+        - ToString() formatiert aber in der Kultur des Rechners. Unter de-DE
+        ("28.09.2026 10:20:17 +00:00") wirft das ab dem 13. eines Monats, bis zum
+        12. vertauscht es still Tag und Monat. Da Invoke-MSGraphOperation vor
+        JEDEM Graph-Aufruf Test-AccessToken ruft, scheiterte im Feld (2026-09-28,
+        Windows 11 de-DE) jeder Upload schon an der Abfrage vorhandener Apps.
+        1.4.4 rechnete kulturunabhaengig; check-prereqs installiert aber die
+        neueste Version.
+
         .PARAMETER Operation
         Der Aufruf als Scriptblock, z.B. { Get-IntuneWin32App -DisplayName $n }.
 
@@ -77,11 +88,18 @@ function Invoke-IntuneModuleCall {
 
     # Eigene, unverwechselbare Namen: der Scriptblock sieht die Variablen dieser
     # Funktion (dynamischer Gueltigkeitsbereich) und darf keine davon verdecken.
-    $intuneModuleCallDone   = $false
-    $intuneModuleCallResult = $null
+    $intuneModuleCallDone    = $false
+    $intuneModuleCallResult  = $null
+    $intuneModuleCallCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
     do {
-        $intuneModuleCallResult = & $Operation
-        $intuneModuleCallDone   = $true
+        try {
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
+            $intuneModuleCallResult = & $Operation
+            $intuneModuleCallDone   = $true
+        }
+        finally {
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = $intuneModuleCallCulture
+        }
     } while ($false)
 
     if (-not $intuneModuleCallDone) {
