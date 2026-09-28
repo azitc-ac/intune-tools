@@ -199,6 +199,12 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
       `Get-DerivedInstallCommands`). Beleg: je ein Inno-, ein NSIS- und ein
       wixburn-Setup — erkannte Engine stimmt, und der vorgeschlagene Silent-Switch
       installiert wirklich ohne Interaktion.
+      **Zwischenstand (2026-09-28) — offen, weil die Installation auf einem Client
+      fehlt:** `Get-InstallerEngine` auf echten, gültig signierten Installern:
+      `Greenshot-INSTALLER-1.3.315-RELEASE.exe` → `inno`
+      (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`), `npp.8.9.8.1.Installer.x64.exe` →
+      `nsis` (`/S`), `vc_redist.x64.exe` (aka.ms/vs/17) → `burn` (`/quiet /norestart`).
+      Dazu im Feldlauf 2 das MSI (7-Zip 24.09) → `msi`, Transcript Z. 311–313.
 - [ ] **Inventar** (`Get-AppInventory` über `Get-IntuneWin32App`). Beleg: der Dialog
       erscheint, die Spalte `Intune` stimmt gegen das Portal — und wie lange der Abruf
       beim echten App-Bestand dauert, gehört notiert. Das ist die einzige Neuerung, die
