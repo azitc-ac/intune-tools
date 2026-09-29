@@ -210,7 +210,7 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
       133422 B — alle 256×256. Graph `largeIcon` (image/png) je App byte-gleich groß:
       34907 / 49487 / 133422. Nebenwirkung, gewollt: heruntergeladene Logos werden nach
       `Logos\` übernommen — ein zweiter Lauf nimmt dann das vorhandene Logo.
-- [ ] **Abgeleitete Installationsbefehle** (`Get-InstallerEngine`,
+- [x] **Abgeleitete Installationsbefehle** (`Get-InstallerEngine`,
       `Get-DerivedInstallCommands`). Beleg: je ein Inno-, ein NSIS- und ein
       wixburn-Setup — erkannte Engine stimmt, und der vorgeschlagene Silent-Switch
       installiert wirklich ohne Interaktion.
@@ -241,9 +241,14 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
         „Install mode root key: HKEY_LOCAL_MACHINE" — der Schalter wirkt. Die
         Installation brach aber ab: „Das Setup hat entdeckt, dass Greenshot zurzeit
         ausgeführt wird … Defaulting to Cancel" (Exit 1). Es lief die Instanz aus der
-        ersten Fehlinstallation (siehe unten). **Fehlt:** eine vollständige
-        Inno-Installation mit `/ALLUSERS` nach HKLM, auf einem Gerät ohne laufendes
-        Greenshot.
+        ersten Fehlinstallation (siehe unten).
+        **Nachgeholt — belegt (2026-09-29, nach Neustart, Stand `18215f0` / 2.0.10):**
+        neue App `e4c2c43c-…` „IW32H-Feldtest Greenshot Inno HKLM" mit dem abgeleiteten
+        Befehl. PSADT 11:21:46 `… /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS`,
+        Modus `[Silent]`, **Exit 0** nach 6 s; Programmliste
+        `HKLM …\Uninstall\Greenshot_is1`, `InstallLocation=C:\Program Files\Greenshot\`;
+        `AppWorkload.log` 09:22:08 UTC NotDetected → **Detected** (Erkennung nur noch
+        über HKLM). Damit sind Inno, NSIS, burn und MSI auf einem Client belegt.
 - [ ] **Inventar** (`Get-AppInventory` über `Get-IntuneWin32App`). Beleg: der Dialog
       erscheint, die Spalte `Intune` stimmt gegen das Portal — und wie lange der Abruf
       beim echten App-Bestand dauert, gehört notiert. Das ist die einzige Neuerung, die
@@ -309,6 +314,9 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
       Besitzer der Benutzer nicht lesen durfte (`GetOwner` ReturnValue 2; bei
       `explorer.exe` desselben Benutzers 0) — mit großer Wahrscheinlichkeit SYSTEM. Ein
       SYSTEM-Prozess mit Dateidialogen auf dem Desktop ist ein Weg zur Rechteausweitung.
+      **Reproduziert am 2026-09-29:** nach der HKLM-Installation lief wieder
+      `Greenshot.exe` (PID 5388, jetzt aus `C:\Program Files\Greenshot`) in Session 2,
+      Besitzer für den Benutzer nicht lesbar (ReturnValue 2).
       Da immer `-DeployMode Silent` gilt, bringt ServiceUI hier keinen Nutzen.
       Vorschlag: ServiceUI aus den Befehlen nehmen; das erledigt auch die offene Frage
       des Weiterverbreitungsrechts. Auf Wunsch nur dokumentiert.
@@ -321,10 +329,13 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
 
 - [ ] **Zurückgelassen vom Feldtest 2026-09-28 — aufräumen:** in PROD die Apps
       `IW32H-Feldtest *` (7-Zip MSI, Everything (NSIS), Greenshot (Inno), Greenshot
-      Inno-Log, VC++ 2013 x64 (burn), WinGet Everything), alle *required* an die Gruppe
+      Inno-Log, Greenshot Inno HKLM, VC++ 2013 x64 (burn), WinGet Everything), alle
+      *required* an die Gruppe
       `IW32H-Feldtest` (`379dcbdb-bbca-4c45-bde5-0b05e755f23e`, nur CPC-alexa-LAP19);
       auf dem Cloud PC installiert: 7-Zip 24.09, Everything 1.4.1.1032, VC++ 2013 x64,
-      Greenshot im SYSTEM-Profil (läuft als Prozess, endet mit dem Neustart); lokal
+      Greenshot im SYSTEM-Profil und seit 2026-09-29 zusätzlich unter
+      `C:\Program Files\Greenshot` (läuft wieder als Prozess ohne lesbaren Besitzer,
+      endet erst mit dem nächsten Neustart); lokal
       `C:\IntuneFeldtest`. Die abgeleiteten Deinstallationsbefehle suchen nach dem
       Intune-Namen „IW32H-Feldtest …" und greifen deshalb nicht. Der Test-Tenant ist
       aufgeräumt (auch die GIMP-Geister-App vom 2026-09-25).
