@@ -956,6 +956,58 @@ function Get-AppInventory {
     return @($order | ForEach-Object { $rows[$_] })
 }
 
+function ConvertTo-InteractiveFlag {
+    <#
+        Normalisiert die Apps.csv-Spalte "Interactive" auf 'true' oder ''.
+        Leer (und alles andere) heisst: Standard, ohne Dialog und ohne ServiceUI.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Value)
+    if ($Value -match '^\s*(?i)(true|1|yes|ja|x)\s*$') { return 'true' }
+    return ''
+}
+
+function Get-DeployCommandLine {
+    <#
+        .SYNOPSIS
+        Install- und Uninstall-Befehl fuer Intune - die EINZIGE Stelle, die
+        ueber ServiceUI entscheidet.
+
+        .DESCRIPTION
+        Standard (Apps.csv-Spalte "Interactive" leer): PSADT still in Session 0,
+        OHNE ServiceUI. Frueher lief JEDE App ueber
+          ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe ... -DeployMode Silent
+        ServiceUI holt den Prozess als SYSTEM in die Sitzung des Benutzers; mit
+        -DeployMode Silent zeigte PSADT dort aber ohnehin keinen Dialog. Uebrig
+        blieb nur das Risiko: Greenshots Setup startete die App nach der
+        Installation selbst - im Feld (2026-09-28/29) lief Greenshot.exe danach
+        als SYSTEM auf dem Desktop des Benutzers (Besitzer SYSTEM, Session 2,
+        von einer Admin-Sitzung bestaetigt). Ein SYSTEM-Prozess mit Dateidialogen
+        ist ein Weg zur Rechteausweitung.
+
+        Interactive = true: ServiceUI plus PSADT ohne "Silent" (DeployMode Auto),
+        damit Dialoge wie "App bitte schliessen" wirklich erscheinen. Das
+        Restrisiko bleibt fuer genau diese Pakete: startet ihr Setup die App
+        selbst, laeuft sie als SYSTEM beim Benutzer.
+
+        .OUTPUTS
+        Objekt mit Install, Uninstall und NeedsServiceUI.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Interactive)
+
+    if ((ConvertTo-InteractiveFlag -Value $Interactive) -eq 'true') {
+        return [pscustomobject]@{
+            Install        = 'ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe -DeploymentType Install'
+            Uninstall      = 'ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe -DeploymentType Uninstall'
+            NeedsServiceUI = $true
+        }
+    }
+    return [pscustomobject]@{
+        Install        = 'Invoke-AppDeployToolkit.exe -DeploymentType Install -DeployMode Silent'
+        Uninstall      = 'Invoke-AppDeployToolkit.exe -DeploymentType Uninstall -DeployMode Silent'
+        NeedsServiceUI = $false
+    }
+}
+
 function Write-DeployScript {
     <#
         .SYNOPSIS
@@ -984,7 +1036,11 @@ function Write-DeployScript {
 
         # MSI-ProductCode aus Apps.csv. Ist er gesetzt, erkennt Intune die App
         # nativ ueber den ProductCode statt ueber ein Skript.
-        [AllowEmptyString()][string]$MsiProductCode = ''
+        [AllowEmptyString()][string]$MsiProductCode = '',
+
+        # Apps.csv-Spalte "Interactive": 'true' = PSADT-Dialoge ueber ServiceUI,
+        # leer = still und ohne ServiceUI (siehe Get-DeployCommandLine).
+        [AllowEmptyString()][string]$Interactive = ''
     )
 
     $templatePath = Join-Path (Join-Path $RootDir "Templates") "deploy_template.ps1"
@@ -998,6 +1054,7 @@ function Write-DeployScript {
         -replace "#DESC#", $Description -replace "#TOOLVER#", $ToolVersion `
         -replace "#ARCH#", $Architecture -replace "#MINOS#", $MinimumOS `
         -replace "#MSIPRODUCTCODE#", $MsiProductCode `
+        -replace "#INTERACTIVE#", (ConvertTo-InteractiveFlag -Value $Interactive) `
         -replace "#TPLFP#", (Get-TemplateFingerprint -RootDir $RootDir) |
         Out-File (Join-Path $AppFolder "deploy.ps1") -Encoding utf8 -Force
 }
@@ -1058,6 +1115,9 @@ function Update-DeployScript {
     $architecture   = & $readValue $raw "Architecture"
     $minimumOS      = & $readValue $raw "MinimumOS"
     $msiProductCode = & $readValue $raw "MsiProductCode"
+    # Aeltere Skripte kennen die Spalte nicht - leer heisst Standard (ohne
+    # ServiceUI). Ein als interaktiv gebautes Paket bleibt beim Erneuern interaktiv.
+    $interactive    = & $readValue $raw "Interactive"
 
     # Fallback: Werte aus dem Ordnernamen ableiten - ueber dieselbe Funktion, die
     # auch Get-DeployScripts benutzt, statt einer zweiten Zerlegung.
@@ -1072,7 +1132,8 @@ function Update-DeployScript {
 
     Write-DeployScript -AppFolder $appFolder -AppName $appName -AppVersion $appVersion `
         -Publisher $publisher -Description $description -RootDir $RootDir -ToolVersion $ToolVersion `
-        -Architecture $architecture -MinimumOS $minimumOS -MsiProductCode $msiProductCode
+        -Architecture $architecture -MinimumOS $minimumOS -MsiProductCode $msiProductCode `
+        -Interactive $interactive
 
     return $true
 }
@@ -1297,8 +1358,6 @@ function createApps{
         $AppNameCombined = $AppName + " - " + $AppVersion
         $SourcePath = "$packetRoot\$AppNameCombined"
         $ProgramId = $app.ProgramID
-        $InstallCmd = "ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe -DeploymentType Install -DeployMode Silent"
-        $UninstallCmd = "ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe -DeploymentType Uninstall -DeployMode Silent"
         $InstallCmdInternal = $app.InstallCmd
         $UninstallCmdInternal = $app.UninstallCmd
         $winGetParams = $app.WinGetParams -replace "`"",""
@@ -1341,9 +1400,12 @@ function createApps{
             $DetectionScript = get-content "$rootDir\Templates\detection_template-WinGetApp.ps1"
             $DetectionScript -replace "WINGETPROGRAMID", $ProgramId | Out-File "$SourcePath\detection.ps1" -Encoding utf8 -Force
         }
-        # kopieren von serviceui.exe ins neu erstellte dir
-        Write-Host "Copying: ServiceUI.exe"
-        cp $rootDir\ServiceUI.exe $SourcePath\in
+        # ServiceUI.exe nur fuer Pakete, die Dialoge zeigen sollen (Apps.csv
+        # "Interactive"). Dieselbe Entscheidung wie im Installationsbefehl.
+        if ((Get-DeployCommandLine -Interactive ([string]$app.Interactive)).NeedsServiceUI) {
+            Write-Host "Copying: ServiceUI.exe (Interactive)"
+            cp $rootDir\ServiceUI.exe $SourcePath\in
+        }
 
         # einpflegen von publisher, appname, version ins invoke-AppDeployToolkit.ps1
         # Update der Invoke-AppDeployToolkit.ps1, außer im Fall des Zero-Config Deployment mit 1 single MSI, dann darf hier nichts angepasst werden
@@ -1384,8 +1446,8 @@ function createApps{
         Write-DeployScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion `
             -Publisher $AppPublisher -Description $desc -RootDir $rootDir -ToolVersion $toolVersion `
             -Architecture ([string]$app.Architecture) -MinimumOS ([string]$app.MinimumOS) `
-            -MsiProductCode ([string]$app.MsiProductCode)
-  
+            -MsiProductCode ([string]$app.MsiProductCode) -Interactive ([string]$app.Interactive)
+
         # Dateien muss weiterhin ein Mensch bereitstellen - fuer eine
         # Nicht-WinGet-App gibt es keine Quelle, aus der das Tool sie holen
         # koennte. Die Befehle dagegen leitet es jetzt selbst ab.

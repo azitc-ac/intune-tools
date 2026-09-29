@@ -117,8 +117,13 @@ if(Test-Path "$apppath\$appname.png"){$ImageFile = "$apppath\$appname.png"}else{
 $Icon = Invoke-IntuneModuleCall -Label 'New-IntuneWin32AppIcon' -Operation { New-IntuneWin32AppIcon -FilePath $ImageFile }
 
 #Install and Uninstall Commands
-$InstallCommandLine = "ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe -DeploymentType Install -DeployMode Silent"
-$UninstallCommandLine = "ServiceUi.exe -Process:Explorer.exe Invoke-AppDeployToolkit.exe -DeploymentType Uninstall -DeployMode Silent"
+# Standard still und ohne ServiceUI; "true" = PSADT-Dialoge ueber ServiceUI.
+# Entschieden wird nur in Get-DeployCommandLine.
+$Interactive = "#INTERACTIVE#"
+$commandLines = Get-DeployCommandLine -Interactive $Interactive
+Write-Host ("Install command: {0}" -f $commandLines.Install)
+$InstallCommandLine = $commandLines.Install
+$UninstallCommandLine = $commandLines.Uninstall
 
 # Ergebnis des Uploads. Add-IntuneWin32App wirft bei einem fehlgeschlagenen Upload
 # oder Commit KEINE Exception, sondern schreibt nur eine Warnung und gibt $null zurueck

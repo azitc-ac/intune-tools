@@ -49,10 +49,19 @@ Two columns beyond the obvious ones:
 | --- | --- |
 | `Architecture` | `x64` |
 | `MinimumOS` | `W10_20H2` |
+| `Interactive` | silent install without ServiceUI |
 
 Both go into the app's requirement rule, so an ARM64 or x86 app and an app that needs a newer
 Windows no longer have to share one hard-coded rule. Values must be ones
 `New-IntuneWin32AppRequirementRule` accepts.
+
+`Interactive = true` is for the rare package that must show PSAppDeployToolkit dialogs - for
+example "close the running application first". Such a package gets `ServiceUI.exe` and runs
+without `-DeployMode Silent`. Everything else installs silently in session 0 and never touches the
+user's desktop. The reason for that default: through ServiceUI the setup runs **as SYSTEM in the
+user's session**, and a setup that starts its app when it is done (Greenshot does) leaves that app
+running as SYSTEM on the user's desktop - observed in the field on 2026-09-28/29. That risk remains
+for packages marked `Interactive`.
 
 `Version = LatestAvailable` marks a WinGet app: the package is a thin wrapper that installs
 through `winget` on the endpoint. Its detection checks **both** that the package id is present

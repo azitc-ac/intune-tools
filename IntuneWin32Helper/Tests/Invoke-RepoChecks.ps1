@@ -1038,6 +1038,55 @@ if ($installsAsSystem) {
 }
 
 # ---------------------------------------------------------------------------
+# 29) ServiceUI nur ueber Get-DeployCommandLine. Frueher stand der Befehl
+#     "ServiceUi.exe -Process:Explorer.exe ..." fest in deploy_template.ps1
+#     (und als tote Kopie in createApps), ServiceUI.exe wurde in JEDES Paket
+#     kopiert. Folge im Feld: Setups liefen als SYSTEM in der Sitzung des
+#     Benutzers, Greenshot blieb danach als SYSTEM auf dem Desktop stehen.
+#     Jetzt: Befehlsform nur in Get-DeployCommandLine, das Kopieren nur hinter
+#     deren NeedsServiceUI, und das Template holt sich die Befehle dort.
+# ---------------------------------------------------------------------------
+foreach ($p in $parsed.Values) {
+    $checked++
+    $strings = $p.Ast.FindAll({
+        param($n)
+        ($n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+         $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) -and
+        $n.Value -match '(?i)ServiceUi\.exe\s+-Process'
+    }, $true)
+    foreach ($s in $strings) {
+        $owner = & $enclosingFunction $s
+        if ($owner -ne 'Get-DeployCommandLine') {
+            Add-Failure "ServiceUiOnlyWhenInteractive" ("{0}:{1} ServiceUI-Befehl ausserhalb von Get-DeployCommandLine (in '{2}')" -f `
+                $p.File.Name, $s.Extent.StartLineNumber, $owner)
+        }
+    }
+    $copies = $p.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -in @('cp', 'copy', 'Copy-Item', 'cpi') -and
+        $n.Extent.Text -match '(?i)ServiceUI\.exe'
+    }, $true)
+    foreach ($c in $copies) {
+        $guarded = $false
+        $n = $c.Parent
+        while ($n -ne $null) {
+            if ($n -is [System.Management.Automation.Language.IfStatementAst] -and
+                (@($n.Clauses | Where-Object { $_.Item1.Extent.Text -match 'NeedsServiceUI' }).Count -gt 0)) { $guarded = $true; break }
+            $n = $n.Parent
+        }
+        if (-not $guarded) {
+            Add-Failure "ServiceUiOnlyWhenInteractive" ("{0}:{1} ServiceUI.exe wird ohne Pruefung von NeedsServiceUI ins Paket kopiert" -f `
+                $p.File.Name, $c.Extent.StartLineNumber)
+        }
+    }
+}
+$checked++
+if ((Test-Path -LiteralPath $templatePath) -and ((Get-Content -LiteralPath $templatePath -Raw) -notmatch 'Get-DeployCommandLine')) {
+    Add-Failure "ServiceUiOnlyWhenInteractive" "deploy_template.ps1 holt die Befehle nicht aus Get-DeployCommandLine"
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

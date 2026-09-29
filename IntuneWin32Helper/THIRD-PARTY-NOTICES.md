@@ -2,9 +2,10 @@
 
 ## ServiceUI.exe
 
-`ServiceUI.exe` in this folder is a **Microsoft** component, not part of this tool. The install and
-uninstall command lines of every generated package call it so that PSAppDeployToolkit can show its
-dialogs in the logged-on user's session while the Intune Management Extension runs as SYSTEM.
+`ServiceUI.exe` in this folder is a **Microsoft** component, not part of this tool. Only packages
+marked `Interactive = true` in `Apps.csv` carry and call it, so that PSAppDeployToolkit can show its
+dialogs in the logged-on user's session while the Intune Management Extension runs as SYSTEM. By
+default packages install silently without it (see `Get-DeployCommandLine`).
 
 Read from the file's own version resource:
 
