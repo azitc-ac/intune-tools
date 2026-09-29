@@ -306,7 +306,18 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
 
 **Im Feld gefunden, nicht behoben — Entscheidung beim Inhaber**
 
-- [ ] **ServiceUI startet den Installer als SYSTEM auf dem Benutzer-Desktop.** Jeder
+- [x] **ServiceUI startet den Installer als SYSTEM auf dem Benutzer-Desktop.**
+      **Behoben in `1de65e5` (2.0.11):** Standard still und ohne ServiceUI, neue
+      `Apps.csv`-Spalte `Interactive` für Pakete mit PSADT-Dialogen; Besitzer SYSTEM
+      am 2026-09-29 von einer Admin-Sitzung bestätigt (PID 5388, Session 2, beendet).
+      **Feldbeleg danach:** App `4cf12745-…` „IW32H-Feldtest Greenshot Standard"
+      (Paket ohne `ServiceUI.exe`, `Install command: Invoke-AppDeployToolkit.exe
+      -DeploymentType Install -DeployMode Silent`). PSADT 16:10:04 UTC „Session 0
+      detected but deployment mode was explicitly set to [Silent]", Exit 0; Intune
+      NotDetected → Detected; HKLM `C:\Program Files\Greenshot\`. Danach **kein**
+      `Greenshot.exe`, weder in der Benutzersitzung 2 noch sonst. Die interaktive
+      Variante ist noch nicht im Feld gelaufen.
+      Befund vorher: Jeder
       Installationsbefehl lautet `ServiceUi.exe -Process:Explorer.exe
       Invoke-AppDeployToolkit.exe … -DeployMode Silent`. Greenshots Inno-Setup startet
       die App nach der Installation selbst — im Feld (2026-09-28, 14:14:41) lief danach
