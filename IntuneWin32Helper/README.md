@@ -26,9 +26,11 @@ makes visible. `Write-DeployScript` stamps every package with a short hash over 
 (`# ToolTemplateFingerprint:`), and the inventory compares it against the current state.
 `unstamped` means the package predates the stamp.
 
-Renewing happens on deploy (`Update-DeployScript`, with a `deploy.ps1.bak` backup) and only for
-packages that need it - by the same stamp the inventory shows: `outdated` and `unstamped` are
-renewed, `current` is left alone even if it was edited by hand.
+Renewing happens on deploy (`Update-DeployScript`, with `deploy.ps1.bak` and `detection.ps1.bak`
+backups) and only for packages that need it - by the same stamp the inventory shows: `outdated` and
+`unstamped` are renewed, `current` is left alone even if it was edited by hand. The stamp covers
+all templates, so `deploy.ps1` **and** `detection.ps1` are renewed together; the search name or
+WinGet id is carried over from the old `detection.ps1`.
 
 ## Configuration
 
@@ -50,6 +52,7 @@ Two columns beyond the obvious ones:
 | `Architecture` | `x64` |
 | `MinimumOS` | `W10_20H2` |
 | `Interactive` | silent install without ServiceUI |
+| `ArpName` | the `DisplayName` - the name under which the app appears in *Apps & features* |
 
 Both go into the app's requirement rule, so an ARM64 or x86 app and an app that needs a newer
 Windows no longer have to share one hard-coded rule. Values must be ones
@@ -62,6 +65,12 @@ user's desktop. The reason for that default: through ServiceUI the setup runs **
 user's session**, and a setup that starts its app when it is done (Greenshot does) leaves that app
 running as SYSTEM on the user's desktop - observed in the field on 2026-09-28/29. That risk remains
 for packages marked `Interactive`.
+
+`ArpName` is the search name for both the script detection and the derived uninstall command.
+Both use the **same** rule: an entry whose name *starts with* `ArpName`
+(`DisplayName -like "<ArpName>*"` and `Uninstall-ADTApplication -Name '<ArpName>*' -NameMatch
+'Wildcard'`). Set it when the Intune name differs from the product's entry in the program list, or
+to be more precise - `Git` also matches `GitHub Desktop`, and the uninstall removes **every** match.
 
 `Version = LatestAvailable` marks a WinGet app: the package is a thin wrapper that installs
 through `winget` on the endpoint. Its detection checks **both** that the package id is present

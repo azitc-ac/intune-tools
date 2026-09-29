@@ -21,6 +21,9 @@ Param
 
 $Action = "Detect"
 $PackageID = "#DN#"
+# Suchname in der Programmliste (Apps.csv "ArpName", leer = DisplayName).
+# Dieselbe Regel wie die Deinstallation: DisplayName -like "<ArpName>*".
+$ArpName = "#ARPNAME#"
 $TargetVersion = "#VER#"
 $logFile = "$env:ProgramData\Microsoft\IntuneManagementExtension\Logs\$($PackageID)-$($TargetVersion)_$Action.log"
 
@@ -90,4 +93,4 @@ Function Test-AppInstallation {
 Write-Log "------------------------------------"
 Write-Log "$Action $PackageID - $TargetVersion"
 
-Test-AppInstallation -AppName $PackageID -TargetVersion $TargetVersion
+Test-AppInstallation -AppName $ArpName -TargetVersion $TargetVersion

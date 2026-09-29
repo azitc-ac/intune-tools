@@ -700,10 +700,17 @@ function Get-DerivedInstallCommands {
     }
 
     $engine = Get-InstallerEngine -Path $installer.File.FullName
+    # $AppName ist hier der Suchname in der Programmliste (Get-ArpSearchName),
+    # nicht zwingend der Intune-Name.
     $searchName = $AppName.Replace("'", "''")
 
+    # Dieselbe Regel wie die Erkennung (detection_template.ps1: DisplayName -like
+    # "<Name>*"). Ohne -NameMatch vergleicht PSADT 4 mit 'Contains' und
+    # deinstalliert JEDEN Treffer (Uninstall-ADTApplication: foreach) - "Git"
+    # haette auch "GitHub Desktop" entfernt, und Erkennung und Deinstallation
+    # konnten verschiedene Eintraege treffen.
     $install   = "Start-ADTProcess -FilePath '$name' -ArgumentList '$($engine.Install)'"
-    $uninstall = "Uninstall-ADTApplication -Name '$searchName' -ApplicationType EXE -AdditionalArgumentList '$($engine.Uninstall)'"
+    $uninstall = "Uninstall-ADTApplication -Name '$searchName*' -NameMatch 'Wildcard' -ApplicationType EXE -AdditionalArgumentList '$($engine.Uninstall)'"
     if ($engine.Note) {
         $install   += "   # " + $engine.Note
         $uninstall += "   # " + $engine.Note
@@ -956,6 +963,62 @@ function Get-AppInventory {
     return @($order | ForEach-Object { $rows[$_] })
 }
 
+function Get-ArpSearchName {
+    <#
+        Der Name, unter dem die App in der Programmliste (Uninstall-Schluessel)
+        gesucht wird - fuer Erkennung UND Deinstallation. Apps.csv-Spalte
+        "ArpName"; leer heisst: wie DisplayName (das bisherige Verhalten).
+
+        Im Feld (2026-09-28/29) stimmten die beiden nicht immer ueberein: die
+        Test-Apps hiessen "IW32H-Feldtest ...", und VC++ heisst seit 14.50 in der
+        Programmliste "... v14 Redistributable" statt "2015-2022". Die Erkennung
+        musste von Hand angepasst werden.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$DisplayName,
+        [AllowEmptyString()][AllowNull()][string]$ArpName
+    )
+    if (-not [string]::IsNullOrWhiteSpace($ArpName)) { return $ArpName.Trim() }
+    return $DisplayName
+}
+
+function Write-DetectionScript {
+    <#
+        .SYNOPSIS
+        Erzeugt detection.ps1 eines App-Ordners aus der aktuellen Vorlage.
+
+        .DESCRIPTION
+        Anlegen (createApps) und Erneuern (Update-DeployScript) teilen diesen
+        einen Pfad - wie Write-DeployScript fuer deploy.ps1. Frueher wurde
+        detection.ps1 nur in createApps gerendert, Update-DeployScript fasste es
+        nicht an: der Vorlagen-Stempel (ueber ALLE Vorlagen) stand nach dem
+        Erneuern auf "current", die Erkennung im Paket blieb aber die alte -
+        eine Korrektur wie "kein HKCU" erreichte kein bestehendes Paket.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$AppFolder,
+        [Parameter(Mandatory = $true)][string]$AppName,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$AppVersion,
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [AllowEmptyString()][string]$ProgramId = '',
+        [AllowEmptyString()][string]$ArpName = ''
+    )
+
+    $target = Join-Path $AppFolder 'detection.ps1'
+    if ($AppVersion -eq 'LatestAvailable') {
+        if ([string]::IsNullOrWhiteSpace($ProgramId)) { throw "Write-DetectionScript: WinGet app '$AppName' without ProgramID" }
+        $template = Get-Content -LiteralPath (Join-Path $RootDir 'Templates\detection_template-WinGetApp.ps1')
+        $template -replace "WINGETPROGRAMID", $ProgramId | Out-File $target -Encoding utf8 -Force
+    }
+    else {
+        $template = Get-Content -LiteralPath (Join-Path $RootDir 'Templates\detection_template.ps1')
+        $template -replace "#DN#", $AppName -replace "#VER#", $AppVersion `
+            -replace "#ARPNAME#", (Get-ArpSearchName -DisplayName $AppName -ArpName $ArpName) |
+            Out-File $target -Encoding utf8 -Force
+    }
+}
+
 function ConvertTo-InteractiveFlag {
     <#
         Normalisiert die Apps.csv-Spalte "Interactive" auf 'true' oder ''.
@@ -1134,6 +1197,21 @@ function Update-DeployScript {
         -Publisher $publisher -Description $description -RootDir $RootDir -ToolVersion $ToolVersion `
         -Architecture $architecture -MinimumOS $minimumOS -MsiProductCode $msiProductCode `
         -Interactive $interactive
+
+    # detection.ps1 gehoert zum selben Stempel - mit erneuern. Suchname und
+    # WinGet-ID kommen aus dem alten Skript: $ArpName, sonst $PackageID (dort
+    # stand in aelteren Paketen der Suchname, ggf. von Hand angepasst).
+    $detectionPath = Join-Path $appFolder 'detection.ps1'
+    if (Test-Path -LiteralPath $detectionPath) {
+        $oldDetection = Get-Content -LiteralPath $detectionPath -Raw
+        $oldArpName   = & $readValue $oldDetection "ArpName"
+        $oldPackageId = & $readValue $oldDetection "PackageID"
+        if (-not $oldArpName -and $appVersion -ne 'LatestAvailable') { $oldArpName = $oldPackageId }
+        Copy-Item -LiteralPath $detectionPath -Destination ($detectionPath + ".bak") -Force
+        Write-DetectionScript -AppFolder $appFolder -AppName $appName -AppVersion $appVersion -RootDir $RootDir `
+            -ProgramId $oldPackageId -ArpName $oldArpName
+        Write-Host ("Updated detection.ps1 from template (backup: detection.ps1.bak)") -ForegroundColor Yellow
+    }
 
     return $true
 }
@@ -1388,18 +1466,11 @@ function createApps{
 
         # für normale Pakete
         # kopieren von detect.ps1 und anpassen
-        Write-Host "Copying and customizing: detection_template.ps1"
-        if($AppVersion -ne "LatestAvailable"){
-            $DetectionScript = get-content "$rootDir\Templates\detection_template.ps1" 
-            $DetectionScript -replace "#DN#", $AppName -replace "#VER#",$AppVersion | Out-File "$SourcePath\detection.ps1" -Encoding utf8 -Force
-        }
-        else{
-            # für WinGet Pakete
-            # kopieren von detect.ps1 und anpassen
-            Write-Host "Copying and customizing: detection_template-WinGetApp.ps1"
-            $DetectionScript = get-content "$rootDir\Templates\detection_template-WinGetApp.ps1"
-            $DetectionScript -replace "WINGETPROGRAMID", $ProgramId | Out-File "$SourcePath\detection.ps1" -Encoding utf8 -Force
-        }
+        # Gemeinsamer Pfad mit Update-DeployScript (Write-DetectionScript).
+        Write-Host "Writing detection.ps1 from template"
+        $arpSearchName = Get-ArpSearchName -DisplayName $AppName -ArpName ([string]$app.ArpName)
+        Write-DetectionScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion -RootDir $rootDir `
+            -ProgramId $ProgramId -ArpName $arpSearchName
         # ServiceUI.exe nur fuer Pakete, die Dialoge zeigen sollen (Apps.csv
         # "Interactive"). Dieselbe Entscheidung wie im Installationsbefehl.
         if ((Get-DeployCommandLine -Interactive ([string]$app.Interactive)).NeedsServiceUI) {
@@ -1458,7 +1529,7 @@ function createApps{
 
             $needsEditor = $true
             if(-not $InstallCmdInternal -and -not $UninstallCmdInternal){
-                $derived = Get-DerivedInstallCommands -ContentPath "$SourcePath\in" -AppName $AppName
+                $derived = Get-DerivedInstallCommands -ContentPath "$SourcePath\in" -AppName $arpSearchName
                 if($derived){
                     Write-Host ("Derived from {0} (engine: {1}):" -f $derived.FileName, $derived.Engine) -ForegroundColor Green
                     Write-Host ("  Install:   {0}" -f $derived.Install)

@@ -1087,6 +1087,53 @@ if ((Test-Path -LiteralPath $templatePath) -and ((Get-Content -LiteralPath $temp
 }
 
 # ---------------------------------------------------------------------------
+# 30) detection.ps1 nur ueber Write-DetectionScript, Erneuern inklusive.
+#     Frueher renderte createApps die Erkennung selbst, Update-DeployScript
+#     fasste sie nicht an - der Stempel stand danach auf "current", die alte
+#     Erkennung blieb. Dazu: die Deinstallation nutzt dieselbe Praefix-Regel
+#     wie die Erkennung (ohne -NameMatch vergleicht PSADT 4 per 'Contains' und
+#     entfernt jeden Treffer).
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $detRefs = $functionsFile.Ast.FindAll({
+        param($n)
+        ($n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+         $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) -and
+        $n.Value -match 'detection_template'
+    }, $true)
+    foreach ($r in $detRefs) {
+        $owner = & $enclosingFunction $r
+        if ($owner -notin @('Write-DetectionScript', 'Get-TemplateFingerprint')) {
+            Add-Failure "DetectionOnePath" ("functions.ps1:{0} Erkennungsvorlage ausserhalb von Write-DetectionScript benutzt (in '{1}')" -f $r.Extent.StartLineNumber, $owner)
+        }
+    }
+    $upd = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Update-DeployScript' }, $true)
+    if ($upd -and $upd.Extent.Text -notmatch 'Write-DetectionScript') {
+        Add-Failure "DetectionOnePath" "Update-DeployScript erneuert detection.ps1 nicht - der Stempel meldet danach 'current' fuer eine alte Erkennung"
+    }
+    $derive = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-DerivedInstallCommands' }, $true)
+    if ($derive) {
+        $uninst = $derive.FindAll({
+            param($n)
+            ($n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+             $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) -and
+            $n.Value -match 'Uninstall-ADTApplication'
+        }, $true)
+        foreach ($u in $uninst) {
+            if ($u.Value -notmatch "-NameMatch 'Wildcard'" -or $u.Value -notmatch "-Name '[^']*\*'") {
+                Add-Failure "DetectionOnePath" ("functions.ps1:{0} abgeleitete Deinstallation ohne Praefix-Regel (-Name '<Name>*' -NameMatch 'Wildcard') - PSADT vergleicht sonst per 'Contains'" -f $u.Extent.StartLineNumber)
+            }
+        }
+    }
+}
+$checked++
+$detTplPath = Join-Path $RepoRoot 'Templates\detection_template.ps1'
+if ((Test-Path -LiteralPath $detTplPath) -and ((Get-Content -LiteralPath $detTplPath -Raw) -notmatch 'Test-AppInstallation\s+-AppName\s+\$ArpName')) {
+    Add-Failure "DetectionOnePath" "detection_template.ps1 sucht nicht mit `$ArpName - Apps.csv 'ArpName' waere wirkungslos"
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""
