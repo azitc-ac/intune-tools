@@ -331,6 +331,22 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
       Da immer `-DeployMode Silent` gilt, bringt ServiceUI hier keinen Nutzen.
       Vorschlag: ServiceUI aus den Befehlen nehmen; das erledigt auch die offene Frage
       des Weiterverbreitungsrechts. Auf Wunsch nur dokumentiert.
+- [x] **Deinstallation traf per `Contains` jeden Treffer; Suchname fest am Intune-Namen;
+      `detection.ps1` wurde nie erneuert.** Gefunden beim Vergleich mit
+      `ps-tools/uninstall-Apps.ps1` (2026-09-29). PSADT 4.1.8 vergleicht
+      `Uninstall-ADTApplication -Name` standardmäßig per `Contains` und entfernt jeden
+      Treffer; die Erkennung prüft „beginnt mit". `Update-DeployScript` erneuerte nur
+      `deploy.ps1` — der Stempel stand danach auf „current", die alte Erkennung blieb.
+      **Behoben in `482b655` (2.0.12):** gleiche Präfix-Regel
+      (`-Name '<Name>*' -NameMatch 'Wildcard'`), `Apps.csv`-Spalte `ArpName`, ein Pfad
+      `Write-DetectionScript` für Anlegen und Erneuern.
+      **Feldbeleg (PROD, Deinstallation über Intune — vorher nie im Feld gelaufen):**
+      App `7f8d9267-…` „IW32H-Feldtest Greenshot ArpName" mit `ArpName = Greenshot`, ohne
+      Handanpassung, Intent `uninstall`. Erkennung 16:24:20 UTC über den Suchnamen
+      „found"; PSADT „Found installed application [Greenshot 1.3.315]" — genau ein
+      Treffer —, `unins000.exe /SILENT /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`, Exit 0;
+      danach Erkennung „NOT found", Intune NotDetected, HKLM-Eintrag und
+      `C:\Program Files\Greenshot` weg; Everything, Notepad++, 7-Zip unberührt.
 - [ ] **Azure-403 beim ersten Chunk.** Bei 3 von 12 Uploads am 2026-09-28 (alle mit
       2–6 Chunks; gezählt über die Transcripts `…\Logs\2026-09-28_*.log`) scheiterte
       der erste Chunk mit „(403) AuthenticationFailed"; die Wiederholung in
@@ -340,13 +356,13 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
 
 - [ ] **Zurückgelassen vom Feldtest 2026-09-28 — aufräumen:** in PROD die Apps
       `IW32H-Feldtest *` (7-Zip MSI, Everything (NSIS), Greenshot (Inno), Greenshot
-      Inno-Log, Greenshot Inno HKLM, VC++ 2013 x64 (burn), WinGet Everything), alle
-      *required* an die Gruppe
+      Inno-Log, Greenshot Inno HKLM, VC++ 2013 x64 (burn), WinGet Everything; die
+      Greenshot-Apps außer „Greenshot ArpName" sind inzwischen gelöscht), alle
+      *required* (bzw. *uninstall*) an die Gruppe
       `IW32H-Feldtest` (`379dcbdb-bbca-4c45-bde5-0b05e755f23e`, nur CPC-alexa-LAP19);
       auf dem Cloud PC installiert: 7-Zip 24.09, Everything 1.4.1.1032, VC++ 2013 x64,
-      Greenshot im SYSTEM-Profil und seit 2026-09-29 zusätzlich unter
-      `C:\Program Files\Greenshot` (läuft wieder als Prozess ohne lesbaren Besitzer,
-      endet erst mit dem nächsten Neustart); lokal
+      Greenshot ist seit 2026-09-29 wieder vollständig entfernt (SYSTEM-Profil-Eintrag
+      verschwunden, HKLM-Installation per Intune deinstalliert); lokal
       `C:\IntuneFeldtest`. Die abgeleiteten Deinstallationsbefehle suchen nach dem
       Intune-Namen „IW32H-Feldtest …" und greifen deshalb nicht. Der Test-Tenant ist
       aufgeräumt (auch die GIMP-Geister-App vom 2026-09-25).
