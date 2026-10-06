@@ -630,5 +630,86 @@ $txt = Get-GraphErrorText $erC
 Assert ($txt -match 'Get-InstalledModule' -and $txt -notmatch 'pwsh -NoProfile') 'no GAC: the general conflict message'
 #endregion
 
+#region Direct route (Windows PowerShell 5.1, Azure.Core in the GAC: Invoke-MgGraphRequest cannot build its client)
+$script:mgCalls = 0; $script:mgThrow = 'conflict'
+function Invoke-MgGraphRequest {
+    param($Method, $Uri, $Headers, $Body, $ContentType, $ErrorAction)
+    $script:mgCalls++
+    if ($script:mgThrow -eq 'conflict') { throw [System.MissingMethodException]::new("Methode nicht gefunden: 'Void Microsoft.Graph.Authentication.AzureIdentityAccessTokenProvider..ctor(...)'.") }
+    if ($script:mgThrow -eq 'graph') {
+        $e = [System.Management.Automation.ErrorRecord]::new([Exception]::new('403'), 'x', 'NotSpecified', $null)
+        $e.ErrorDetails = [System.Management.Automation.ErrorDetails]::new('{"error":{"code":"Forbidden","message":"no access"}}'); throw $e
+    }
+    return @{ via = 'sdk' }
+}
+$script:webCalls = New-Object System.Collections.Generic.List[object]
+$script:webAnswer = '{"value":[{"id":"g1","displayName":"Grüne Geräte","groupTypes":[]}],"@odata.nextLink":null}'
+function Invoke-WebRequest {
+    param($Method, $Uri, $Headers, $Body, $ContentType, [switch]$UseBasicParsing, $ErrorAction)
+    $script:webCalls.Add([PSCustomObject]@{ Method = $Method; Uri = $Uri; Headers = $Headers; Body = $Body; ContentType = $ContentType })
+    if ($script:webAnswer -eq 'ERR') {
+        $e = [System.Management.Automation.ErrorRecord]::new([System.Net.WebException]::new('(400) Bad Request'), 'x', 'NotSpecified', $null)
+        $e.ErrorDetails = [System.Management.Automation.ErrorDetails]::new('{"error":{"code":"BadRequest","message":"bad body"}}'); throw $e
+    }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$script:webAnswer)
+    return [PSCustomObject]@{ StatusCode = 200; Content = 'mojibake'; RawContentStream = [System.IO.MemoryStream]::new($bytes) }
+}
+$script:tokenCalls = 0
+$script:GetGraphToken = { $script:tokenCalls++; @{ Token = "tok$($script:tokenCalls)"; ExpiresUtc = [datetime]::UtcNow.AddMinutes(60) } }
+$script:Now = { Get-Date }
+$script:DirectHttp = $false; $script:GraphToken = $null
+
+$r = Invoke-GaaGraph -Method GET -Uri 'https://graph.microsoft.com/v1.0/groups?$top=1' -Headers @{ ConsistencyLevel = 'eventual' }
+Assert ($script:DirectHttp -and $script:mgCalls -eq 1 -and $script:webCalls.Count -eq 1) 'direct: an assembly conflict in Invoke-MgGraphRequest switches to the direct route and repeats the call'
+Assert ($script:webCalls[0].Headers.Authorization -eq 'Bearer tok1' -and $script:webCalls[0].Headers.ConsistencyLevel -eq 'eventual' -and $script:webCalls[0].Method -eq 'GET') 'direct: bearer token and the caller''s headers are sent'
+Assert ($r -is [hashtable] -and $r.value -is [array] -and $r.value.Count -eq 1 -and $r.value[0] -is [hashtable]) 'direct: answer comes back as hashtables / arrays like from the SDK (one-item array stays an array)'
+Assert ($r.value[0].displayName -eq "Gr$([char]0xFC)ne Ger$([char]0xE4)te") 'direct: UTF-8 decoded from the raw bytes, not from .Content'
+Assert ($r.value[0].groupTypes -is [array] -and $r.value[0].groupTypes.Count -eq 0 -and $null -eq $r.'@odata.nextLink') 'direct: empty array stays an empty array, null stays null'
+$null = Invoke-GaaGraph -Method GET -Uri 'https://graph.microsoft.com/v1.0/groups'
+Assert ($script:mgCalls -eq 1 -and $script:webCalls.Count -eq 2 -and $script:tokenCalls -eq 1) 'direct: later calls go direct at once and reuse the token'
+
+$script:webAnswer = ''
+$json = '{"assignments":[{"target":{"groupId":"g1"},"note":"' + [char]0xE4 + '"}]}'
+$r = Invoke-GaaGraph -Method POST -Uri 'https://graph.microsoft.com/beta/x/assign' -Body $json -ContentType 'application/json'
+$wc = $script:webCalls[$script:webCalls.Count - 1]
+Assert ($null -eq $r -and $wc.Method -eq 'POST' -and $wc.ContentType -eq 'application/json; charset=utf-8') 'direct: POST with JSON content type, empty answer -> $null'
+Assert ($wc.Body -is [byte[]] -and [System.Text.Encoding]::UTF8.GetString($wc.Body) -eq $json) 'direct: body sent as UTF-8 bytes'
+
+$script:GraphToken.ExpiresUtc = [datetime]::UtcNow.AddMinutes(3)
+$null = Invoke-GaaGraph -Method GET -Uri 'https://graph.microsoft.com/v1.0/groups'
+Assert ($script:tokenCalls -eq 2 -and $script:webCalls[$script:webCalls.Count - 1].Headers.Authorization -eq 'Bearer tok2') 'direct: token renewed when less than 5 minutes are left'
+function Connect-MgGraph { param($Scopes, $TenantId, [switch]$NoWelcome, $ErrorAction) }
+function Get-MgContext { @{ Account = 'b@x' } }
+function Import-Module { }
+function Get-Module { param($Name, [switch]$ListAvailable) [PSCustomObject]@{ Name = $Name } }
+function Disconnect-MgGraph { param($ErrorAction) }
+$null = Connect-GaaGraph
+Assert ($null -eq $script:GraphToken) 'direct: connecting (maybe another account) drops the token'
+$script:GraphToken = @{ Token = 'old'; ExpiresUtc = [datetime]::UtcNow.AddHours(1) }
+Disconnect-GaaGraph
+Assert ($null -eq $script:GraphToken) 'direct: signing out drops the token'
+Remove-Item Function:\Connect-MgGraph, Function:\Get-MgContext, Function:\Import-Module, Function:\Disconnect-MgGraph, Function:\Get-Module
+
+$script:webAnswer = 'ERR'
+$err = $null
+try { Invoke-GaaGraph -Method POST -Uri 'https://graph.microsoft.com/beta/x/assign' -Body '{}' } catch { $err = $_ }
+Assert ($err -and (Get-GraphErrorCode $err) -eq 'BadRequest' -and (Get-GraphErrorText $err) -eq 'bad body') 'direct: Graph errors keep code and message for the retry logic and the dialogs'
+
+# without the conflict nothing changes
+$script:DirectHttp = $false; $script:mgThrow = ''; $script:webCalls.Clear(); $script:mgCalls = 0
+$r = Invoke-GaaGraph -Method GET -Uri 'https://graph.microsoft.com/v1.0/groups'
+Assert ($r.via -eq 'sdk' -and $script:webCalls.Count -eq 0 -and -not $script:DirectHttp) 'direct: not used while Invoke-MgGraphRequest works'
+$script:mgThrow = 'graph'; $err = $null
+try { Invoke-GaaGraph -Method GET -Uri 'https://graph.microsoft.com/v1.0/groups' } catch { $err = $_ }
+Assert ($err -and (Get-GraphErrorCode $err) -eq 'Forbidden' -and $script:webCalls.Count -eq 0 -and -not $script:DirectHttp) 'direct: an ordinary Graph error is passed on unchanged, no switch'
+Remove-Item Function:\Invoke-MgGraphRequest, Function:\Invoke-WebRequest
+$script:DirectHttp = $false; $script:GraphToken = $null
+
+# Every Graph call of the tool goes through Invoke-GaaGraph (otherwise it would miss the direct route)
+$mgDirect = @($toolAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Invoke-MgGraphRequest' }, $true))
+$mgOwner  = @($mgDirect | ForEach-Object { $q = $_.Parent; while ($q -and $q -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $q = $q.Parent }; if ($q) { $q.Name } else { '<top>' } })
+Assert ($mgDirect.Count -eq 1 -and $mgOwner[0] -eq 'Invoke-GaaGraph') "Invoke-MgGraphRequest is called only inside Invoke-GaaGraph (found in: $($mgOwner -join ', '))"
+#endregion
+
 Write-Host ("{0} passed, {1} failed" -f $script:pass, $script:fail) -ForegroundColor $(if ($script:fail) { 'Red' } else { 'Green' })
 exit [int]($script:fail -gt 0)

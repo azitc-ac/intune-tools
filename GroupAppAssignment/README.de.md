@@ -124,9 +124,14 @@ Im Feld gesehen, mit nur Graph 2.40 installiert: **`Azure.Core` aus dem GAC von 
 1.50.0, von einer anderen Software dort installiert) neben 1.51.1 aus dem Modul. Windows PowerShell 5.1 nimmt
 die GAC-Kopie, sobald eine DLL genau diese Version anfordert – beide sind geladen, der Aufruf scheitert; Neustart
 oder saubere Modulinstallation helfen nicht. Das Tool erkennt diesen Fall (doppelt geladene DLL, eine Kopie aus
-dem GAC, in der Liste mit `<<` markiert) und benennt ihn. Abhilfe: das Tool mit **PowerShell 7** starten, das
-keinen GAC kennt (`pwsh -NoProfile -File Manage-GroupAppAssignment.ps1`, `Microsoft.Graph.Authentication` dafür
-in PowerShell 7 installieren).
+dem GAC, in der Liste mit `<<` markiert) und benennt ihn. Genau `Microsoft.Graph.Core` 4.0.1 und
+`Microsoft.Kiota.Authentication.Azure` 2.0.0 fordern Azure.Core 1.50.0.0 an, `Azure.Identity` 1.18.0 dagegen 1.51.1.0
+(aus den Assembly-Referenzen der Pakete gelesen).
+
+**Das Tool umgeht das selbst:** Scheitert `Invoke-MgGraphRequest` an so einem Konflikt, holt es das Token der
+`Connect-MgGraph`-Sitzung direkt über die Anmeldung des Moduls (nur Azure.Identity, ohne Microsoft.Graph.Core) und
+ruft Graph für den Rest der Sitzung per `Invoke-WebRequest` auf. Anmelden, Konto wechseln und Abmelden bleiben gleich.
+Erst wenn auch das scheitert, nennt die Meldung die Ursache und PowerShell 7 als Ausweg.
 
 ## Start
 

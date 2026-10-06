@@ -795,11 +795,99 @@ function Get-GraphErrorText {
     return $msg
 }
 
+# ---- Graph calls ----
+# Every Graph call goes through Invoke-GaaGraph. Normally that is Invoke-MgGraphRequest. When its HTTP stack cannot
+# be built in this process (Windows PowerShell 5.1 with Azure.Core in the GAC, see Get-GacConflict), the tool takes
+# the token of the Connect-MgGraph session itself and calls Graph with Invoke-WebRequest - for the rest of the run.
+$script:DirectHttp = $false
+$script:GraphToken = $null   # @{ Token; ExpiresUtc } for the direct route
+$script:GetGraphToken = { Get-SessionGraphToken }   # replaced by the tests
+
+function Invoke-GaaGraph {
+    [CmdletBinding()]
+    param([string]$Method = 'GET', [string]$Uri, [hashtable]$Headers = @{}, [string]$Body, [string]$ContentType = 'application/json')
+    if (-not $script:DirectHttp) {
+        $p = @{ Method = $Method; Uri = $Uri; Headers = $Headers; ErrorAction = 'Stop' }
+        if ($Body) { $p['Body'] = $Body; $p['ContentType'] = $ContentType }
+        try {
+            return Invoke-MgGraphRequest @p
+        } catch {
+            # the conflict strikes while the module builds its HTTP client, before anything is sent: retrying is safe
+            if (-not (Test-AssemblyConflict $_.Exception)) { throw $_ }
+            $script:DirectHttp = $true
+        }
+    }
+    return Invoke-GraphDirect -Method $Method -Uri $Uri -Headers $Headers -Body $Body -ContentType $ContentType
+}
+
+function Get-SessionGraphToken {
+    # Access token of the Connect-MgGraph session, taken through Azure.Identity only (the credential the module signs
+    # in with) - Microsoft.Graph.Core, which binds to the GAC copy of Azure.Core, is not touched.
+    $ctx = [Microsoft.Graph.PowerShell.Authentication.GraphSession]::Instance.AuthContext
+    if (-not $ctx) { throw $L.NotConnectedMsg }
+    $cred = [Microsoft.Graph.PowerShell.Authentication.Core.Utilities.AuthenticationHelpers]::GetTokenCredentialAsync(
+                $ctx, [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+    # TokenRequestContext from the same Azure.Core as the credential (there are two in this process)
+    $t = $cred.GetType()
+    while ($t -and $t.FullName -ne 'Azure.Core.TokenCredential') { $t = $t.BaseType }
+    if (-not $t) { throw "TokenCredential not found ($($cred.GetType().FullName))" }
+    $trcType = $t.Assembly.GetType('Azure.Core.TokenRequestContext', $true)
+    $ctor = $trcType.GetConstructors() | Where-Object { $ps = $_.GetParameters(); $ps.Count -ge 1 -and $ps[0].ParameterType -eq [string[]] } |
+                Sort-Object { $_.GetParameters().Count } | Select-Object -First 1
+    $scopes = [string[]]@($ctx.Scopes | Where-Object { $_ })
+    if ($scopes.Count -eq 0) { $scopes = [string[]]@('https://graph.microsoft.com/.default') }
+    $ctorArgs = New-Object System.Collections.Generic.List[object]
+    foreach ($pi in $ctor.GetParameters()) {
+        if ($pi.Position -eq 0) { $ctorArgs.Add($scopes) }
+        elseif ($pi.HasDefaultValue) { $ctorArgs.Add($pi.DefaultValue) }
+        else { $ctorArgs.Add($null) }
+    }
+    $at = $cred.GetToken($ctor.Invoke($ctorArgs.ToArray()), [System.Threading.CancellationToken]::None)
+    return @{ Token = $at.Token; ExpiresUtc = $at.ExpiresOn.UtcDateTime }
+}
+
+function ConvertTo-GraphHashtable {
+    # ConvertFrom-Json objects -> hashtables and object[], the shape Invoke-MgGraphRequest returns
+    param($InputObject)
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Management.Automation.PSCustomObject]) {
+        $h = @{}
+        foreach ($pr in $InputObject.PSObject.Properties) { $h[$pr.Name] = ConvertTo-GraphHashtable $pr.Value }
+        return $h
+    }
+    if ($InputObject -is [System.Collections.IList]) {
+        $list = New-Object System.Collections.Generic.List[object]
+        foreach ($x in $InputObject) { $list.Add((ConvertTo-GraphHashtable $x)) }
+        return ,$list.ToArray()
+    }
+    return $InputObject
+}
+
+function Invoke-GraphDirect {
+    param([string]$Method, [string]$Uri, [hashtable]$Headers = @{}, [string]$Body, [string]$ContentType = 'application/json')
+    $nowUtc = (& $script:Now).ToUniversalTime()
+    if (-not $script:GraphToken -or $script:GraphToken.ExpiresUtc -le $nowUtc.AddMinutes(5)) { $script:GraphToken = & $script:GetGraphToken }
+    $h = @{ Authorization = "Bearer $($script:GraphToken.Token)" }
+    foreach ($k in $Headers.Keys) { $h[$k] = $Headers[$k] }
+    $p = @{ Method = $Method; Uri = $Uri; Headers = $h; UseBasicParsing = $true; ErrorAction = 'Stop' }
+    if ($Body) { $p['Body'] = [System.Text.Encoding]::UTF8.GetBytes($Body); $p['ContentType'] = "$ContentType; charset=utf-8" }
+    # Windows PowerShell 5.1 on an older .NET may not offer TLS 1.2 by default
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = 'SilentlyContinue'   # the progress bar of Windows PowerShell 5.1 slows every call down a lot
+    $resp = Invoke-WebRequest @p
+    # decode as UTF-8 from the raw bytes (group names with umlauts), whatever charset the response announces
+    $text = ''
+    if ($resp.RawContentStream) { $text = [System.Text.Encoding]::UTF8.GetString($resp.RawContentStream.ToArray()) }
+    elseif ($resp.Content) { $text = [string]$resp.Content }
+    if (-not $text.Trim()) { return $null }
+    return ConvertTo-GraphHashtable ($text | ConvertFrom-Json)
+}
+
 function Invoke-GraphPaged {
     param([string]$Uri, [hashtable]$Headers = @{}, [scriptblock]$OnPage = $null)
     $all = New-Object System.Collections.Generic.List[object]
     while ($Uri) {
-        $resp = Invoke-MgGraphRequest -Method GET -Uri $Uri -Headers $Headers -ErrorAction Stop
+        $resp = Invoke-GaaGraph -Method GET -Uri $Uri -Headers $Headers -ErrorAction Stop
         foreach ($v in @($resp.value)) { if ($null -ne $v) { $all.Add($v) } }
         if ($OnPage) { & $OnPage $all.Count }
         $Uri = $resp.'@odata.nextLink'
@@ -819,6 +907,7 @@ function Connect-GaaGraph {
     if ($TenantId) { $p['TenantId'] = $TenantId }
     if ((Get-Command Connect-MgGraph).Parameters.ContainsKey('NoWelcome')) { $p['NoWelcome'] = $true }
     Connect-MgGraph @p | Out-Null
+    $script:GraphToken = $null   # the direct route must take the token of this (possibly other) account
     return Get-MgContext
 }
 
@@ -829,6 +918,7 @@ function Disconnect-GaaGraph {
     if (Get-Command Disconnect-MgGraph -ErrorAction SilentlyContinue) {
         try { Disconnect-MgGraph -ErrorAction Stop | Out-Null } catch { }   # "No application to sign out from" is fine
     }
+    $script:GraphToken = $null
 }
 
 function Search-Groups {
@@ -838,9 +928,9 @@ function Search-Groups {
     if ($Term -and $Term -ne '*') {
         $q   = [System.Uri]::EscapeDataString("`"displayName:$Term`"")
         $uri = "https://graph.microsoft.com/v1.0/groups?`$search=$q&`$select=$sel&`$top=200"
-        $resp = Invoke-MgGraphRequest -Method GET -Uri $uri -Headers @{ ConsistencyLevel = 'eventual' } -ErrorAction Stop
+        $resp = Invoke-GaaGraph -Method GET -Uri $uri -Headers @{ ConsistencyLevel = 'eventual' } -ErrorAction Stop
     } else {
-        $resp = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/groups?`$select=$sel&`$top=200" -ErrorAction Stop
+        $resp = Invoke-GaaGraph -Method GET -Uri "https://graph.microsoft.com/v1.0/groups?`$select=$sel&`$top=200" -ErrorAction Stop
     }
     return @(@($resp.value) | Where-Object { $_ } | Sort-Object { $_.displayName })
 }
@@ -849,7 +939,7 @@ function Read-Assignments {
     # the assignments of one object, as object[] - via its assignments collection or via $expand
     param([string]$ItemPath, [string]$ReadVia = 'Collection')
     if ($ReadVia -eq 'Expand') {
-        $r = Invoke-MgGraphRequest -Method GET -Uri "$($script:GraphBase)/$ItemPath`?`$expand=assignments" -ErrorAction Stop
+        $r = Invoke-GaaGraph -Method GET -Uri "$($script:GraphBase)/$ItemPath`?`$expand=assignments" -ErrorAction Stop
         $list = @()
         foreach ($a in $r.assignments) { if ($null -ne $a) { $list += $a } }
         return ,$list
@@ -982,7 +1072,7 @@ function Invoke-ItemWrite {
         if ($Item.Eventual) { $transient += 'ResourceNotFound' }
         for ($try = 1; $true; $try++) {
             try {
-                Invoke-MgGraphRequest -Method POST -Uri "$($script:GraphBase)/$($Item.AssignAction)" -Body $json `
+                Invoke-GaaGraph -Method POST -Uri "$($script:GraphBase)/$($Item.AssignAction)" -Body $json `
                     -ContentType 'application/json' -ErrorAction Stop | Out-Null
                 if ($Item.Eventual) { $script:LastSent[$Item.Key] = @{ Time = (& $script:Now); List = $list } }
                 return
@@ -995,7 +1085,7 @@ function Invoke-ItemWrite {
 
     if ($Operation.Action -eq 'Remove' -or $Operation.Action -eq 'Change') {
         try {
-            Invoke-MgGraphRequest -Method DELETE -Uri "$base/$($Operation.From.AssignmentId)" -ErrorAction Stop | Out-Null
+            Invoke-GaaGraph -Method DELETE -Uri "$base/$($Operation.From.AssignmentId)" -ErrorAction Stop | Out-Null
         } catch { throw (Get-GraphErrorText $_) }
     }
     if ($Operation.Action -eq 'Add' -or $Operation.Action -eq 'Change') {
@@ -1003,7 +1093,7 @@ function Invoke-ItemWrite {
                     -AppType $Item.Type -VppDeviceLicensing $VppDeviceLicensing -Carry $Operation.From `
                     -AssignmentType $Item.AssignmentType -HasIntent $Item.HasIntent
         try {
-            Invoke-MgGraphRequest -Method POST -Uri $base -Body ($body | ConvertTo-Json -Depth 20) `
+            Invoke-GaaGraph -Method POST -Uri $base -Body ($body | ConvertTo-Json -Depth 20) `
                 -ContentType 'application/json' -ErrorAction Stop | Out-Null
         } catch {
             $msg = Get-GraphErrorText $_
@@ -1013,7 +1103,7 @@ function Invoke-ItemWrite {
                                -AppType $Item.Type -VppDeviceLicensing $VppDeviceLicensing -Carry $Operation.From `
                                -AssignmentType $Item.AssignmentType -HasIntent $Item.HasIntent
                 try {
-                    Invoke-MgGraphRequest -Method POST -Uri $base -Body ($restore | ConvertTo-Json -Depth 20) `
+                    Invoke-GaaGraph -Method POST -Uri $base -Body ($restore | ConvertTo-Json -Depth 20) `
                         -ContentType 'application/json' -ErrorAction Stop | Out-Null
                     $msg = "$msg ($($L.Restored))"
                 } catch { $msg = "$msg ($($L.RestoreFailed))" }
@@ -1759,7 +1849,7 @@ function Invoke-Load {
     try {
         $sel = $script:Selection
         if ($sel.Kind -eq 'group' -and $sel.Name -eq $sel.Id) {
-            $g = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/groups/$($sel.Id)?`$select=id,displayName" -ErrorAction Stop
+            $g = Invoke-GaaGraph -Method GET -Uri "https://graph.microsoft.com/v1.0/groups/$($sel.Id)?`$select=id,displayName" -ErrorAction Stop
             $sel.Name = [string]$g.displayName
             Set-SelectionText
         }

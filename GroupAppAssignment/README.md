@@ -123,10 +123,14 @@ one in use and the loaded Graph/Kiota/Azure DLLs. Fix: close all PowerShell wind
 Seen in the field with only Graph 2.40 installed: **`Azure.Core` from the Windows GAC** (`C:\Windows\Microsoft.NET\assembly\GAC_MSIL\Azure.Core\…`,
 1.50.0, put there by another program) next to the module's own 1.51.1. Windows PowerShell 5.1 takes the GAC
 copy whenever a DLL asks for exactly that version, so both are loaded and the call fails – a restart or a
-clean module install does not help. The tool recognises this case (twice-loaded DLL with one copy from the
-GAC, marked `<<` in the list) and names it. Fix: run the tool with **PowerShell 7**, which has no GAC
-(`pwsh -NoProfile -File Manage-GroupAppAssignment.ps1`, with `Microsoft.Graph.Authentication` installed for
-PowerShell 7).
+clean module install does not help. Exactly `Microsoft.Graph.Core` 4.0.1 and `Microsoft.Kiota.Authentication.Azure`
+2.0.0 ask for Azure.Core 1.50.0.0, `Azure.Identity` 1.18.0 for 1.51.1.0 (read from the packages' assembly references).
+
+**The tool works around it by itself:** when `Invoke-MgGraphRequest` fails with such a conflict, it takes the
+token of the `Connect-MgGraph` session directly from the module's credential (Azure.Identity only, no
+Microsoft.Graph.Core) and calls Graph with `Invoke-WebRequest` for the rest of the run. Sign-in, account switch
+and sign-out stay the same. Only if that fails too does the error show the cause (twice-loaded DLL with one copy
+from the GAC, marked `<<`) and PowerShell 7 as the way out.
 
 ## Start
 
