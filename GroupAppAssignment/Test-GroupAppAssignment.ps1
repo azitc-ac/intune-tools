@@ -607,7 +607,27 @@ Assert ($txt -match '(?m)^Microsoft\.Graph\.Authentication 2\.25\.0 \*  C:\\M\\2
 Assert ((Get-GraphErrorText $erW) -match 'Get-InstalledModule') 'conflict: found as inner exception too'
 Assert ((Get-GraphErrorText $erN) -eq 'Forbidden') 'conflict: ordinary errors stay unchanged'
 Remove-Item Function:\Get-Module
-Assert ((Get-GraphAssemblyReport) -is [array]) 'conflict: the report also runs against the real process'
+Assert ((Get-GraphAssemblyReport @(& $script:LoadedAssemblies)) -is [array]) 'conflict: the report also runs against the real process'
+# The user's machine (Graph 2.40, Windows PowerShell 5.1): Azure.Core 1.50.0 from the GAC next to the module's 1.51.1
+$mb = 'C:\Users\u\Documents\WindowsPowerShell\Modules\Microsoft.Graph.Authentication\2.40.0'
+$asmUser = @(
+    [PSCustomObject]@{ Name = 'Azure.Core'; Version = '1.50.0.0'; Location = 'C:\Windows\Microsoft.Net\assembly\GAC_MSIL\Azure.Core\v4.0_1.50.0.0__92742159e12e44c8\Azure.Core.dll' }
+    [PSCustomObject]@{ Name = 'Azure.Core'; Version = '1.51.1.0'; Location = "$mb\Dependencies\Desktop\Azure.Core.dll" }
+    [PSCustomObject]@{ Name = 'Microsoft.Graph.Core'; Version = '4.0.1.0'; Location = "$mb\Dependencies\Desktop\Microsoft.Graph.Core.dll" }
+)
+$asmOk = @($asmUser[1], $asmUser[2])
+$asmTwiceNoGac = @($asmUser[1], $asmUser[2], [PSCustomObject]@{ Name = 'Azure.Core'; Version = '1.47.0.0'; Location = 'C:\Other\Azure.Core.dll' })
+Assert ((@(Get-GacConflict $asmUser) -join '|') -eq 'Azure.Core 1.50.0.0') 'GAC: the GAC copy of a twice-loaded assembly is named'
+Assert (@(Get-GacConflict $asmOk).Count -eq 0 -and @(Get-GacConflict $asmTwiceNoGac).Count -eq 0) 'GAC: nothing when nothing is twice or no copy is from the GAC'
+Assert (@(Get-GacConflict @($asmUser[0], $asmUser[2])).Count -eq 0) 'GAC: a GAC assembly loaded only once is no conflict'
+$rep = Get-GraphAssemblyReport $asmUser
+Assert (@($rep | Where-Object { $_ -like 'Azure.Core *<<' }).Count -eq 2 -and @($rep | Where-Object { $_ -like 'Microsoft.Graph.Core *<<' }).Count -eq 0) 'report: both Azure.Core copies marked <<, the rest not'
+$script:LoadedAssemblies = { $asmUser }
+$txt = Get-GraphErrorText $erC
+Assert ($txt.StartsWith($mm.Message) -and $txt -match 'Azure\.Core 1\.50\.0\.0' -and $txt -match 'pwsh -NoProfile' -and $txt -match 'GAC_MSIL') 'GAC: message names the GAC copy, the PowerShell 7 remedy and lists the DLLs'
+$script:LoadedAssemblies = { $asmTwiceNoGac }
+$txt = Get-GraphErrorText $erC
+Assert ($txt -match 'Get-InstalledModule' -and $txt -notmatch 'pwsh -NoProfile') 'no GAC: the general conflict message'
 #endregion
 
 Write-Host ("{0} passed, {1} failed" -f $script:pass, $script:fail) -ForegroundColor $(if ($script:fail) { 'Red' } else { 'Green' })

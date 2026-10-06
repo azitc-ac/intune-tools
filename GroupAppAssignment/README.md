@@ -120,6 +120,14 @@ one in use and the loaded Graph/Kiota/Azure DLLs. Fix: close all PowerShell wind
 `Start-GroupAppAssignment.bat` (fresh process without profile); if that does not help,
 `Get-InstalledModule Microsoft.Graph* -AllVersions` and remove old versions (`Uninstall-Module … -RequiredVersion …`).
 
+Seen in the field with only Graph 2.40 installed: **`Azure.Core` from the Windows GAC** (`C:\Windows\Microsoft.NET\assembly\GAC_MSIL\Azure.Core\…`,
+1.50.0, put there by another program) next to the module's own 1.51.1. Windows PowerShell 5.1 takes the GAC
+copy whenever a DLL asks for exactly that version, so both are loaded and the call fails – a restart or a
+clean module install does not help. The tool recognises this case (twice-loaded DLL with one copy from the
+GAC, marked `<<` in the list) and names it. Fix: run the tool with **PowerShell 7**, which has no GAC
+(`pwsh -NoProfile -File Manage-GroupAppAssignment.ps1`, with `Microsoft.Graph.Authentication` installed for
+PowerShell 7).
+
 ## Start
 
 ```powershell

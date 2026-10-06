@@ -120,6 +120,14 @@ auf, markiert die verwendete und zeigt die geladenen Graph-/Kiota-/Azure-DLLs. A
 schließen und über `Start-GroupAppAssignment.bat` starten (frischer Prozess ohne Profil); hilft das nicht,
 `Get-InstalledModule Microsoft.Graph* -AllVersions` und alte Versionen entfernen (`Uninstall-Module … -RequiredVersion …`).
 
+Im Feld gesehen, mit nur Graph 2.40 installiert: **`Azure.Core` aus dem GAC von Windows** (`C:\Windows\Microsoft.NET\assembly\GAC_MSIL\Azure.Core\…`,
+1.50.0, von einer anderen Software dort installiert) neben 1.51.1 aus dem Modul. Windows PowerShell 5.1 nimmt
+die GAC-Kopie, sobald eine DLL genau diese Version anfordert – beide sind geladen, der Aufruf scheitert; Neustart
+oder saubere Modulinstallation helfen nicht. Das Tool erkennt diesen Fall (doppelt geladene DLL, eine Kopie aus
+dem GAC, in der Liste mit `<<` markiert) und benennt ihn. Abhilfe: das Tool mit **PowerShell 7** starten, das
+keinen GAC kennt (`pwsh -NoProfile -File Manage-GroupAppAssignment.ps1`, `Microsoft.Graph.Authentication` dafür
+in PowerShell 7 installieren).
+
 ## Start
 
 ```powershell
