@@ -112,6 +112,14 @@ account next time without asking – so "Reconnect" stays with the same account.
 "Connect" lets you pick another account. Other applications using the Windows account stay signed in
 (no `-SignOutFromBroker`).
 
+**"Method not found: …AzureIdentityAccessTokenProvider..ctor…"** (or another *method/type not found* on the
+first Graph request): two versions of the Graph module's DLLs are loaded in the same PowerShell process –
+typically because another module or an older `Microsoft.Graph.Authentication` was loaded in that window
+first. Windows PowerShell 5.1 cannot keep them apart. The tool then lists the installed versions, marks the
+one in use and the loaded Graph/Kiota/Azure DLLs. Fix: close all PowerShell windows and start via
+`Start-GroupAppAssignment.bat` (fresh process without profile); if that does not help,
+`Get-InstalledModule Microsoft.Graph* -AllVersions` and remove old versions (`Uninstall-Module … -RequiredVersion …`).
+
 ## Start
 
 ```powershell

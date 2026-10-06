@@ -87,6 +87,20 @@ $cut    = $main.IndexOf($marker)
 Assert ($cut -gt 0) 'marker line for the GUI-free part exists'
 . ([scriptblock]::Create($main.Substring(0, $cut))) -Language en
 
+# PowerShell variable names ignore case: a test variable $l overwrote the tool's $L (and $b/$B, $lastSent/$LastSent
+# before). No variable of this test may differ from a tool variable only in case.
+# Tool side: script-scope variables of the part the test loads - top level (not inside a function or a
+# script block) or written as $script:x
+function Test-InFunction($n) { for ($p = $n.Parent; $p; $p = $p.Parent) { if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst] -or $p -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) { return $true } }; return $false }
+$guiFreeAst = [System.Management.Automation.Language.Parser]::ParseInput($main.Substring(0, $cut), [ref]$null, [ref]$null)
+$toolVars = @($guiFreeAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] -and
+        ($n.VariablePath.IsScript -or -not (Test-InFunction $n)) }, $true) | ForEach-Object { $_.VariablePath.UserPath -replace '^(script|global):' } | Sort-Object -Unique)
+$testAst  = [System.Management.Automation.Language.Parser]::ParseFile($PSCommandPath, [ref]$null, [ref]$null)
+$caseClash = @($testAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true) |
+    ForEach-Object { $_.VariablePath.UserPath -replace '^(script|global):' } | Sort-Object -Unique -CaseSensitive |
+    Where-Object { $v = $_; @($toolVars | Where-Object { $_ -ieq $v -and $_ -cne $v }).Count -gt 0 })
+Assert ($caseClash.Count -eq 0) "no test variable differs from a tool variable only in case ($($caseClash -join ', '))"
+
 # Every text the script uses ($L.Key) exists in German and English, both sets have the same keys, none unused.
 $usedKeys = @([regex]::Matches($main, '\$L\.([A-Za-z]+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
 foreach ($k in $usedKeys) {
@@ -373,20 +387,20 @@ $cur = @(
 )
 $aType = '#microsoft.graph.deviceManagementConfigurationPolicyAssignment'
 $fromG1 = ConvertTo-AssignmentState $cur[1] $false
-$l = New-ReplaceAssignmentList -Current $cur -Selection $selG1 -Desired $null -AssignmentType $aType -Carry $fromG1
-Assert ($l.Count -eq 2) "replace/remove: 2 assignments stay (got $($l.Count))"
-Assert (@($l | Where-Object { $_.target.groupId -eq $g1 }).Count -eq 0) 'replace/remove: the selected group is gone'
-$keptG2 = @($l | Where-Object { $_.target.groupId -eq $g2 })
+$rl = New-ReplaceAssignmentList -Current $cur -Selection $selG1 -Desired $null -AssignmentType $aType -Carry $fromG1
+Assert ($rl.Count -eq 2) "replace/remove: 2 assignments stay (got $($rl.Count))"
+Assert (@($rl | Where-Object { $_.target.groupId -eq $g1 }).Count -eq 0) 'replace/remove: the selected group is gone'
+$keptG2 = @($rl | Where-Object { $_.target.groupId -eq $g2 })
 Assert ($keptG2.Count -eq 1 -and $keptG2[0].target.deviceAndAppManagementAssignmentFilterId -eq 'f-9' -and $keptG2[0].target.deviceAndAppManagementAssignmentFilterType -eq 'exclude') 'replace: another group keeps its filter'
-Assert (@($l | Where-Object { $_.target.'@odata.type' -eq '#microsoft.graph.allLicensedUsersAssignmentTarget' }).Count -eq 1) 'replace: All users stays'
-Assert (@($l | Where-Object { $_.target.groupId -eq 'g3' }).Count -eq 0) 'replace: policy-set assignments are not sent back'
-Assert (@($l | Where-Object { $_.'@odata.type' -ne $aType }).Count -eq 0) 'replace: every entry has the assignment type'
-$l = New-ReplaceAssignmentList -Current $cur -Selection $selG1 -Desired (S '' $true) -AssignmentType $aType -Carry $fromG1
-$mine = @($l | Where-Object { $_.target.groupId -eq $g1 })
-Assert ($l.Count -eq 3 -and $mine.Count -eq 1 -and $mine[0].target.'@odata.type' -eq '#microsoft.graph.exclusionGroupAssignmentTarget') 'replace/change: the group becomes one exclusion'
+Assert (@($rl | Where-Object { $_.target.'@odata.type' -eq '#microsoft.graph.allLicensedUsersAssignmentTarget' }).Count -eq 1) 'replace: All users stays'
+Assert (@($rl | Where-Object { $_.target.groupId -eq 'g3' }).Count -eq 0) 'replace: policy-set assignments are not sent back'
+Assert (@($rl | Where-Object { $_.'@odata.type' -ne $aType }).Count -eq 0) 'replace: every entry has the assignment type'
+$rl = New-ReplaceAssignmentList -Current $cur -Selection $selG1 -Desired (S '' $true) -AssignmentType $aType -Carry $fromG1
+$mine = @($rl | Where-Object { $_.target.groupId -eq $g1 })
+Assert ($rl.Count -eq 3 -and $mine.Count -eq 1 -and $mine[0].target.'@odata.type' -eq '#microsoft.graph.exclusionGroupAssignmentTarget') 'replace/change: the group becomes one exclusion'
 Assert (-not $mine[0].target.Contains('deviceAndAppManagementAssignmentFilterId')) 'replace: an exclusion has no filter'
-$l = New-ReplaceAssignmentList -Current @() -Selection $selG1 -Desired (S '' $false) -AssignmentType $aType
-Assert ($l.Count -eq 1 -and $l[0].target.groupId -eq $g1) 'replace/add to an object without assignments'
+$rl = New-ReplaceAssignmentList -Current @() -Selection $selG1 -Desired (S '' $false) -AssignmentType $aType
+Assert ($rl.Count -eq 1 -and $rl[0].target.groupId -eq $g1) 'replace/add to an object without assignments'
 $json = @{ assignments = (New-ReplaceAssignmentList -Current @() -Selection $selG1 -Desired $null -AssignmentType $aType) } | ConvertTo-Json -Depth 20
 Assert ($json -match '"assignments":\s*\[\s*\]') 'replace: removing the last assignment sends an empty list'
 
@@ -569,6 +583,31 @@ Assert ($null -eq (Get-LastSent $itemDc)) 'sent list: never used for objects tha
 $script:Now = { Get-Date }; $script:LastSent = @{}
 $script:Sleep = { param($s) Start-Sleep -Seconds $s }
 Remove-Item Function:\Invoke-MgGraphRequest
+#endregion
+
+#region Assembly conflict (user report: "Method not found: ...AzureIdentityAccessTokenProvider..ctor")
+$mm  = [System.MissingMethodException]::new("Methode nicht gefunden: 'Void Microsoft.Graph.Authentication.AzureIdentityAccessTokenProvider..ctor(...)'.")
+$erC = [System.Management.Automation.ErrorRecord]::new($mm, 'x', 'NotSpecified', $null)
+$erW = [System.Management.Automation.ErrorRecord]::new([System.Exception]::new('outer', $mm), 'x', 'NotSpecified', $null)
+$erN = [System.Management.Automation.ErrorRecord]::new([System.Exception]::new('Forbidden'), 'x', 'NotSpecified', $null)
+Assert (Test-AssemblyConflict $mm) 'conflict: MissingMethodException is recognised'
+Assert (Test-AssemblyConflict ([System.IO.FileLoadException]::new('x')) -and (Test-AssemblyConflict ([System.TypeLoadException]::new('x')))) 'conflict: FileLoad / TypeLoad are recognised'
+Assert (-not (Test-AssemblyConflict $erN.Exception)) 'conflict: an ordinary Graph error is not one'
+# Fake two installed versions, one of them loaded
+function Get-Module {
+    param([string]$Name, [switch]$ListAvailable)
+    $a = [PSCustomObject]@{ Version = [version]'2.25.0'; ModuleBase = 'C:\M\2.25.0' }
+    $b = [PSCustomObject]@{ Version = [version]'2.30.0'; ModuleBase = 'C:\M\2.30.0' }
+    if ($ListAvailable) { return @($b, $a) }
+    return $a
+}
+$txt = Get-GraphErrorText $erC
+Assert ($txt.StartsWith($mm.Message) -and $txt -match 'Start-GroupAppAssignment\.bat' -and $txt -match 'Get-InstalledModule') 'conflict: message keeps the original text and adds the remedy'
+Assert ($txt -match '(?m)^Microsoft\.Graph\.Authentication 2\.25\.0 \*  C:\\M\\2\.25\.0$' -and $txt -match '(?m)^Microsoft\.Graph\.Authentication 2\.30\.0  C:') 'conflict: lists installed versions and marks the one in use'
+Assert ((Get-GraphErrorText $erW) -match 'Get-InstalledModule') 'conflict: found as inner exception too'
+Assert ((Get-GraphErrorText $erN) -eq 'Forbidden') 'conflict: ordinary errors stay unchanged'
+Remove-Item Function:\Get-Module
+Assert ((Get-GraphAssemblyReport) -is [array]) 'conflict: the report also runs against the real process'
 #endregion
 
 Write-Host ("{0} passed, {1} failed" -f $script:pass, $script:fail) -ForegroundColor $(if ($script:fail) { 'Red' } else { 'Green' })

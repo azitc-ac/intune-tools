@@ -124,6 +124,7 @@ $strings = @{
         NotConnectedMsg    = 'Bitte zuerst verbinden.'
         NoGroupMsg         = "Kein Ziel gewählt.`nBitte über '...' eine Gruppe oder Alle Benutzer / Alle Geräte wählen."
         SearchFailed       = "Suche fehlgeschlagen:`n{0}"
+        AssemblyConflict   = "{0}`n`nDas ist ein Versionskonflikt im Modul Microsoft.Graph.Authentication, kein Fehler der Anfrage: im selben PowerShell-Prozess sind zwei Versionen seiner DLLs geladen.`nAbhilfe: alle PowerShell-Fenster schließen und das Tool über Start-GroupAppAssignment.bat starten. Hilft das nicht, alte Versionen entfernen (Get-InstalledModule Microsoft.Graph* -AllVersions) und nur eine behalten.`n`nInstalliert/geladen (* = in Verwendung):`n{1}"
         StatusConnecting   = 'Verbinde mit Microsoft Graph...'
         StatusLoadingCat   = 'Lade {0}... ({1})'
         StatusLoaded       = '{0} Objekte geladen  --  {1} dem Ziel zugewiesen'
@@ -233,6 +234,7 @@ $strings = @{
         NotConnectedMsg    = 'Please connect first.'
         NoGroupMsg         = "No target selected.`nUse '...' to choose a group or All users / All devices."
         SearchFailed       = "Search failed:`n{0}"
+        AssemblyConflict   = "{0}`n`nThis is a version conflict in the Microsoft.Graph.Authentication module, not a failed request: two versions of its DLLs are loaded in the same PowerShell process.`nFix: close all PowerShell windows and start the tool with Start-GroupAppAssignment.bat. If that does not help, remove old versions (Get-InstalledModule Microsoft.Graph* -AllVersions) and keep only one.`n`nInstalled/loaded (* = in use):`n{1}"
         StatusConnecting   = 'Connecting to Microsoft Graph...'
         StatusLoadingCat   = 'Loading {0}... ({1})'
         StatusLoaded       = '{0} objects loaded  --  {1} assigned to the target'
@@ -713,9 +715,45 @@ function Get-AssignmentPlan {
 #endregion
 
 #region Graph (no GUI; Invoke-MgGraphRequest is mocked by Test-GroupAppAssignment.ps1)
+function Get-GraphAssemblyReport {
+    # Installed and loaded versions of the Graph module plus the Graph/Kiota/Azure/MSAL assemblies the process holds:
+    # "method not found" in these means two versions of them met in one process
+    $lines = New-Object System.Collections.Generic.List[string]
+    $inUse = @(Get-Module Microsoft.Graph.Authentication | ForEach-Object { $_.ModuleBase })
+    foreach ($m in @(Get-Module -ListAvailable Microsoft.Graph.Authentication)) {
+        $mark = ''
+        if ($inUse -contains $m.ModuleBase) { $mark = ' *' }
+        $lines.Add("Microsoft.Graph.Authentication $($m.Version)$mark  $($m.ModuleBase)")
+    }
+    $asm = New-Object System.Collections.Generic.List[string]
+    foreach ($a in [System.AppDomain]::CurrentDomain.GetAssemblies()) {
+        $n = $a.GetName()
+        if ($n.Name -notmatch '^(Microsoft\.Graph|Microsoft\.Kiota|Azure\.|Microsoft\.Identity)') { continue }
+        $loc = ''
+        try { $loc = $a.Location } catch { }   # dynamic assemblies have none
+        $asm.Add("$($n.Name) $($n.Version)  $loc")
+    }
+    foreach ($x in ($asm | Sort-Object)) { $lines.Add($x) }
+    return ,$lines.ToArray()
+}
+
+function Test-AssemblyConflict {
+    # MissingMethod/MissingField (MissingMemberException), TypeLoad, FileLoad: a DLL of another version answered
+    param([System.Exception]$Exception)
+    $e = $Exception
+    while ($e) {
+        if ($e -is [System.MissingMemberException] -or $e -is [System.TypeLoadException] -or $e -is [System.IO.FileLoadException]) { return $true }
+        $e = $e.InnerException
+    }
+    return $false
+}
+
 function Get-GraphErrorText {
     param($ErrorRecord)
     $msg = $ErrorRecord.Exception.Message
+    if (Test-AssemblyConflict $ErrorRecord.Exception) {
+        return ($L.AssemblyConflict -f $msg, ((Get-GraphAssemblyReport) -join "`n"))
+    }
     if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
         try {
             $j = $ErrorRecord.ErrorDetails.Message | ConvertFrom-Json -ErrorAction Stop

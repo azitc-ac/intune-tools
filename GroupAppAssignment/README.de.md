@@ -112,6 +112,14 @@ ohne Rückfrage mit demselben Konto an – „Neu verbinden" bleibt daher beim s
 Daten; beim nächsten „Verbinden" lässt sich ein anderes Konto wählen. Andere Anwendungen, die das Windows-Konto
 nutzen, bleiben angemeldet (kein `-SignOutFromBroker`).
 
+**„Methode nicht gefunden: …AzureIdentityAccessTokenProvider..ctor…"** (oder ein anderes *Methode/Typ nicht
+gefunden* beim ersten Graph-Aufruf): Im selben PowerShell-Prozess sind zwei Versionen der DLLs des Graph-Moduls
+geladen – meist, weil in diesem Fenster vorher ein anderes Modul oder ein älteres `Microsoft.Graph.Authentication`
+geladen wurde. Windows PowerShell 5.1 kann sie nicht trennen. Das Tool listet dann die installierten Versionen
+auf, markiert die verwendete und zeigt die geladenen Graph-/Kiota-/Azure-DLLs. Abhilfe: alle PowerShell-Fenster
+schließen und über `Start-GroupAppAssignment.bat` starten (frischer Prozess ohne Profil); hilft das nicht,
+`Get-InstalledModule Microsoft.Graph* -AllVersions` und alte Versionen entfernen (`Uninstall-Module … -RequiredVersion …`).
+
 ## Start
 
 ```powershell
