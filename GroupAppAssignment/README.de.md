@@ -130,7 +130,7 @@ dem GAC, in der Liste mit `<<` markiert) und benennt ihn. Genau `Microsoft.Graph
 
 **Das Tool umgeht das selbst:** Scheitert `Invoke-MgGraphRequest` an so einem Konflikt, holt es das Token der
 `Connect-MgGraph`-Sitzung direkt über die Anmeldung des Moduls (nur Azure.Identity, ohne Microsoft.Graph.Core) und
-ruft Graph für den Rest der Sitzung per `Invoke-WebRequest` auf. Anmelden, Konto wechseln und Abmelden bleiben gleich.
+ruft Graph für den Rest der Sitzung per `Invoke-WebRequest` auf. Anmelden, Konto wechseln und Abmelden bleiben gleich. Im Feld bestätigt (Graph 2.40, Windows PowerShell 5.1, Azure.Core 1.50 im GAC): Gruppensuche und Laden funktionieren.
 Erst wenn auch das scheitert, nennt die Meldung die Ursache und PowerShell 7 als Ausweg.
 
 ## Start

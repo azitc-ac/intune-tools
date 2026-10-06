@@ -129,7 +129,7 @@ clean module install does not help. Exactly `Microsoft.Graph.Core` 4.0.1 and `Mi
 **The tool works around it by itself:** when `Invoke-MgGraphRequest` fails with such a conflict, it takes the
 token of the `Connect-MgGraph` session directly from the module's credential (Azure.Identity only, no
 Microsoft.Graph.Core) and calls Graph with `Invoke-WebRequest` for the rest of the run. Sign-in, account switch
-and sign-out stay the same. Only if that fails too does the error show the cause (twice-loaded DLL with one copy
+and sign-out stay the same. Confirmed in the field (Graph 2.40, Windows PowerShell 5.1, Azure.Core 1.50 in the GAC): group search and loading work. Only if that fails too does the error show the cause (twice-loaded DLL with one copy
 from the GAC, marked `<<`) and PowerShell 7 as the way out.
 
 ## Start
