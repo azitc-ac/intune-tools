@@ -1406,6 +1406,93 @@ if (Test-Path -LiteralPath $templatePath) {
         Add-Failure "DeployDecidedByPlan" ("deploy_template.ps1:{0} das Ergebnis von Update-IntuneWin32AppPackageFile wird verworfen - ein gescheitertes Update bliebe unsichtbar" -f $d.Extent.StartLineNumber)
     }
 }# ---------------------------------------------------------------------------
+# 35) Loeschen in Intune laesst sich nicht zuruecknehmen. Darum:
+#       - Remove-IntuneWin32App wird NUR in Remove-TenantWin32Apps aufgerufen, und die Funktion
+#         liest den Tenant danach neu (das Modul warnt bei einem Fehler nur, es wirft nicht -
+#         "Kommando lief durch" hiesse sonst "App ist weg");
+#       - Remove-TenantWin32Apps haben nur Retire und Rebuild als Aufrufer, die Schleife nie direkt;
+#       - Retire: Tenant frisch lesen -> Rueckfrage -> loeschen, und die Rueckfrage hat die
+#         Standardantwort Nein;
+#       - Rebuild: Tenant lesen -> Rueckfrage -> BAUEN -> loeschen -> anlegen. Scheitert der Bau,
+#         darf Intune nicht angefasst sein; angelegt wird erst nach dem Loeschen.
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $fn35 = { param($name) $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | Where-Object { $_.Name -eq $name } | Select-Object -First 1 }
+    $cmd35 = { param($scope, $name) $scope.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq $name }, $true) | Select-Object -First 1 }
+
+    $removeCalls = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Remove-IntuneWin32App' }, $true)
+    foreach ($c in $removeCalls) {
+        $owner = & $enclosingFunction $c
+        if ($owner -ne 'Remove-TenantWin32Apps') {
+            Add-Failure "IntuneDeleteVerified" ("functions.ps1:{0} Remove-IntuneWin32App in '{1}' - Apps werden in Intune nur in Remove-TenantWin32Apps geloescht" -f $c.Extent.StartLineNumber, $owner)
+        }
+    }
+
+    $removeFn = & $fn35 'Remove-TenantWin32Apps'
+    if (-not $removeFn) { Add-Failure "IntuneDeleteVerified" "Remove-TenantWin32Apps fehlt" }
+    else {
+        $del  = & $cmd35 $removeFn 'Remove-IntuneWin32App'
+        $read = & $cmd35 $removeFn 'Read-TenantWin32Apps'
+        if (-not $del)  { Add-Failure "IntuneDeleteVerified" "Remove-TenantWin32Apps ruft Remove-IntuneWin32App nicht auf" }
+        if (-not $read) { Add-Failure "IntuneDeleteVerified" "Remove-TenantWin32Apps liest den Tenant nach dem Loeschen nicht neu - ein Loeschen, das nur warnt, ginge als erfolgreich durch" }
+        if ($del -and $read -and $read.Extent.StartOffset -lt $del.Extent.StartOffset) {
+            Add-Failure "IntuneDeleteVerified" "Remove-TenantWin32Apps liest den Tenant VOR dem Loeschen, nicht danach"
+        }
+    }
+
+    $removeUsers = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Remove-TenantWin32Apps' }, $true)
+    foreach ($c in $removeUsers) {
+        $owner = & $enclosingFunction $c
+        if ($owner -notin @('Invoke-InventoryRetire', 'Invoke-InventoryRebuild')) {
+            Add-Failure "IntuneDeleteVerified" ("functions.ps1:{0} Remove-TenantWin32Apps in '{1}' - geloescht wird nur ueber Retire und Rebuild, beide mit Rueckfrage" -f $c.Extent.StartLineNumber, $owner)
+        }
+    }
+
+    # Die Rueckfrage hat die Standardantwort Nein (einfache Anfuehrungszeichen: $Buttons soll woertlich gesucht werden).
+    $askDefaultNo = '''Warning'',\s*\$\(if \(\$Buttons -eq ''YesNo''\) \{ ''No'' \}'
+
+    $order = {
+        param($fnAst, [string[]]$names, [string]$label)
+        $pos = @()
+        foreach ($name in $names) {
+            $hit = $fnAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq $name -or ($name -eq '$Ask' -and $n.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand -and $n.Extent.Text -match '^&\s+\$Ask\b')) }, $true) | Select-Object -First 1
+            if (-not $hit) { Add-Failure "IntuneDeleteVerified" ("{0} ruft {1} nicht auf" -f $label, $name); return }
+            $pos += $hit.Extent.StartOffset
+        }
+        for ($i = 1; $i -lt $pos.Count; $i++) {
+            if ($pos[$i] -lt $pos[$i - 1]) { Add-Failure "IntuneDeleteVerified" ("{0}: Reihenfolge muss {1} sein" -f $label, ($names -join ' -> ')); return }
+        }
+    }
+    $retireFn  = & $fn35 'Invoke-InventoryRetire'
+    $rebuildFn = & $fn35 'Invoke-InventoryRebuild'
+    if (-not $retireFn)  { Add-Failure "IntuneDeleteVerified" "Invoke-InventoryRetire fehlt" }
+    else {
+        & $order $retireFn  @('Read-TenantWin32Apps', '$Ask', 'Remove-TenantWin32Apps') 'Invoke-InventoryRetire'
+        if ($retireFn.Extent.Text -notmatch $askDefaultNo) {
+            Add-Failure "IntuneDeleteVerified" "Invoke-InventoryRetire: die Rueckfrage hat nicht die Standardantwort Nein"
+        }
+    }
+    if (-not $rebuildFn) { Add-Failure "IntuneDeleteVerified" "Invoke-InventoryRebuild fehlt" }
+    else {
+        & $order $rebuildFn @('Read-TenantWin32Apps', '$Ask', 'Invoke-PackageBuild', 'Remove-TenantWin32Apps', 'Invoke-PackageDeploy') 'Invoke-InventoryRebuild'
+        if ($rebuildFn.Extent.Text -notmatch $askDefaultNo) {
+            Add-Failure "IntuneDeleteVerified" "Invoke-InventoryRebuild: die Rueckfrage hat nicht die Standardantwort Nein"
+        }
+    }
+
+    $loop35 = & $fn35 'Start-InventoryLoop'
+    if ($loop35) {
+        foreach ($name in 'Remove-TenantWin32Apps', 'Remove-IntuneWin32App') {
+            $direct = & $cmd35 $loop35 $name
+            if ($direct) { Add-Failure "IntuneDeleteVerified" ("functions.ps1:{0} Start-InventoryLoop ruft {1} direkt auf - ohne Rueckfrage und Plan" -f $direct.Extent.StartLineNumber, $name) }
+        }
+        foreach ($name in 'Invoke-InventoryRetire', 'Invoke-InventoryRebuild') {
+            if (-not (& $cmd35 $loop35 $name)) { Add-Failure "IntuneDeleteVerified" ("Start-InventoryLoop ruft {0} nicht auf - der Knopf haette keine Wirkung" -f $name) }
+        }
+    }
+}
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

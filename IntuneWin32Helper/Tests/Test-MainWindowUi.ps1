@@ -181,7 +181,7 @@ try {
         $grid = Find-UiaElement -Root $window -AutomationId 'InventoryGrid' -TimeoutSeconds 10
         Test-That 'the inventory grid exists' ($null -ne $grid)
 
-        foreach ($id in 'Add', 'NewVersion', 'Edit', 'Delete', 'Build', 'Deploy', 'OpenFolder', 'RemoveFolder', 'Settings', 'Refresh', 'Cancel', 'Filter', 'View', 'Tenant', 'Status') {
+        foreach ($id in 'Add', 'NewVersion', 'Edit', 'Delete', 'Build', 'Deploy', 'Rebuild', 'Retire', 'OpenFolder', 'RemoveFolder', 'Settings', 'Refresh', 'Cancel', 'Filter', 'View', 'Tenant', 'Status') {
             Test-That "control $id exists" ($null -ne (Find-UiaElement -Root $window -AutomationId $id -TimeoutSeconds 5))
         }
 
@@ -190,17 +190,17 @@ try {
 
             # Die mitgegebene Auswahl ist beim Oeffnen markiert: DefOnly -> alles moeglich.
             Start-Sleep -Milliseconds 800
-            Test-ButtonStates $window @{ Edit = $true; NewVersion = $true; Delete = $true; Build = $true; Deploy = $true; RemoveFolder = $false } 'DefOnly restored as selection'
+            Test-ButtonStates $window @{ Edit = $true; NewVersion = $true; Delete = $true; Build = $true; Deploy = $true; RemoveFolder = $false; Rebuild = $true; Retire = $false } 'DefOnly restored as selection'
 
             # Zeile ohne Definition: nicht bearbeiten, nicht loeschen, nicht bauen - verteilen schon.
             $null = Select-GridRowByCell $grid 'Orphan'
             Start-Sleep -Milliseconds 300
-            Test-ButtonStates $window @{ Edit = $false; NewVersion = $false; Delete = $false; Build = $false; Deploy = $true; RemoveFolder = $true } 'Orphan (package, no definition)'
+            Test-ButtonStates $window @{ Edit = $false; NewVersion = $false; Delete = $false; Build = $false; Deploy = $true; RemoveFolder = $true; Rebuild = $false; Retire = $false } 'Orphan (package, no definition)'
 
             # Eine Zeile MIT Definition und Paket ist nicht verwaist: der Knopf bleibt aus.
             $null = Select-GridRowByCell $grid 'Both'
             Start-Sleep -Milliseconds 300
-            Test-ButtonStates $window @{ RemoveFolder = $false } 'Both (definition and package)'
+            Test-ButtonStates $window @{ RemoveFolder = $false; Rebuild = $true; Retire = $true } 'Both (definition, package, app in Intune)'
             $null = Select-GridRowByCell $grid 'Orphan'
             Start-Sleep -Milliseconds 300
 
@@ -288,6 +288,25 @@ try {
     if ($r) {
         Test-That 'orphan: the action is RemoveFolder' ($r.Action -eq 'RemoveFolder') "was '$($r.Action)'"
         Test-That 'orphan: the orphan row came back' (@($r.Keys) -contains 'Orphan - 1.0' -and @($r.Keys).Count -eq 1) "keys: $(@($r.Keys) -join ',')"
+    }
+
+    # ---- Szenario 5b: Retire und Rebuild geben ihre Aktion und die Zeile zurueck ----
+    foreach ($case in @(@('retire', 'Retire', 'Both'), @('rebuild', 'Rebuild', 'DefOnly'))) {
+        $c = Start-Child $case[0]
+        $window = Wait-UiaWindow -ProcessId $c.Process.Id -AutomationId 'MainDialog' -TimeoutSeconds 60
+        Test-That "$($case[0]): the main window appears" ($null -ne $window)
+        if ($window) {
+            $grid = Find-UiaElement -Root $window -AutomationId 'InventoryGrid' -TimeoutSeconds 10
+            $null = Select-GridRowByCell $grid $case[2]
+            Start-Sleep -Milliseconds 300
+            Invoke-UiaElement -Element (Find-UiaElement -Root $window -AutomationId $case[1])
+        }
+        $r = Wait-ChildResult $c
+        Test-That "$($case[0]): the window returned a result" ($null -ne $r)
+        if ($r) {
+            Test-That "$($case[0]): the action is $($case[1])" ($r.Action -eq $case[1]) "was '$($r.Action)'"
+            Test-That "$($case[0]): only the selected row came back" (@($r.Keys).Count -eq 1 -and @($r.Keys) -contains "$($case[2]) - 1.0") "keys: $(@($r.Keys) -join ',')"
+        }
     }
 
     # ---- Szenario 6: der Bearbeitungsdialog ----------------------------------------

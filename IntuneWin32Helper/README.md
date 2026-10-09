@@ -15,7 +15,8 @@ that list:
 Tenant [xyz.onmicrosoft.com v]  Show [All v]  [Filter...]                    [Refresh]
  Application | Version | Publisher | Package         |  Intune  | Next step
  (grey header: definition and package)                | (blue header: tenant)
-[gear] [Open folder]       [Add...] [New version...] [Edit] [Delete definition] [Build package] [Deploy] [Close]
+[gear] [Open folder] [Remove orphan folder] [Retire from Intune]
+                     [Add...] [New version...] [Edit] [Delete definition] [Build package] [Rebuild] [Deploy] [Close]
 ```
 
 | Column | Meaning |
@@ -33,6 +34,30 @@ The buttons follow the selected rows: a row without a definition can be deployed
 deleted or built. **Deploy** builds a row that has no package first. **Delete definition** removes the
 row from `Apps.csv` only - the package folder and the app in Intune stay. The row tooltip spells out
 all three states, and the selection survives every action.
+
+### Retire and Rebuild: deleting in Intune
+
+Both delete **apps in Intune**, which cannot be undone, so both work the same careful way:
+
+- The ids to delete come from a **fresh read** of the tenant - never from what the window showed -
+  and only for apps with the **name and version** of the selected row. Another version of the same app
+  is never touched. If a row has duplicates, all of them are named in the question and all are deleted.
+- A question lists every app (id, creation date, with/without content, number of assignments) and says
+  that the apps **and their assignments** are deleted. The default answer is **No**. If the tenant cannot
+  be read, nothing happens and nothing is asked.
+- The module's `Remove-IntuneWin32App` only *warns* when it fails (it does not throw), so "the command
+  ran" does not mean "the app is gone". After deleting, the tool reads the tenant again and reports each
+  app as `Removed`, `StillListed` (with the module's warning), `Failed` or `Unverified`.
+
+**Retire from Intune** deletes the app of the selected row in Intune. The definition in `Apps.csv` and
+the package folder stay, so the app can be deployed again - without its assignments.
+
+**Rebuild** replaces an app: *build the package again from the definition -> delete the old app(s) in
+Intune -> create a new one*, in exactly that order. If the build fails, Intune is not touched and the old
+app keeps running. A new app is created only for a row whose old app was verified as removed; otherwise
+the row is skipped, because creating it would make a duplicate. The assignments of the old app are
+**not** restored; the question shows how many there are. To keep assignments, use **Deploy** and answer
+*No* (replace the package content) instead.
 
 ### Deploy decides before it uploads
 
@@ -166,9 +191,11 @@ report, a WinGet detection that does not check for an upgrade, and the main wind
 an old entry point (`createApps`, `deployApps`, the start tiles) coming back, a button whose
 action has no branch in `Start-InventoryLoop`, a tenant switch that does not sign in again,
 a second writer of `Apps.csv` besides `Save-AppsCsv`, a second place that builds packages
-besides `Build-AppPackage`, or a deploy that bypasses the plan (`Invoke-PackageDeploy` called without
+besides `Build-AppPackage`, a deploy that bypasses the plan (`Invoke-PackageDeploy` called without
 going through `Invoke-InventoryDeploy`, `deploy.ps1` called without `-Mode` or with `-bulk`, a discarded
-update result in the template).
+update result in the template), or an unguarded delete in Intune (`Remove-IntuneWin32App` outside
+`Remove-TenantWin32Apps`, no read-back after deleting, no question before deleting, a question that does
+not default to No, Rebuild deleting before building, the loop deleting directly).
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the
 check red.
@@ -177,6 +204,7 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 
 | Test | What it proves |
 | --- | --- |
+| `Test-RetireRebuild.ps1` | only apps with the row's name **and** version from the fresh tenant are deleted (not another version, not what the window showed), the question names every app and its assignments, "No" and an unreadable tenant delete nothing, a delete that only warns is reported as `StillListed` and not as removed, Rebuild goes build -> delete -> create and never creates over a leftover |
 | `Test-DeployPlan.ps1` | the plan: Intune is matched by name **and** version, Create/Skip/Update per state, duplicates and empty entries are never replaced, the decision reaches `deploy.ps1` as `-Mode`, Intune is read fresh before planning, only planned apps are built and deployed, nothing happens on cancel or an unreadable tenant |
 | `Test-MainWindowModel.ps1` | the state of every inventory row, and that `Apps.csv` survives read, save and read again (values, own columns, BOM, header) |
 | `Test-MainWindowUi.ps1` | operates the real main window through UI Automation: buttons follow the selected row, the selection survives, the filter narrows, a tenant switch is reported, and the real `Start-InventoryLoop` shows the window again after Refresh and ends on Close. Needs a desktop session - the window flashes briefly |

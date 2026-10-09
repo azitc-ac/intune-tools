@@ -443,6 +443,48 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Offene Feldprüfung: Retire und Rebuild (Stufe 4, 2026-10-10)
+
+Zwei neue Knöpfe löschen **Apps in Intune** (nicht rückgängig zu machen): **Retire from Intune**
+(`Invoke-InventoryRetire`) und **Rebuild** (`Invoke-InventoryRebuild`: Paket neu bauen → alte App
+löschen → neue anlegen, genau in dieser Reihenfolge). Beschlossen war, dass Retire Zuweisungen
+mitlöschen darf; sie werden **nicht** wiederhergestellt, die Rückfrage nennt ihre Zahl.
+
+Belegt ist **offline**:
+
+- `Tests/Test-RetireRebuild.ps1` (neu; das Modul ist nachgebaut, auch das echte Verhalten
+  „`Remove-IntuneWin32App` warnt statt zu werfen"): gelöscht werden nur Apps mit Name **und**
+  Version der Zeile, die Ids kommen aus dem frisch gelesenen Tenant (eine Id aus einem veralteten
+  Fenster wird nicht angefasst), eine andere Version bleibt, Dubletten werden einzeln genannt und alle
+  gelöscht; die Rückfrage nennt Id, Inhalt und Zuweisungen („could not be read" statt „0", wenn das
+  Modul nur warnt); „Nein" und nicht lesbarer Tenant löschen nichts; ein Löschen, das nur warnt, wird
+  `StillListed` gemeldet (nicht `Removed`), ein werfender Aufruf `Failed`, ein nicht lesbarer Tenant
+  danach `Unverified`; Rebuild: Reihenfolge bauen → löschen → anlegen, scheitert der Bau, bleibt die
+  App in Intune unberührt, bleibt die alte App stehen, wird keine neue angelegt.
+- Prüfung 35 in `Invoke-RepoChecks.ps1` (Löschen nur in `Remove-TenantWin32Apps` mit Nachlesen;
+  Rückfrage vor dem Löschen und mit Standardantwort Nein; Rebuild löscht nie vor dem Bau; die
+  Schleife löscht nie direkt) und `Test-MainWindowUi.ps1` (Knopfzustände, beide Aktionen kommen mit
+  der gewählten Zeile zurück).
+- Gegenproben: 13 Rückbauten (andere Version mit gelöscht, Stand des Fensters statt frisch gelesen,
+  Prüfung nach dem Löschen entfernt, Nachlesen entfernt, Löschen vor dem Bau, Anlegen trotz Rest,
+  Standardantwort Ja, Löschen in der Schleife, Löschaufruf außerhalb der Funktion, Zweig fehlt,
+  Zuweisungen „0" statt „nicht lesbar", Retire-Knopf immer aktiv) — jede schlug an.
+- Aus der Modulquelle (1.5.0) gelesen, **nicht** im Feld geprüft: `Remove-IntuneWin32App` fängt
+  Fehler und warnt nur (deshalb das Nachlesen); `Get-IntuneWin32AppAssignment` warnt ebenfalls nur.
+
+**Nicht belegt** (keiner dieser Läufe ist gemacht; Löschen gegen einen echten Tenant braucht die
+ausdrückliche Freigabe des Inhabers und eine Test-App, nicht eine produktive):
+
+- [ ] **Retire im Feld** gegen eine Test-App: Rückfrage, `REMOVED  <Name> - <Version>  <Id>`,
+      `Retire summary: 1 removed, 0 not removed.`, App im Portal weg, Definition und Paketordner da.
+- [ ] **Das Nachlesen im Feld**: dass die Liste eine gerade gelöschte App wirklich nicht mehr führt
+      (sonst würde ein erfolgreiches Löschen als `StillListed` gemeldet - sichtbar, nicht gefährlich).
+- [ ] **Rebuild im Feld** einer Test-App: erst `Build summary`, dann `Retire summary`, dann
+      `Deployment summary: 1 succeeded`; im Portal genau eine App mit neuer Id und Inhalt.
+- [ ] **Zuweisungszahl** in der Rückfrage gegen eine App mit bekannter Zuweisung.
+- [ ] **Dubletten bereinigen** mit Retire (Test-Tenant mit zwei gleichen Apps).
+- [ ] **Die Rückfrage** ist ein Win32-`MessageBox`; per UI Automation nicht bedient. Geprüft ist,
+      welcher Text und welche Tasten übergeben werden, und dass die Vorgabe Nein ist (Prüfung 35).
 ## Offene Feldprüfung: Deploy-Plan statt blindem Anlegen (Stufe 3, 2026-10-10)
 
 Vorher legte der Bulk-Lauf **immer** eine neue App an, auch wenn dieselbe App in derselben Version
