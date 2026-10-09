@@ -298,7 +298,7 @@ try {
         # Jede Spalte hat ein Steuerelement, und es ist das passende.
         $expectedType = @{ Architecture = 'ControlType.ComboBox'; MinimumOS = 'ControlType.ComboBox'; Interactive = 'ControlType.CheckBox'; SingleMSI = 'ControlType.CheckBox'
                            InstallCmd = 'ControlType.Edit'; UninstallCmd = 'ControlType.Edit'; DisplayName = 'ControlType.Edit'; MyColumn = 'ControlType.Edit' }
-        foreach ($col in 'ProgramID', 'Publisher', 'DisplayName', 'PackageName', 'Version', 'WinGetParams', 'SingleMSI', 'InstallCmd', 'UninstallCmd', 'logoURL', 'Architecture', 'MinimumOS', 'MsiProductCode', 'Interactive', 'ArpName', 'MyColumn') {
+        foreach ($col in 'ProgramID', 'Publisher', 'DisplayName', 'Version', 'WinGetParams', 'SingleMSI', 'InstallCmd', 'UninstallCmd', 'logoURL', 'Architecture', 'MinimumOS', 'MsiProductCode', 'Interactive', 'ArpName', 'MyColumn') {
             $el = Find-UiaElement -Root $dlg -AutomationId $col -TimeoutSeconds 5
             Test-That "editdialog: a control for $col exists" ($null -ne $el)
             if ($el -and $expectedType.ContainsKey($col)) {

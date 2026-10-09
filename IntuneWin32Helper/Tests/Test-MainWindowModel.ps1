@@ -154,6 +154,16 @@ try {
     $sortedAgain = @(Read-AppsCsv -RootDir $rootB | ForEach-Object { '{0}|{1}' -f $_.DisplayName, $_.Version })
     if (($sortedAgain -join ';') -ne ($sorted -join ';')) { $problems += "Apps.csv order changes when saved again unchanged: '$($sortedAgain -join ';')'" }
 
+    # Aufgegebene Spalte PackageName: eine alte Datei traegt sie noch. Sie wird nicht mehr angeboten
+    # und faellt beim Speichern weg - alle anderen Werte und eigene Spalten bleiben.
+    $oldCsv = '"ProgramID";"Publisher";"DisplayName";"PackageName";"Version";"MyColumn"' + "`r`n" + '"a.b";"Pub";"App";"AppPkg";"1.0";"keep"'
+    [IO.File]::WriteAllText((Join-Path $rootB 'Apps.csv'), $oldCsv, (New-Object System.Text.UTF8Encoding $true))
+    $oldRows = @(Read-AppsCsv -RootDir $rootB)
+    if ((Get-AppsCsvColumns -Definitions $oldRows) -contains 'PackageName') { $problems += "Get-AppsCsvColumns: the retired column PackageName is still offered" }
+    Save-AppsCsv -RootDir $rootB -Rows $oldRows
+    $migrated = @(Read-AppsCsv -RootDir $rootB)
+    if ($migrated[0].PSObject.Properties.Name -contains 'PackageName') { $problems += "Apps.csv: PackageName survives saving" }
+    if ($migrated[0].DisplayName -ne 'App' -or $migrated[0].Version -ne '1.0' -or $migrated[0].MyColumn -ne 'keep') { $problems += "Apps.csv: dropping PackageName lost another value" }
     # Leere Liste: die Datei behaelt ihre Kopfzeile, sonst waere sie nicht mehr lesbar/erweiterbar.
     Save-AppsCsv -RootDir $rootB -Rows @()
     $line = ([IO.File]::ReadAllLines((Join-Path $rootB 'Apps.csv'), [Text.Encoding]::UTF8))[0]

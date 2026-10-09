@@ -472,6 +472,9 @@ Dialoggröße mit einer echten Definition (VSC-Wizard): 780 × 1243 px auf einem
 - [ ] **Kleine Bildschirme**: `MaxHeight` begrenzt das Fenster auf den Arbeitsbereich minus 40 px,
       die Felder scrollen, OK/Cancel bleiben stehen. Gemessen nur auf dem großen Bildschirm.
 
-**Beifund:** die Spalte `PackageName` in `Apps.csv` wird vom Paketbau nicht gelesen — `#PN#`
-im `deploy.ps1` kommt aus `DisplayName` (`Write-DeployScript`). Der Dialog zeigt das an; die
-Spalte ist noch nicht entfernt (Entscheidung beim Inhaber).
+**Beifund (erledigt):** die Spalte `PackageName` in `Apps.csv` wurde vom Paketbau nicht gelesen —
+`#PN#` im `deploy.ps1` kommt aus `DisplayName` (`Write-DeployScript`). Auf Entscheidung des Inhabers
+entfernt: `Get-AppsCsvColumns` kennt sie als aufgegebene Spalte, ein Speichern über `Save-AppsCsv` lässt
+sie aus der Datei fallen, der Dialog zeigt sie nicht mehr. Die Variable `$PackageName` im erzeugten
+`deploy.ps1` bleibt (Template unangetastet, sonst würde der Template-Fingerabdruck alle Pakete als veraltet
+markieren).

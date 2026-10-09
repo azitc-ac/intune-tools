@@ -49,8 +49,9 @@ Installation, Intune), label on the left, field on the right. `Architecture` and
 filled from the IntuneWin32App module, `Interactive` and `SingleMSI` are check boxes, the commands are
 multi-line, and the WinGet fields are only enabled while `Version` is `LatestAvailable`. Under
 `ArpName` the editor spells out the search name that detection and uninstall will use. OK checks name
-and version - also against duplicates - and stays open until they are right. `PackageName` is shown
-as unused: the package name comes from `DisplayName`.
+and version - also against duplicates - and stays open until they are right. The package name comes
+from `DisplayName`; the old `PackageName` column of `Apps.csv` is gone (it was never read) and drops out
+of the file the next time the tool saves it.
 
 ### Templates stay inside the package
 

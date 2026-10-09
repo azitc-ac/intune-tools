@@ -1366,15 +1366,19 @@ function Get-AppsCsvColumns {
     [CmdletBinding()]
     param($Definitions = @())
 
+    # Aufgegebene Spalten: aeltere Apps.csv tragen sie noch. Sie werden nicht mehr als eigene Spalte
+    # behandelt, sondern fallen beim naechsten Speichern weg (PackageName las kein Code - der Paketname
+    # kommt aus DisplayName).
+    $retired = @('PackageName')
     $columns = New-Object System.Collections.ArrayList
-    foreach ($name in @('ProgramID', 'Publisher', 'DisplayName', 'PackageName', 'Version', 'WinGetParams', 'SingleMSI',
+    foreach ($name in @('ProgramID', 'Publisher', 'DisplayName', 'Version', 'WinGetParams', 'SingleMSI',
                         'InstallCmd', 'UninstallCmd', 'logoURL', 'Architecture', 'MinimumOS', 'MsiProductCode', 'Interactive', 'ArpName')) {
         $null = $columns.Add($name)
     }
     foreach ($definition in @($Definitions)) {
         if ($null -eq $definition) { continue }
         foreach ($name in $definition.PSObject.Properties.Name) {
-            if ($name -ne '__InternalId' -and ($columns -notcontains $name)) { $null = $columns.Add($name) }
+            if ($name -ne '__InternalId' -and $retired -notcontains $name -and ($columns -notcontains $name)) { $null = $columns.Add($name) }
         }
     }
     return @($columns)
@@ -2523,7 +2527,7 @@ function Open-EditDialog {
 
     # Gruppen und Reihenfolge; unbekannte (eigene) Spalten landen unter "Other".
     $groups = [ordered]@{
-        'Application'  = @('DisplayName', 'Publisher', 'Version', 'PackageName')
+        'Application'  = @('DisplayName', 'Publisher', 'Version')
         'Source'       = @('ProgramID', 'WinGetParams', 'SingleMSI', 'MsiProductCode', 'logoURL')
         'Installation' = @('InstallCmd', 'UninstallCmd', 'Interactive')
         'Intune'       = @('Architecture', 'MinimumOS', 'ArpName')
@@ -2540,7 +2544,6 @@ function Open-EditDialog {
     $multiline = @('InstallCmd', 'UninstallCmd')
     $hints = @{
         Version        = 'LatestAvailable makes this a WinGet app: a thin wrapper that installs through winget on the device.'
-        PackageName    = 'Not used by the tool - the package name comes from DisplayName.'
         ProgramID      = 'WinGet package id. Used only when Version is LatestAvailable.'
         WinGetParams   = 'Extra winget arguments, e.g. "--scope=machine". Used only when Version is LatestAvailable.'
         MsiProductCode = 'Detection by the MSI product code - native in Intune, version included. Empty: detection.ps1 is used.'
