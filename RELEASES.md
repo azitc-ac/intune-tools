@@ -426,10 +426,9 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
 
 **Weiterhin nicht belegt** — jeweils mit dem Beleg, der sie abhakt:
 
-- [ ] **`-bulk`** (zwei oder mehr Apps in einem Deploy). Lauf 3 war eine App
-      (`Parameter -bulk is NOT set`); bei mehreren nimmt `Invoke-PackageDeploy` den
-      anderen Zweig. Beleg: Transcript mit `Parameter -bulk is set` und
-      `Deployment summary: 2 succeeded`.
+- [ ] **Mehrere Apps in einem Deploy.** Lauf 3 war eine App. Seit Stufe 3 übergibt das Tool kein
+      `-bulk` mehr, sondern je Paket `-Mode New|Update` (siehe Abschnitt Stufe 3 unten). Beleg:
+      Transcript mit zwei Apps und `Deployment summary: 2 succeeded, 0 failed, 0 skipped`.
 - [ ] **Tenant-Wechsel im Fenster** meldet neu an (`-Force`). Lauf 3 hatte einen Tenant.
       Beleg: nach dem Wechsel `Authenticating against tenant [<neuer>]` im Transcript
       und die Spalte `Intune` zeigt den Bestand des neuen Tenants, nicht den des alten.
@@ -444,6 +443,55 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Offene Feldprüfung: Deploy-Plan statt blindem Anlegen (Stufe 3, 2026-10-10)
+
+Vorher legte der Bulk-Lauf **immer** eine neue App an, auch wenn dieselbe App in derselben Version
+schon in Intune lag (`deploy_template.ps1`, Zweig „BULK IS SET"). Jetzt entscheidet das Tool vorher:
+`Invoke-InventoryDeploy` liest Intune frisch (`Read-TenantWin32Apps`), plant (`Get-DeployPlan`:
+Create / Skip / Update), fragt mit dem Plan, baut nur, was verteilt wird, und ruft
+`Invoke-PackageDeploy` mit `-Mode` und `-UpdateAppId` je Paket. Das Inventar gleicht Intune nach
+**Name und Version** ab (`displayVersion`); zwei Versionen derselben App waren bisher als
+„Dubletten" (`yes (2x)`) markiert.
+
+Belegt ist **offline**:
+
+- `Tests/Test-DeployPlan.ps1` (neu): Inventar nach Name+Version (gleiche Version, andere Version,
+  App ohne `displayVersion`, zwei Versionen, echte Dublette), Plan je Zustand, `-ReplaceExisting`
+  ersetzt weder Dubletten noch inhaltslose Einträge, nicht gelesener Intune-Zustand wird nicht
+  geplant, `Invoke-PackageDeploy` ruft ein aufzeichnendes Skript mit `-Mode`/`-UpdateAppId` und
+  ohne `-bulk` auf und bricht VOR dem ersten Upload ab, wenn eine Entscheidung fehlt,
+  `Invoke-InventoryDeploy` liest neu (die Auswahl stammt aus einem Fenster mit leerem Intune),
+  baut übersprungene Zeilen nicht, tut bei Abbruch und nicht lesbarem Tenant nichts.
+- Prüfung 34 in `Invoke-RepoChecks.ps1` (kein Deploy am Plan vorbei; `-Mode` im Template;
+  Ergebnis des Updates wird nicht verworfen) und angepasste Prüfung 32.
+- Gegenproben: 10 Rückbauten (Dubletten-Regel, neu lesen, Bau übersprungener Zeilen, `-Mode`
+  weglassen, Versionsabgleich, Deploy am Plan vorbei, verworfenes Update-Ergebnis, Geister-Eintrag,
+  nicht gelesener Zustand) — jede schlug an.
+- Aus der Modulquelle (1.5.0, `Update-IntuneWin32AppPackageFile.ps1`) gelesen, **nicht** im Feld
+  geprüft: Das Update legt eine neue contentVersion an und setzt nur `committedContentVersion` und
+  `largeIcon` per PATCH; Erkennungsregel, Befehlszeilen, Anforderungen und Zuweisungen werden
+  dort nicht angefasst. Bei einem Fehler warnt das Modul und gibt nichts zurück — das Template
+  prüft das Ergebnis jetzt (vorher: `$uploadResult = $app`, ein gescheitertes Update blieb
+  unsichtbar).
+
+**Folge der Template-Änderung:** der Vorlagen-Fingerabdruck hat sich geändert; jedes vorhandene
+Paket steht einmal als `Package, template outdated` da und wird beim nächsten Deploy erneuert
+(mit `.bak`). Das ist der vorgesehene Weg, aber im Feld noch nicht gelaufen.
+
+**Nicht belegt:**
+
+- [ ] **Create im Feld mit dem neuen Template**: eine App, die es in Intune nicht gibt; Transcript
+      mit `Decision of the calling run: create a new app`, `Finished.`, `Deployment summary: 1
+      succeeded, 0 failed, 0 skipped`, App in Intune mit Inhalt.
+- [ ] **Skip im Feld**: dieselbe App direkt nochmal deployen — das Fenster fragt, bei „Ja" kommt
+      `SKIPPED  <Name> - <Version>: already in Intune`, in Intune bleibt **eine** App.
+- [ ] **Update im Feld** (Frage mit „Nein" beantworten) gegen eine App **mit Zuweisung**: nach dem
+      Lauf ist die Zuweisung noch da, `committedContentVersion` ist gestiegen, Erkennungsregel
+      unverändert. Erst das belegt, dass „Zuweisungen bleiben" stimmt.
+- [ ] **Erneuern vorhandener Pakete** (`template outdated` → Deploy) mit dem neuen Template.
+- [ ] **Der Fragedialog** ist ein Win32-`MessageBox` und per UI Automation nicht bedient worden;
+      geprüft ist, welcher Text und welche Tasten übergeben werden, nicht, wie er aussieht.
+- [ ] **Zwei Versionen derselben App** in einem Tenant: `yes` für beide, kein „Dubletten"-Hinweis.
 ## Offene Feldprüfung: Bearbeiten-Dialog und verwaiste Ordner (Stufe 2, 2026-10-09)
 
 `Open-EditDialog` ist neu (Kopf mit Fakten zur Zeile, Felder in Gruppen, Auswahllisten aus dem

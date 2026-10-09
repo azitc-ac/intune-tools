@@ -21,7 +21,7 @@ Tenant [xyz.onmicrosoft.com v]  Show [All v]  [Filter...]                    [Re
 | Column | Meaning |
 | --- | --- |
 | `Package` | `Definition only`, `Package`, `Package, template outdated` / `unstamped`, or `No definition` (a package folder without a row in `Apps.csv`) |
-| `Intune` | present in the tenant; `yes (2x)` means duplicates; `no content` means an entry a failed upload left behind (not published, no committed content); `not checked` when no tenant is connected |
+| `Intune` | matched by **name and version**: `yes` is an app with this name and this version; `other version: 1.0.5` means the name exists, this version does not (a deploy creates it; the other version stays); `yes (2x)` means the same name **and** version twice (duplicates); `no content` means an entry a failed upload left behind (not published, no committed content); `not checked` when no tenant is connected |
 | `Next step` | the sensible next step, derived from the row |
 
 The tenant is chosen once at the start (not asked at all when only one is configured) and can be
@@ -33,6 +33,30 @@ The buttons follow the selected rows: a row without a definition can be deployed
 deleted or built. **Deploy** builds a row that has no package first. **Delete definition** removes the
 row from `Apps.csv` only - the package folder and the app in Intune stay. The row tooltip spells out
 all three states, and the selection survives every action.
+
+### Deploy decides before it uploads
+
+Earlier the generated `deploy.ps1` created a **new** app on every bulk run, even when the same app in
+the same version was already in Intune - every second run made duplicates. Now the tool decides
+first, on a fresh read of the tenant (the state shown in the window may be stale), and hands the
+decision to `deploy.ps1` (`-Mode New|Update`, `-UpdateAppId`):
+
+| In Intune | Plan |
+| --- | --- |
+| no app with this name and version | **Create** (also when only another version exists - it stays) |
+| exactly one app with this name and version | **Skip** (`already in Intune`) |
+| two or more | **Skip** - remove the duplicates first |
+| one, but without content (failed upload) | **Skip** - remove the entry first |
+
+A dialog shows the plan before anything happens. **Yes** deploys as planned. When apps are already
+in Intune, **No** additionally *replaces the package content* of those apps (`Update`): their detection
+rule, install and uninstall commands, requirements and assignments stay exactly as they are in Intune,
+because `Update-IntuneWin32AppPackageFile` only changes the content version and the icon (read from
+the module source, 1.5.0). Rows that are skipped are not built. If the tenant cannot be read, nothing
+is deployed. Running `deploy.ps1` by hand still asks (`-Mode Ask`), as before.
+
+Changing the template changed its fingerprint: existing packages show `Package, template outdated`
+once and are renewed (with a `.bak`) on their next deploy.
 
 **Remove orphan folder** deletes the package folder of selected rows that have **no definition** in
 `Apps.csv` (status `No definition` - typically what is left after a rename or a deleted definition).
@@ -141,8 +165,10 @@ handling outside `Resolve-PackageLogo`, a hard-coded requirement rule, a missing
 report, a WinGet detection that does not check for an upgrade, and the main window's wiring:
 an old entry point (`createApps`, `deployApps`, the start tiles) coming back, a button whose
 action has no branch in `Start-InventoryLoop`, a tenant switch that does not sign in again,
-a second writer of `Apps.csv` besides `Save-AppsCsv`, or a second place that builds packages
-besides `Build-AppPackage`.
+a second writer of `Apps.csv` besides `Save-AppsCsv`, a second place that builds packages
+besides `Build-AppPackage`, or a deploy that bypasses the plan (`Invoke-PackageDeploy` called without
+going through `Invoke-InventoryDeploy`, `deploy.ps1` called without `-Mode` or with `-bulk`, a discarded
+update result in the template).
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the
 check red.
@@ -151,5 +177,6 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 
 | Test | What it proves |
 | --- | --- |
+| `Test-DeployPlan.ps1` | the plan: Intune is matched by name **and** version, Create/Skip/Update per state, duplicates and empty entries are never replaced, the decision reaches `deploy.ps1` as `-Mode`, Intune is read fresh before planning, only planned apps are built and deployed, nothing happens on cancel or an unreadable tenant |
 | `Test-MainWindowModel.ps1` | the state of every inventory row, and that `Apps.csv` survives read, save and read again (values, own columns, BOM, header) |
 | `Test-MainWindowUi.ps1` | operates the real main window through UI Automation: buttons follow the selected row, the selection survives, the filter narrows, a tenant switch is reported, and the real `Start-InventoryLoop` shows the window again after Refresh and ends on Close. Needs a desktop session - the window flashes briefly |

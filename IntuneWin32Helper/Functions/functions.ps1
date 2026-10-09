@@ -238,16 +238,20 @@ function Write-DeploymentSummary {
     [CmdletBinding()]
     param(
         [string[]]$Succeeded = @(),
-        [string[]]$Failed = @()
+        [string[]]$Failed = @(),
+        # "<Name> - <Version>: <Grund>" - Apps, die der Plan bewusst nicht angefasst hat.
+        [string[]]$Skipped = @()
     )
 
     $okCount   = @($Succeeded).Count
     $failCount = @($Failed).Count
+    $skipCount = @($Skipped).Count
 
     Write-Host ""
-    Write-Host ("Deployment summary: {0} succeeded, {1} failed." -f $okCount, $failCount) -ForegroundColor Cyan
+    Write-Host ("Deployment summary: {0} succeeded, {1} failed, {2} skipped." -f $okCount, $failCount, $skipCount) -ForegroundColor Cyan
     foreach ($name in $Succeeded) { Write-Host ("  OK      {0}" -f $name) -ForegroundColor Green }
     foreach ($name in $Failed)    { Write-Host ("  FAILED  {0}" -f $name) -ForegroundColor Red }
+    foreach ($name in $Skipped)   { Write-Host ("  SKIPPED {0}" -f $name) -ForegroundColor Yellow }
 
     if ($failCount -gt 0) {
         Write-Host "A failed upload can leave an app without content in Intune - remove those entries." -ForegroundColor Yellow
@@ -856,27 +860,22 @@ function Get-AppInventory {
         try { $packages = @(Get-DeployScripts -PacketRoot $PacketRoot) } catch { $packages = @() }
     }
 
-    # Intune-Apps nach Anzeigenamen zaehlen. Mehr als eine ist bemerkenswert:
-    # so sehen Dubletten aus. Getrennt gezaehlt werden Eintraege OHNE Inhalt -
-    # das hinterlaesst ein fehlgeschlagener Upload (Geister-App). Frueher zaehlten
-    # sie einfach als "yes", und das Inventar meldete im Feld "up to date" fuer
-    # eine App, die nie verteilt werden kann.
+    # Intune-Apps nach Anzeigenamen gruppieren. Ob eine Zeile "in Intune" ist, entscheiden Name UND
+    # Version (displayVersion): dieselbe App in zwei Versionen sind zwei Zeilen und keine Dublette -
+    # das Tool legt jede Version als eigene App an. Mehr als eine App mit Name und Version ist
+    # bemerkenswert: so sehen Dubletten aus. Getrennt gezaehlt werden Eintraege OHNE Inhalt - das
+    # hinterlaesst ein fehlgeschlagener Upload (Geister-App). Frueher zaehlten sie einfach als
+    # "yes", und das Inventar meldete im Feld "up to date" fuer eine App, die nie verteilt werden kann.
     $intuneByName = @{}
-    $intuneEmptyByName = @{}
     $intuneChecked = ($null -ne $IntuneApps)
     if ($intuneChecked) {
         foreach ($app in @($IntuneApps)) {
             $name = [string]$app.displayName
             if (-not $name) { continue }
-            if ($intuneByName.ContainsKey($name)) { $intuneByName[$name] = $intuneByName[$name] + 1 }
-            else { $intuneByName[$name] = 1 }
-            if (-not (Test-IntuneAppHasContent -App $app)) {
-                if ($intuneEmptyByName.ContainsKey($name)) { $intuneEmptyByName[$name] = $intuneEmptyByName[$name] + 1 }
-                else { $intuneEmptyByName[$name] = 1 }
-            }
+            if (-not $intuneByName.ContainsKey($name)) { $intuneByName[$name] = New-Object System.Collections.ArrayList }
+            $null = $intuneByName[$name].Add($app)
         }
     }
-
     # Schluessel ist "<Name> - <Version>", genau wie der Paketordner heisst.
     $rows = @{}
     $order = New-Object System.Collections.ArrayList
@@ -903,6 +902,10 @@ function Get-AppInventory {
                 HasPackage       = $false
                 DefinitionRecord = $null
                 Detail           = ''
+                # Die Intune-Apps gleichen Namens: IntuneSame = auch gleiche Version,
+                # IntuneOther = andere Version. Daraus entscheidet Get-DeployPlan.
+                IntuneSame       = @()
+                IntuneOther      = @()
             }
             $null = $order.Add($key)
         }
@@ -934,15 +937,24 @@ function Get-AppInventory {
     foreach ($key in $order) {
         $row = $rows[$key]
         $emptyCount = 0
+        $count      = 0
         if ($intuneChecked -and $intuneByName.ContainsKey($row.AppName)) {
-            $count = $intuneByName[$row.AppName]
-            if ($intuneEmptyByName.ContainsKey($row.AppName)) { $emptyCount = $intuneEmptyByName[$row.AppName] }
-            if ($count -eq 1 -and $emptyCount -eq 1) { $row.Intune = 'no content' }
-            elseif ($count -eq 1)                    { $row.Intune = 'yes' }
-            elseif ($emptyCount -gt 0)               { $row.Intune = ('yes ({0}x, {1} without content)' -f $count, $emptyCount) }
-            else                                     { $row.Intune = ('yes ({0}x)' -f $count) }
+            $byName = @($intuneByName[$row.AppName])
+            $same   = @($byName | Where-Object { ([string]$_.displayVersion) -eq $row.AppVersion })
+            $other  = @($byName | Where-Object { ([string]$_.displayVersion) -ne $row.AppVersion })
+            $row.IntuneSame  = $same
+            $row.IntuneOther = $other
+            $count      = $same.Count
+            $emptyCount = @($same | Where-Object { -not (Test-IntuneAppHasContent -App $_) }).Count
+            if ($count -eq 0) {
+                $versions = @($other | ForEach-Object { $(if ([string]$_.displayVersion) { [string]$_.displayVersion } else { '(none)' }) } | Select-Object -Unique)
+                $row.Intune = ('other version: {0}' -f ($versions -join ', '))
+            }
+            elseif ($count -eq 1 -and $emptyCount -eq 1) { $row.Intune = 'no content' }
+            elseif ($count -eq 1)                        { $row.Intune = 'yes' }
+            elseif ($emptyCount -gt 0)                   { $row.Intune = ('yes ({0}x, {1} without content)' -f $count, $emptyCount) }
+            else                                         { $row.Intune = ('yes ({0}x)' -f $count) }
         }
-
         # Der naechste sinnvolle Schritt folgt aus dem Zustand der Zeile.
         if ($emptyCount -gt 0) {
             # Zuerst: ein inhaltsloser Eintrag verdeckt sonst jeden anderen Befund.
@@ -959,6 +971,11 @@ function Get-AppInventory {
         }
         elseif ($row.Intune -eq '-') {
             $row.Next = 'deploy'
+        }
+        elseif ($row.Intune -like 'other version*') {
+            # Name vorhanden, Version nicht: ein Deploy legt diese Version neu an,
+            # die andere bleibt (sie hat ihre eigene Zeile oder wird von Hand entfernt).
+            $row.Next = 'deploy (new version)'
         }
         elseif ($row.Template -eq 'outdated' -or $row.Template -eq 'unstamped') {
             $row.Next = 'renew from template, then deploy'
@@ -1731,33 +1748,39 @@ function Invoke-PackageDeploy {
         [Parameter(Mandatory = $true)]$Packages,
         [Parameter(Mandatory = $true)]$Tenant,
         [Parameter(Mandatory = $true)][string]$RootDir,
-        [Parameter(Mandatory = $true)][string]$ToolVersion
+        [Parameter(Mandatory = $true)][string]$ToolVersion,
+        [string[]]$Skipped = @()
     )
 
     $appsToDeploy = @(@($Packages) | Where-Object { $_.FullPath })
     if ($appsToDeploy.Count -eq 0) { return }
 
-    $isBulk = ($appsToDeploy.Count -gt 1)
-    if($isBulk){ Write-Host "Parameter -bulk is set." } else { Write-Host "Parameter -bulk is NOT set." }
+    # Jedes Paket kommt mit der Entscheidung des Plans (Get-DeployPlan): New oder Update.
+    # Ohne sie wuerde das deploy.ps1 selbst entscheiden - und im Bulk-Lauf immer eine neue App
+    # anlegen. Das ist ein Programmierfehler und bricht VOR dem ersten Upload ab.
+    foreach ($app in $appsToDeploy) {
+        $mode = [string]$app.Mode
+        if ($mode -ne 'New' -and $mode -ne 'Update') {
+            throw ("Deploy of '{0} - {1}' has no decision (Mode '{2}'): the plan from Get-DeployPlan is missing." -f $app.AppName, $app.AppVersion, $mode)
+        }
+        if ($mode -eq 'Update' -and [string]::IsNullOrWhiteSpace([string]$app.UpdateAppId)) {
+            throw ("Deploy of '{0} - {1}': Mode Update needs an UpdateAppId." -f $app.AppName, $app.AppVersion)
+        }
+    }
 
     $succeeded = @()
     $failed    = @()
 
     foreach($app in $appsToDeploy){
         $appLabel = "$($app.AppName) - $($app.AppVersion)"
-        Write-Host "Deploy Application: $appLabel" -ForegroundColor Cyan
+        Write-Host ("Deploy Application: {0} ({1})" -f $appLabel, $app.Mode) -ForegroundColor Cyan
 
         try {
-            # Aeltere deploy.ps1 kennen -Tenant nicht und wuerden erneut fragen:
-            # aus der aktuellen Vorlage nachziehen (Sicherung wird angelegt).
+            # Aeltere deploy.ps1 kennen -Tenant und -Mode nicht: aus der aktuellen
+            # Vorlage nachziehen (Sicherung wird angelegt).
             $null = Update-DeployScript -DeployScriptPath $app.FullPath -RootDir $RootDir -ToolVersion $ToolVersion
 
-            if($isBulk){
-                & $app.FullPath -bulk -Tenant $Tenant
-            }
-            else{
-                & $app.FullPath -Tenant $Tenant
-            }
+            & $app.FullPath -Tenant $Tenant -Mode ([string]$app.Mode) -UpdateAppId ([string]$app.UpdateAppId)
             $succeeded += $appLabel
         }
         catch {
@@ -1766,10 +1789,191 @@ function Invoke-PackageDeploy {
             $failed += $appLabel
         }
     }
-
-    Write-DeploymentSummary -Succeeded $succeeded -Failed $failed
+    Write-DeploymentSummary -Succeeded $succeeded -Failed $failed -Skipped @($Skipped)
 }
 
+function Get-DeployPlan {
+    <#
+        .SYNOPSIS
+        Entscheidet pro Zeile, was ein Deploy tut: Create, Skip oder Update.
+
+        .DESCRIPTION
+        Reine Funktion ueber den Zustand der Inventarzeilen (IntuneSame/IntuneOther) -
+        pruefbar ohne Tenant.
+
+        Wozu: das erzeugte deploy.ps1 legte im Bulk-Lauf IMMER eine neue App an, auch
+        wenn dieselbe App in derselben Version schon in Intune lag - jeder zweite Lauf
+        erzeugte Dubletten. Jetzt entscheidet das Tool vorher, und das deploy.ps1
+        bekommt die Entscheidung mit (-Mode).
+
+          Create  keine App mit Name UND Version in Intune
+          Skip    gibt es schon oder ist nicht eindeutig; Reason sagt warum
+          Update  nur mit -ReplaceExisting: genau eine App mit Inhalt, deren Paketinhalt
+                  ersetzt wird. Erkennungsregel, Befehlszeilen, Anforderungen und
+                  Zuweisungen bleiben, wie sie in Intune sind: Update-IntuneWin32AppPackageFile
+                  aendert nur committedContentVersion und das Icon (Modulquelle 1.5.0).
+
+        Eine Zeile, deren Intune-Zustand nicht gelesen wurde, wird nicht geplant -
+        "nicht nachgesehen" darf nicht wie "gibt es nicht" aussehen.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Rows,
+        [switch]$ReplaceExisting
+    )
+
+    foreach ($row in @($Rows)) {
+        if ([string]$row.Intune -eq 'not checked') {
+            throw ("The Intune state of '{0}' was not read - a deploy cannot be planned without it." -f $row.Key)
+        }
+        $same  = @(@($row.IntuneSame)  | Where-Object { $_ })
+        $other = @(@($row.IntuneOther) | Where-Object { $_ })
+
+        $action = 'Create'; $reason = ''; $appId = ''; $replaceable = $false
+        if ($same.Count -eq 0) {
+            $reason = 'not in Intune yet'
+            if ($other.Count -gt 0) {
+                $versions = @($other | ForEach-Object { $(if ([string]$_.displayVersion) { [string]$_.displayVersion } else { '(none)' }) } | Select-Object -Unique)
+                $reason = 'new version - Intune has {0}' -f ($versions -join ', ')
+            }
+        }
+        elseif ($same.Count -gt 1) {
+            $action = 'Skip'; $reason = ('{0} apps with this name and version in Intune - remove the duplicates first' -f $same.Count)
+        }
+        elseif (-not (Test-IntuneAppHasContent -App $same[0])) {
+            $action = 'Skip'; $reason = 'the entry in Intune has no content - remove it in Intune first'
+        }
+        elseif ($ReplaceExisting) {
+            $action = 'Update'; $appId = [string]$same[0].id; $reason = 'replace the package content of the app in Intune'
+        }
+        else {
+            $action = 'Skip'; $reason = 'already in Intune'; $replaceable = $true
+        }
+
+        [pscustomobject]@{
+            Key         = [string]$row.Key
+            Row         = $row
+            Action      = $action
+            Reason      = $reason
+            UpdateAppId = $appId
+            Replaceable = $replaceable
+        }
+    }
+}
+
+function Invoke-InventoryDeploy {
+    <#
+        .SYNOPSIS
+        Deploy aus dem Hauptfenster: Intune frisch lesen, planen, fragen, bauen, verteilen.
+
+        .DESCRIPTION
+        Ein Pfad fuer jedes Deploy. Reihenfolge, mit Absicht:
+          1. Intune NEU lesen. Der Stand des Fensters kann veraltet sein (ein anderer
+             Administrator, ein vorheriger Lauf); wer auf Grundlage von gestern entscheidet,
+             legt Dubletten an. Scheitert das Lesen, wird nichts verteilt.
+          2. Get-DeployPlan: pro Zeile Create / Skip.
+          3. Rueckfrage mit dem Plan. Ja = wie geplant, Nein = zusaetzlich den Inhalt
+             schon vorhandener Apps ersetzen, Abbrechen = nichts tun.
+          4. Nur fuer Zeilen, die nicht uebersprungen werden und noch kein Paket haben: bauen.
+          5. Invoke-PackageDeploy mit der Entscheidung je Paket.
+
+        -Ask ist die Rueckfrage (Text, Tasten) -> 'Yes' | 'No' | 'Cancel'; Tests ersetzen sie.
+        Gibt $null zurueck, wenn nichts verteilt wurde, sonst den Plan.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Selection,
+        [Parameter(Mandatory = $true)]$Tenant,
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [Parameter(Mandatory = $true)][string]$PacketRoot,
+        [Parameter(Mandatory = $true)][string]$ToolVersion,
+        [bool]$RemoveExisting = $false,
+        [scriptblock]$Ask = { param($Text, $Buttons) [string][System.Windows.MessageBox]::Show($Text, 'Deploy', $Buttons, 'Question') }
+    )
+
+    $keys = @(@($Selection) | ForEach-Object { [string]$_.Key })
+
+    $fresh = Read-TenantWin32Apps
+    if ($null -eq $fresh) {
+        Write-Host "The apps in the tenant could not be read - nothing was deployed (without that state a deploy could create duplicates)." -ForegroundColor Yellow
+        return $null
+    }
+
+    $definitions = @(Read-AppsCsv -RootDir $RootDir)
+    $inventory   = @(Get-AppInventory -Definitions $definitions -PacketRoot $PacketRoot -RootDir $RootDir -IntuneApps $fresh)
+    $rows = @($inventory | Where-Object { $keys -contains $_.Key -and ($_.HasDefinition -or $_.HasPackage) })
+    if ($rows.Count -eq 0) { return $null }
+
+    $plan = @(Get-DeployPlan -Rows $rows)
+
+    $describe = {
+        param($items)
+        (@($items) | ForEach-Object { '  {0}  ({1})' -f $_.Key, $_.Reason }) -join "`n"
+    }
+    $create = @($plan | Where-Object { $_.Action -eq 'Create' })
+    $skip   = @($plan | Where-Object { $_.Action -eq 'Skip' })
+    $replaceable = @($skip | Where-Object { $_.Replaceable })
+
+    $textParts = @()
+    if ($create.Count -gt 0) { $textParts += ("Create in Intune ({0}):`n{1}" -f $create.Count, (& $describe $create)) }
+    if ($skip.Count -gt 0)   { $textParts += ("Skip ({0}):`n{1}" -f $skip.Count, (& $describe $skip)) }
+    if ($create.Count -eq 0 -and $replaceable.Count -eq 0) {
+        $textParts += 'Nothing to deploy.'
+    }
+    if ($replaceable.Count -gt 0) {
+        $textParts += ("Yes = deploy as planned.`nNo = also replace the package content of the {0} app(s) already in Intune. Their detection rule, commands, requirements and assignments stay as they are in Intune.`nCancel = do nothing." -f $replaceable.Count)
+        $buttons = 'YesNoCancel'
+    }
+    else {
+        $textParts += $(if ($create.Count -gt 0) { 'Continue?' } else { 'Nothing will be changed.' })
+        $buttons = $(if ($create.Count -gt 0) { 'YesNo' } else { 'OK' })
+    }
+
+    $answer = [string](& $Ask ($textParts -join "`n`n") $buttons)
+    if ($answer -eq 'Cancel' -or $answer -eq 'None' -or ($buttons -eq 'YesNo' -and $answer -ne 'Yes')) {
+        Write-Host "Deploy cancelled - nothing was changed." -ForegroundColor Yellow
+        return $null
+    }
+    if ($buttons -eq 'OK') { return $null }
+
+    if ($answer -eq 'No' -and $replaceable.Count -gt 0) {
+        $plan = @(Get-DeployPlan -Rows $rows -ReplaceExisting)
+    }
+
+    $todo    = @($plan | Where-Object { $_.Action -ne 'Skip' })
+    $skipped = @($plan | Where-Object { $_.Action -eq 'Skip' } | ForEach-Object { '{0}: {1}' -f $_.Key, $_.Reason })
+
+    # Bauen nur, was verteilt wird und noch kein Paket hat.
+    $builtByKey = @{}
+    $toBuild = @($todo | Where-Object { -not $_.Row.HasPackage -and $_.Row.HasDefinition } | ForEach-Object { $_.Row })
+    if ($toBuild.Count -gt 0) {
+        $built = Invoke-PackageBuild -Rows $toBuild -PacketRoot $PacketRoot -RootDir $RootDir -ToolVersion $ToolVersion -RemoveExisting $RemoveExisting
+        foreach ($b in @($built.Built)) { $builtByKey[('{0} - {1}' -f $b.AppName, $b.AppVersion)] = $b }
+    }
+
+    $packages = @()
+    foreach ($item in $todo) {
+        $path = [string]$item.Row.FullPath
+        if (-not $path -and $builtByKey.ContainsKey($item.Key)) { $path = [string]$builtByKey[$item.Key].FullPath }
+        if (-not $path) { continue }   # Bau gescheitert - Invoke-PackageBuild hat es gemeldet
+        $mode = $(if ($item.Action -eq 'Update') { 'Update' } else { 'New' })
+        $packages += [pscustomobject]@{
+            AppName     = $item.Row.AppName
+            AppVersion  = $item.Row.AppVersion
+            FullPath    = $path
+            Mode        = $mode
+            UpdateAppId = $item.UpdateAppId
+        }
+    }
+
+    if ($packages.Count -gt 0) {
+        Invoke-PackageDeploy -Packages $packages -Tenant $Tenant -RootDir $RootDir -ToolVersion $ToolVersion -Skipped $skipped
+    }
+    else {
+        Write-DeploymentSummary -Succeeded @() -Failed @() -Skipped $skipped
+    }
+    return $plan
+}
 function Show-InventoryDialog {
     <#
         .SYNOPSIS
@@ -1859,7 +2063,7 @@ function Show-InventoryDialog {
     $views = @(
         [pscustomobject]@{ Name = 'All';                              Test = { $true } },
         [pscustomobject]@{ Name = 'Definition only (no package)';     Test = { $_.Status -eq 'Definition only' } },
-        [pscustomobject]@{ Name = 'Package, not in Intune';           Test = { $_.HasPackage -and $_.Intune -eq '-' } },
+        [pscustomobject]@{ Name = 'Package, not in Intune';           Test = { $_.HasPackage -and ($_.Intune -eq '-' -or $_.Intune -like 'other version*') } },
         [pscustomobject]@{ Name = 'In Intune';                        Test = { $_.Intune -like 'yes*' -or $_.Intune -eq 'no content' } },
         [pscustomobject]@{ Name = 'Template outdated';                Test = { $_.Template -eq 'outdated' -or $_.Template -eq 'unstamped' } },
         [pscustomobject]@{ Name = 'Duplicates or empty in Intune';    Test = { $_.Intune -eq 'no content' -or $_.Intune -like 'yes (*' } },
@@ -2335,15 +2539,8 @@ function Start-InventoryLoop {
                         Write-Host "No tenant - nothing was deployed." -ForegroundColor Yellow
                     }
                     else {
-                        $packages = @($selection | Where-Object { $_.HasPackage } | ForEach-Object {
-                            [pscustomobject]@{ AppName = $_.AppName; AppVersion = $_.AppVersion; FullPath = $_.FullPath }
-                        })
-                        $toBuild = @($selection | Where-Object { $_.HasDefinition -and -not $_.HasPackage })
-                        if ($toBuild.Count -gt 0) {
-                            $built = Invoke-PackageBuild -Rows $toBuild -PacketRoot $packetRoot -RootDir $RootDir -ToolVersion $ToolVersion -RemoveExisting $removeExisting
-                            $packages = @($packages) + @($built.Built)
-                        }
-                        Invoke-PackageDeploy -Packages $packages -Tenant $tenant -RootDir $RootDir -ToolVersion $ToolVersion
+                        # Lesen, planen, fragen, bauen, verteilen: ein Pfad in Invoke-InventoryDeploy.
+                        $null = Invoke-InventoryDeploy -Selection $selection -Tenant $tenant -RootDir $RootDir -PacketRoot $packetRoot -ToolVersion $ToolVersion -RemoveExisting $removeExisting
                         $reloadIntune = $true
                     }
                 }

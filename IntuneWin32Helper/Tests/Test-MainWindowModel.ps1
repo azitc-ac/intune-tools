@@ -62,7 +62,7 @@ try {
         [pscustomobject]@{ DisplayName = 'WithPkg'; Version = '1.0'; Publisher = 'P2' },
         [pscustomobject]@{ DisplayName = 'Old';     Version = '1.0'; Publisher = 'P3' }
     )
-    $tenantApps = @([pscustomobject]@{ displayName = 'WithPkg'; publishingState = 'published'; committedContentVersion = '1' })
+    $tenantApps = @([pscustomobject]@{ displayName = 'WithPkg'; displayVersion = '1.0'; publishingState = 'published'; committedContentVersion = '1' })
 
     $inv = @(Get-AppInventory -Definitions $defs -PacketRoot $packets -RootDir $rootDir -IntuneApps $tenantApps 6>$null)
     $row = @{}; foreach ($x in $inv) { $row[$x.AppName] = $x }

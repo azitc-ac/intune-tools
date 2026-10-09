@@ -76,10 +76,10 @@ try {
 
     # 4) Inventar: Inhaltsloser Eintrag faellt auf
     $apps = @(
-        [pscustomobject]@{ displayName = 'Current';  publishingState = 'published';    committedContentVersion = '1' }
-        [pscustomobject]@{ displayName = 'Ghost';    publishingState = 'notPublished'; committedContentVersion = ''  }
-        [pscustomobject]@{ displayName = 'Twice';    publishingState = 'published';    committedContentVersion = '1' }
-        [pscustomobject]@{ displayName = 'Twice';    publishingState = 'notPublished'; committedContentVersion = ''  }
+        [pscustomobject]@{ displayName = 'Current';  displayVersion = '1.0'; publishingState = 'published';    committedContentVersion = '1' }
+        [pscustomobject]@{ displayName = 'Ghost';    displayVersion = '1.0'; publishingState = 'notPublished'; committedContentVersion = ''  }
+        [pscustomobject]@{ displayName = 'Twice';    displayVersion = '1.0'; publishingState = 'published';    committedContentVersion = '1' }
+        [pscustomobject]@{ displayName = 'Twice';    displayVersion = '1.0'; publishingState = 'notPublished'; committedContentVersion = ''  }
     )
     $defs = @('Current', 'Ghost', 'Twice') | ForEach-Object { [pscustomobject]@{ DisplayName = $_; Version = '1.0' } }
     $inv = @(Get-AppInventory -Definitions $defs -PacketRoot $work -RootDir $rootDir -IntuneApps $apps 6>$null)

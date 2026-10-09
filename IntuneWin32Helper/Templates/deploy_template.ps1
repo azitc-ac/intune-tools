@@ -3,7 +3,19 @@
 
     # Ziel-Tenant, uebergeben vom aufrufenden Lauf (deployApps / createApps).
     # Ist er gesetzt, erscheint in diesem Skript kein Auswahldialog mehr.
-    $Tenant
+    $Tenant,
+
+    # Entscheidung des aufrufenden Laufs (Invoke-InventoryDeploy -> Get-DeployPlan):
+    #   New    - eine neue App anlegen
+    #   Update - den Paketinhalt der App -UpdateAppId ersetzen. Erkennungsregel, Befehlszeilen,
+    #            Anforderungen und Zuweisungen der App bleiben, wie sie in Intune sind.
+    #   Ask    - nur beim direkten Aufruf dieses Skripts: nach einer gleichnamigen App suchen
+    #            und fragen (mit -bulk: immer neu anlegen).
+    # Das Tool uebergibt immer New oder Update: so legt ein Lauf keine Dublette an, nur weil das
+    # Skript die App in Intune nicht selbst gesucht hat.
+    [ValidateSet('Ask', 'New', 'Update')]
+    [string]$Mode = 'Ask',
+    [string]$UpdateAppId = ''
 )
 # Vorlagen-Stempel, gesetzt beim Erzeugen. Das Inventar vergleicht ihn gegen den
 # aktuellen Vorlagenstand und zeigt so, welches Paket nachgezogen werden sollte.
@@ -138,49 +150,65 @@ $addNewApp = {
     }
 }
 
-# check if there is an app with the same name already which could be updated
-$existingapps = $null
-$existingapps = Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -DisplayName $Displayname }
+# Die Entscheidung kommt vom aufrufenden Lauf (-Mode). Nur der direkte Aufruf dieses
+# Skripts (Mode Ask) sucht selbst nach einer gleichnamigen App und fragt.
+if ($Mode -eq 'New') {
+    Write-Host "Decision of the calling run: create a new app"
+    $uploadResult = & $addNewApp
+}
+elseif ($Mode -eq 'Update') {
+    if ([string]::IsNullOrWhiteSpace($UpdateAppId)) { throw "Mode Update needs -UpdateAppId." }
+    Write-Host "Decision of the calling run: replace the package content of app $UpdateAppId"
+    # Das Ergebnis wird geprueft: bei einem Fehler schreibt das Modul nur eine Warnung und
+    # gibt nichts zurueck (siehe Modulquelle) - ohne die Pruefung meldete das Skript "Finished.".
+    $uploadResult = Invoke-IntuneModuleCall -Label 'Update-IntuneWin32AppPackageFile' -Operation {
+        Update-IntuneWin32AppPackageFile -ID $UpdateAppId -FilePath $IntuneWinFile
+    }
+}
+else {
+    # check if there is an app with the same name already which could be updated
+    $existingapps = $null
+    $existingapps = Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -DisplayName $Displayname }
 
-if($existingapps){
-    Add-Type -AssemblyName Microsoft.VisualBasic
-    # if the parameter bulk is not set, ask if a new app should be created
-    if($bulk -ne $true){
+    if($existingapps){
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        # if the parameter bulk is not set, ask if a new app should be created
+        if($bulk -ne $true){
 
-        $result = [Microsoft.VisualBasic.Interaction]::MsgBox('An existing application with the same name has been detected. Create a new application? Select "No" to update an existing one. ','YesNoCancel,SystemModal,Information', 'Create or update an application')
-        if($result -eq "Yes"){
-            #BULK IS NOT SET
-            #ANSWER WAS "YES, CREATE A NEW APP"
-            #Builds the App and Uploads to Intune
-            $uploadResult = & $addNewApp
-        }
-        if($result -eq "No"){
-            #BULK IS NOT SET
-            #ANSWER WAS "NO, UPDATE an existing APP"
-            #Builds the App and Uploads to Intune
-            #Updates the App
-            # Auswahl ueber den Dialog des Tools statt Out-GridView (ogv):
-            # ogv braucht einen STA-Host und fehlt in PowerShell 7 ohne Zusatzmodul.
-            $updateCandidates = Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -DisplayName $Displayname } |
-                Select-Object id, displayName, displayVersion, createdDateTime
-            $app = Get-SingleDialogSelection -Value (Open-SelectDialog -data @($updateCandidates) -title "Select the app to update" -size medium)
-            if (-not $app) { throw "No application selected for update - aborting." }
-            # Bricht das Modul hier per break ab (kein Token, contentVersions nicht
-            # angelegt), wirft Invoke-IntuneModuleCall. Ob es auch bei einem
-            # fehlgeschlagenen Commit etwas Pruefbares zurueckgibt, ist ungeprueft.
-            $null = Invoke-IntuneModuleCall -Label 'Update-IntuneWin32AppPackageFile' -Operation {
-                Update-IntuneWin32AppPackageFile -ID $app.id -FilePath $IntuneWinFile
+            $result = [Microsoft.VisualBasic.Interaction]::MsgBox('An existing application with the same name has been detected. Create a new application? Select "No" to update an existing one. ','YesNoCancel,SystemModal,Information', 'Create or update an application')
+            if($result -eq "Yes"){
+                #BULK IS NOT SET
+                #ANSWER WAS "YES, CREATE A NEW APP"
+                #Builds the App and Uploads to Intune
+                $uploadResult = & $addNewApp
             }
-            $uploadResult = $app
+            if($result -eq "No"){
+                #BULK IS NOT SET
+                #ANSWER WAS "NO, UPDATE an existing APP"
+                #Builds the App and Uploads to Intune
+                #Updates the App
+                # Auswahl ueber den Dialog des Tools statt Out-GridView (ogv):
+                # ogv braucht einen STA-Host und fehlt in PowerShell 7 ohne Zusatzmodul.
+                $updateCandidates = Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -DisplayName $Displayname } |
+                    Select-Object id, displayName, displayVersion, createdDateTime
+                $app = Get-SingleDialogSelection -Value (Open-SelectDialog -data @($updateCandidates) -title "Select the app to update" -size medium)
+                if (-not $app) { throw "No application selected for update - aborting." }
+                # Bricht das Modul hier per break ab (kein Token, contentVersions nicht
+                # angelegt), wirft Invoke-IntuneModuleCall. Bei einem fehlgeschlagenen Commit
+                # gibt das Modul nichts zurueck - dann bleibt $uploadResult leer und unten wird geworfen.
+                $uploadResult = Invoke-IntuneModuleCall -Label 'Update-IntuneWin32AppPackageFile' -Operation {
+                    Update-IntuneWin32AppPackageFile -ID $app.id -FilePath $IntuneWinFile
+                }
+            }
+        }
+        else{
+            #BULK IS SET, always build a NEW App without asking
+            $uploadResult = & $addNewApp
         }
     }
     else{
-        #BULK IS SET, always build a NEW App without asking
         $uploadResult = & $addNewApp
     }
-}
-else{
-    $uploadResult = & $addNewApp
 }
 if (-not $uploadResult) {
     throw ("Upload to Intune FAILED for '{0}' - see the warnings above. An app entry may exist in Intune without content and should be removed." -f $Displayname)

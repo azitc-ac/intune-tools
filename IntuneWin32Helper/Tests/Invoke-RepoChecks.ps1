@@ -1266,10 +1266,15 @@ if ($functionsFile) {
         }
     }
 
-    # Und die Aktionen benutzen diesen Weg: Build und Deploy gehen ueber Invoke-PackageBuild.
-    $loopFn2 = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-InventoryLoop' }, $true)
-    if ($loopFn2 -and ([regex]::Matches($loopFn2.Extent.Text, 'Invoke-PackageBuild')).Count -lt 2) {
-        Add-Failure "PackageOneBuildPath" "Start-InventoryLoop ruft Invoke-PackageBuild nicht in beiden Aktionen (Build, Deploy) auf"
+    # Und die Aktionen benutzen diesen Weg: Build geht ueber Invoke-PackageBuild, Deploy ueber
+    # Invoke-InventoryDeploy, und das baut seinerseits ueber Invoke-PackageBuild.
+    $loopFn2   = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-InventoryLoop' }, $true)
+    $deployFn2 = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-InventoryDeploy' }, $true)
+    if ($loopFn2 -and $loopFn2.Extent.Text -notmatch 'Invoke-PackageBuild') {
+        Add-Failure "PackageOneBuildPath" "Start-InventoryLoop ruft Invoke-PackageBuild in der Aktion Build nicht auf"
+    }
+    if (-not $deployFn2 -or $deployFn2.Extent.Text -notmatch 'Invoke-PackageBuild') {
+        Add-Failure "PackageOneBuildPath" "Invoke-InventoryDeploy fehlt oder baut nicht ueber Invoke-PackageBuild - die Aktion Deploy baut anders als Build"
     }
 }
 # ---------------------------------------------------------------------------
@@ -1322,6 +1327,85 @@ if ($functionsFile) {
     }
 }
 # ---------------------------------------------------------------------------
+# 34) Ein Deploy legt keine Dublette an, weil niemand nachgesehen hat. Die Entscheidung
+#     (neu anlegen / ueberspringen / Inhalt ersetzen) faellt im Tool, VOR dem Upload, auf
+#     frisch gelesenem Intune-Stand - und das deploy.ps1 bekommt sie mit (-Mode). Frueher
+#     legte der Bulk-Lauf IMMER eine neue App an, auch wenn dieselbe in derselben Version
+#     schon in Intune lag. Geprueft wird die Struktur:
+#       - Invoke-InventoryDeploy liest Intune (Read-TenantWin32Apps), plant (Get-DeployPlan)
+#         und verteilt (Invoke-PackageDeploy) - in dieser Reihenfolge;
+#       - die Schleife erreicht Invoke-PackageDeploy nur darueber (kein Deploy am Plan vorbei);
+#       - Invoke-PackageDeploy ruft das deploy.ps1 mit -Mode auf und nicht mit -bulk;
+#       - das Template kennt -Mode (Ask|New|Update) und -UpdateAppId, und das Ergebnis des
+#         Updates wird gelesen (nicht "$null = ..."), sonst bliebe ein gescheitertes Update
+#         unsichtbar.
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $fnAst = { param($name) $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | Where-Object { $_.Name -eq $name } | Select-Object -First 1 }
+    $planFn      = & $fnAst 'Get-DeployPlan'
+    $invDeployFn = & $fnAst 'Invoke-InventoryDeploy'
+    $pkgDeployFn = & $fnAst 'Invoke-PackageDeploy'
+    $loopFn4     = & $fnAst 'Start-InventoryLoop'
+
+    if (-not $planFn) { Add-Failure "DeployDecidedByPlan" "Get-DeployPlan fehlt" }
+    if (-not $invDeployFn) {
+        Add-Failure "DeployDecidedByPlan" "Invoke-InventoryDeploy fehlt"
+    }
+    else {
+        $positions = @{}
+        foreach ($name in 'Read-TenantWin32Apps', 'Get-DeployPlan', 'Invoke-PackageDeploy') {
+            $call = $invDeployFn.Find({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq $name }, $true)
+            if (-not $call) { Add-Failure "DeployDecidedByPlan" ("Invoke-InventoryDeploy ruft {0} nicht auf" -f $name) }
+            else { $positions[$name] = $call.Extent.StartOffset }
+        }
+        if ($positions.Count -eq 3 -and -not ($positions['Read-TenantWin32Apps'] -lt $positions['Get-DeployPlan'] -and $positions['Get-DeployPlan'] -lt $positions['Invoke-PackageDeploy'])) {
+            Add-Failure "DeployDecidedByPlan" "Invoke-InventoryDeploy: Reihenfolge muss Intune lesen -> planen -> verteilen sein"
+        }
+    }
+
+    if ($loopFn4) {
+        $direct = $loopFn4.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Invoke-PackageDeploy' }, $true)
+        foreach ($d in $direct) {
+            Add-Failure "DeployDecidedByPlan" ("functions.ps1:{0} Start-InventoryLoop ruft Invoke-PackageDeploy direkt - ein Deploy am Plan vorbei" -f $d.Extent.StartLineNumber)
+        }
+        if ($loopFn4.Extent.Text -notmatch 'Invoke-InventoryDeploy') {
+            Add-Failure "DeployDecidedByPlan" "Start-InventoryLoop ruft Invoke-InventoryDeploy nicht auf - die Aktion Deploy verteilt nicht ueber den Plan"
+        }
+    }
+
+    if ($pkgDeployFn) {
+        $invocations = $pkgDeployFn.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand }, $true)
+        $scriptCalls = @($invocations | Where-Object { $_.Extent.Text -match 'FullPath' })
+        if ($scriptCalls.Count -eq 0) { Add-Failure "DeployDecidedByPlan" "Invoke-PackageDeploy ruft das deploy.ps1 (& `$app.FullPath) nicht auf" }
+        foreach ($c in $scriptCalls) {
+            if ($c.Extent.Text -notmatch '-Mode\b') { Add-Failure "DeployDecidedByPlan" ("functions.ps1:{0} Invoke-PackageDeploy ruft das deploy.ps1 ohne -Mode auf - es entschiede selbst und legte im Bulk-Lauf immer neu an" -f $c.Extent.StartLineNumber) }
+            if ($c.Extent.Text -match '-bulk\b')  { Add-Failure "DeployDecidedByPlan" ("functions.ps1:{0} Invoke-PackageDeploy uebergibt -bulk - das deploy.ps1 legte damit immer neu an" -f $c.Extent.StartLineNumber) }
+        }
+    }
+}
+if (Test-Path -LiteralPath $templatePath) {
+    $tplAst6 = $parsed[(Get-Item -LiteralPath $templatePath).FullName].Ast
+    $modeParam = $tplAst6.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Mode' } | Select-Object -First 1
+    $idParam   = $tplAst6.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'UpdateAppId' } | Select-Object -First 1
+    if (-not $modeParam -or -not $idParam) {
+        Add-Failure "DeployDecidedByPlan" "deploy_template.ps1 hat die Parameter -Mode / -UpdateAppId nicht - die Entscheidung des Plans kommt nicht an"
+    }
+    else {
+        $validate = ($modeParam.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidateSet' } | ForEach-Object { $_.Extent.Text }) -join ' '
+        foreach ($value in 'Ask', 'New', 'Update') {
+            if ($validate -notmatch ("'{0}'" -f $value)) { Add-Failure "DeployDecidedByPlan" ("deploy_template.ps1: -Mode kennt '{0}' nicht" -f $value) }
+        }
+    }
+    $discarded = $tplAst6.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $n.Left.Extent.Text -eq '$null' -and $n.Right.Extent.Text -match 'Update-IntuneWin32AppPackageFile'
+    }, $true)
+    foreach ($d in $discarded) {
+        Add-Failure "DeployDecidedByPlan" ("deploy_template.ps1:{0} das Ergebnis von Update-IntuneWin32AppPackageFile wird verworfen - ein gescheitertes Update bliebe unsichtbar" -f $d.Extent.StartLineNumber)
+    }
+}# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""
