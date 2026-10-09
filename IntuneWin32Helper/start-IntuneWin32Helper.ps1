@@ -34,16 +34,8 @@ Add-Type -AssemblyName PresentationFramework | Out-Null
 Add-Type -AssemblyName System.Windows.Forms    | Out-Null
 
 
-$continue = $true
-while ($continue) {
-    $choice = Show-StartDialog -Title ("IntuneWin32Helper {0} - https://blog.zarenko.net/" -f $toolVersion)
-    switch ($choice) {
-        'CreateNew'          { "-> Start packaging assistant"; createApps }
-        'CreateNewAndDeploy' { "-> Start packaging + deployment"; createApps -createAndDeploy }
-        'DeployExisting'     { "-> Start deployment of existing app"; deployApps }
-        'Cancel'             { "-> Cancelled"; $continue = $false }
-        'Closed'             { "-> Closed with [X]"; $continue = $false }
-        default              { "-> Unexpected: $choice"; $continue = $false }
-    }
-}
+# Das Inventar ist der Ausgangspunkt: eine Zeile pro App, links Definition und
+# Paket, rechts der Tenant. Anlegen, bauen und verteilen gehen von dort aus.
+# Die Startkacheln und die Auswahldialoge dahinter gibt es nicht mehr.
+Start-InventoryLoop -RootDir $rootDir -ToolVersion $toolVersion
 Stop-Transcript

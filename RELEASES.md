@@ -386,3 +386,92 @@ belegt; abgehakt wird er erst mit diesem Beleg, nicht mit einer Vermutung.
 
 Sobald ein Lauf auf `main` gegen einen echten Tenant durch ist, gehört ein neuer
 Abschnitt nach oben in diese Datei — mit Commit, Tag und Transcript-Datum.
+
+
+## Offene Feldprüfung: Hauptfenster (Stufe 1, 2026-10-09)
+
+Das Hauptfenster ersetzt die Startkacheln samt `createApps`, `deployApps` und der beiden
+Auswahldialoge (`Start-InventoryLoop`, `Show-InventoryDialog`). Belegt ist **offline**:
+`Tests/Test-MainWindowModel.ps1` (Zeilenzustände, `Apps.csv`-Roundtrip) und
+`Tests/Test-MainWindowUi.ps1` (UI Automation gegen das echte Fenster und die echte
+`Start-InventoryLoop` ohne Tenant: 46 Prüfungen), dazu die Prüfungen 31/32 in
+`Invoke-RepoChecks.ps1`. Gegenproben gefahren: 9 Rückbauten für die beiden Tests, 9 für
+die Prüfungen, 2 für die Schleife — jeder schlug an. Dabei gefunden und behoben:
+`[Windows.FontWeights]::SemiBold` ohne Klammern im `-ArgumentList` wurde als Text
+übergeben und scheiterte erst beim Anzeigen.
+
+**Feldlauf 2026-10-09 („Lauf 3")** — Windows 11 de-DE, PowerShell 5.1, PSADT 4.1.8, Tenant
+`zarenko.onmicrosoft.com` (PROD, ein Tenant konfiguriert), Transcript
+`IntuneWin32Helper\Logs\2026-10-09_21-26-56.log` (lokal, `Logs/` ist nicht versioniert).
+Vom Inhaber im Hauptfenster gefahren: eine App, **VSC-Wizard 1.0.117**, Nicht-WinGet-Weg mit
+`InstallCmd` aus `Apps.csv`. Das Portal sah nach Aussage des Inhabers unauffällig aus —
+das ist eine Beobachtung, kein Messwert dieses Transcripts. Im Transcript:
+`Authenticating against tenant [zarenko.onmicrosoft.com]` / „Successfully retrieved access
+token using client credentials"; `69 Win32 app(s) in the tenant`; `Creating PSADT
+application: VSC-Wizard - 1.0.117`; „ToDo: now add/copy all required files for setup"
+(Z. 44); „Longest client-side path: 152 of 259 characters"; `Detection rule: script`;
+`Requirement rule: architecture [x64], minimum OS [W10_20H2]`; `Install command:
+Invoke-AppDeployToolkit.exe … -DeployMode Silent`; `Build summary: 1 built, 0 failed`;
+`Parameter -bulk is NOT set`; `Access token still valid for tenant [zarenko…]`;
+`Finished.`; `Deployment summary: 1 succeeded, 0 failed`; danach **`70 Win32 app(s) in the
+tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
+
+- [x] **Hauptfenster → Build → Deploy, eine App** (`Build-AppPackage`,
+      `Invoke-PackageBuild`, `Invoke-PackageDeploy`, Neuabruf). Beleg: Lauf 3 oben.
+      Zusätzlich offline: WinGet-Weg (7-Zip, `LatestAvailable`) in einen temporären
+      Paketordner gebaut — genau **ein** Rückgabewert (der Pfad), `in\`, `out\`,
+      `deploy.ps1`, `detection.ps1`, Logo, keine Platzhalter `#…#` übrig, Stempel =
+      aktueller Stand (`b1199138dd3a`), das Inventar führt die Zeile als `Package` /
+      `current`.
+
+**Weiterhin nicht belegt** — jeweils mit dem Beleg, der sie abhakt:
+
+- [ ] **`-bulk`** (zwei oder mehr Apps in einem Deploy). Lauf 3 war eine App
+      (`Parameter -bulk is NOT set`); bei mehreren nimmt `Invoke-PackageDeploy` den
+      anderen Zweig. Beleg: Transcript mit `Parameter -bulk is set` und
+      `Deployment summary: 2 succeeded`.
+- [ ] **Tenant-Wechsel im Fenster** meldet neu an (`-Force`). Lauf 3 hatte einen Tenant.
+      Beleg: nach dem Wechsel `Authenticating against tenant [<neuer>]` im Transcript
+      und die Spalte `Intune` zeigt den Bestand des neuen Tenants, nicht den des alten.
+- [ ] **Abrufdauer** der Tenant-Apps — jetzt beim Start und bei jedem Refresh/Deploy, nicht
+      mehr nur in „Deploy existing apps" (früher gemessen: PROD 63 Apps in 17,7 s). Das
+      Transcript trägt keine Zeitstempel; gemessen werden muss mit Stoppuhr oder einem
+      Zeitstempel um `Read-TenantWin32Apps`.
+- [ ] **Paketbau ohne `InstallCmd`** (Befehle werden aus `Files\` abgeleitet) und der
+      **MSI-Weg** (`SingleMSI`). Lauf 3 hatte den Befehl in `Apps.csv`.
+- [ ] **Bearbeiten/Anlegen/Duplizieren** gehen weiter über den alten `Open-EditDialog`
+      (Stufe 2 ersetzt ihn); der Dialog hat keine Automation-IDs und ist nicht
+      maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
+      `Apps.csv` danach unverändert bis auf diese Zeile.
+
+## Offene Feldprüfung: Bearbeiten-Dialog und verwaiste Ordner (Stufe 2, 2026-10-09)
+
+`Open-EditDialog` ist neu (Kopf mit Fakten zur Zeile, Felder in Gruppen, Auswahllisten aus dem
+Modul, Haken, mehrzeilige Befehle, Hinweise, OK prüft Name+Version auch auf Doppelte), dazu der
+Knopf **Remove orphan folder** (`Remove-OrphanPackages`). Belegt ist **offline**:
+`Tests/Test-MainWindowModel.ps1` (Löschschutz an temporären Ordnern: Ordner mit Definition,
+Ordner nicht als `<Name> - <Version>` benannt, Ordner ohne `deploy.ps1`, Ordner außerhalb der
+Wurzel — jeweils nicht gelöscht; Auswahllisten enthalten jeden Wert der echten `Apps.csv`),
+`Tests/Test-MainWindowUi.ps1` (106 Prüfungen, darunter der Dialog über UI Automation: Typ jedes
+Steuerelements, WinGet-Felder nur bei `LatestAvailable`, Hinweis zu `ArpName` folgt dem Feld,
+OK bleibt bei leerem/doppeltem Namen offen, Rückgabewerte, Abbruch) und Prüfung 33. Gegenproben:
+8 Rückbauten (Löschschutz, Dialog) und 5 für Prüfung 33 bzw. die Diagnose — jeder schlug an.
+Dialoggröße mit einer echten Definition (VSC-Wizard): 780 × 1243 px auf einem Arbeitsbereich von
+5120 × 1392, OK ohne Scrollen sichtbar.
+
+**Nicht belegt:**
+
+- [ ] **Die Rückfrage vor dem Löschen** ist ein Win32-`MessageBox` und per UI Automation nicht
+      bedienbar; geprüft ist nur, dass der Zweig `YesNo` verlangt (Prüfung 33), nicht, wie der
+      Text aussieht. Beleg: einen verwaisten Ordner im Fenster wirklich entfernen — Transcript
+      mit `REMOVED  <Name>`, Ordner weg, App in Intune unberührt.
+- [ ] **Bearbeiten, Anlegen und Duplizieren im Fenster gegen echte Daten**: `Apps.csv` danach
+      unverändert bis auf die bearbeitete Zeile (`git diff`).
+- [ ] **Die Prefill-Knöpfe** (`From WinGet...`, `From MSI...`) sind nicht bedient worden — ein
+      WinGet-Suchdialog und ein Dateidialog sind per UI Automation nicht sinnvoll zu fahren.
+- [ ] **Kleine Bildschirme**: `MaxHeight` begrenzt das Fenster auf den Arbeitsbereich minus 40 px,
+      die Felder scrollen, OK/Cancel bleiben stehen. Gemessen nur auf dem großen Bildschirm.
+
+**Beifund:** die Spalte `PackageName` in `Apps.csv` wird vom Paketbau nicht gelesen — `#PN#`
+im `deploy.ps1` kommt aus `DisplayName` (`Write-DeployScript`). Der Dialog zeigt das an; die
+Spalte ist noch nicht entfernt (Entscheidung beim Inhaber).

@@ -4,25 +4,61 @@ See https://blog.zarenko.net/intune-apps-verteilen-leicht-gemacht/<br><br>
 <img width="726" height="443" alt="Screenshot 2025-12-09 12-42-03" src="https://github.com/user-attachments/assets/6537dcc9-3a4a-4c34-a831-f73432481e03" />
 
 
-## Inventory
+## The main window
 
-"Deploy existing apps" no longer lists folders that happen to hold a `deploy.ps1`. It shows one row
-per app with the state of all three things that exist per app, and you pick from that list what to
-deploy:
+The tool starts with the inventory - there are no start tiles and no separate "create" and "deploy"
+dialogs any more. One row per app, with the state of the three things that exist per app: **on the
+left** the definition and the package, **on the right** the app in the tenant. Everything is done from
+that list:
+
+```
+Tenant [xyz.onmicrosoft.com v]  Show [All v]  [Filter...]                    [Refresh]
+ Application | Version | Publisher | Package         |  Intune  | Next step
+ (grey header: definition and package)                | (blue header: tenant)
+[gear] [Open folder]       [Add...] [New version...] [Edit] [Delete definition] [Build package] [Deploy] [Close]
+```
 
 | Column | Meaning |
 | --- | --- |
-| `Definition` | a row in `Apps.csv` |
-| `Package` | the folder `<Name> - <Version>\` under `packetRoot`, with `deploy.ps1` |
-| `Template` | `current`, `outdated` or `unstamped` - see below |
-| `Intune` | present in the tenant; `yes (2x)` means duplicates; `no content` means an entry a failed upload left behind (not published, no committed content) |
-| `Next` | the sensible next step, derived from the row |
+| `Package` | `Definition only`, `Package`, `Package, template outdated` / `unstamped`, or `No definition` (a package folder without a row in `Apps.csv`) |
+| `Intune` | present in the tenant; `yes (2x)` means duplicates; `no content` means an entry a failed upload left behind (not published, no committed content); `not checked` when no tenant is connected |
+| `Next step` | the sensible next step, derived from the row |
+
+The tenant is chosen once at the start (not asked at all when only one is configured) and can be
+switched in the window; a switch signs in again, because a token that is still valid for the
+*previous* tenant would otherwise be reused. Without a tenant the tool keeps working - the Intune
+column is simply empty.
+
+The buttons follow the selected rows: a row without a definition can be deployed, but not edited,
+deleted or built. **Deploy** builds a row that has no package first. **Delete definition** removes the
+row from `Apps.csv` only - the package folder and the app in Intune stay. The row tooltip spells out
+all three states, and the selection survives every action.
+
+**Remove orphan folder** deletes the package folder of selected rows that have **no definition** in
+`Apps.csv` (status `No definition` - typically what is left after a rename or a deleted definition).
+It asks first, listing every folder with its file count and size, and says that the apps in Intune
+are not touched. The button is only enabled when the selection contains such a row, and the deletion
+itself (`Remove-OrphanPackages`) refuses on its own anything that is not clearly an orphan: a folder
+with a definition, a folder not named `<Name> - <Version>`, a folder without `deploy.ps1`, and
+anything outside `packetRoot`. Use *Show: Package without definition* and select all to clean up in
+one go.
+
+**Add, New version and Edit** open one editor. The facts about the row (package folder, template,
+Intune state, next step) are read-only at the top; the fields below are grouped (Application, Source,
+Installation, Intune), label on the left, field on the right. `Architecture` and `MinimumOS` are lists
+filled from the IntuneWin32App module, `Interactive` and `SingleMSI` are check boxes, the commands are
+multi-line, and the WinGet fields are only enabled while `Version` is `LatestAvailable`. Under
+`ArpName` the editor spells out the search name that detection and uninstall will use. OK checks name
+and version - also against duplicates - and stays open until they are right. `PackageName` is shown
+as unused: the package name comes from `DisplayName`.
+
+### Templates stay inside the package
 
 The generated `deploy.ps1` and `detection.ps1` stay **inside** the package on purpose: the package
 is then a record of what was actually deployed, a template change cannot silently alter a package
 that was already tested, and a single app can be given a special case by hand. The price is that a
-template fix does not reach old packages by itself - which is exactly what the `Template` column
-makes visible. `Write-DeployScript` stamps every package with a short hash over the templates
+template fix does not reach old packages by itself - which is exactly what the `Package` column
+makes visible (`template outdated`). `Write-DeployScript` stamps every package with a short hash over the templates
 (`# ToolTemplateFingerprint:`), and the inventory compares it against the current state.
 `unstamped` means the package predates the stamp.
 
@@ -37,7 +73,7 @@ WinGet id is carried over from the old `detection.ps1`.
 `Config/config.json` holds the tenants (tenant name, app registration id, client secret)
 and `packetRoot`. It is **not** version controlled, because the client secret is stored in
 clear text. On first start it is created automatically from `Config/config.sample.json`;
-fill it in via the gear icon in the start dialog or by editing the file.
+fill it in via the gear icon in the main window or by editing the file.
 
 App logos are resolved locally from `Logos\` and normalised to 256x256; nothing is uploaded
 anywhere. A format this machine cannot read (webp without a codec, svg) falls back to
@@ -101,7 +137,18 @@ bypass `Get-ToolConfig` (including a missing `.gitignore` entry for `Config/conf
 `Start-Transcript` calls that bypass `Start-ToolTranscript`, syntax Windows PowerShell 5.1
 cannot parse (`??`, `?.`, `&&`, `||`, ternary), any upload of logos to a third party, logo
 handling outside `Resolve-PackageLogo`, a hard-coded requirement rule, a missing path-length
-report, and a WinGet detection that does not check for an upgrade.
+report, a WinGet detection that does not check for an upgrade, and the main window's wiring:
+an old entry point (`createApps`, `deployApps`, the start tiles) coming back, a button whose
+action has no branch in `Start-InventoryLoop`, a tenant switch that does not sign in again,
+a second writer of `Apps.csv` besides `Save-AppsCsv`, or a second place that builds packages
+besides `Build-AppPackage`.
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the
 check red.
+
+The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
+
+| Test | What it proves |
+| --- | --- |
+| `Test-MainWindowModel.ps1` | the state of every inventory row, and that `Apps.csv` survives read, save and read again (values, own columns, BOM, header) |
+| `Test-MainWindowUi.ps1` | operates the real main window through UI Automation: buttons follow the selected row, the selection survives, the filter narrows, a tenant switch is reported, and the real `Start-InventoryLoop` shows the window again after Refresh and ends on Close. Needs a desktop session - the window flashes briefly |

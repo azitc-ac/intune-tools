@@ -841,14 +841,20 @@ if ($functionsFile) {
         }
     }
 
-    # deployApps muss das Inventar benutzen, nicht wieder nur die Ordnerliste.
+    # Das Hauptfenster muss das Inventar benutzen, nicht wieder nur die Ordnerliste.
+    # Fehlt die Funktion, ist das ein Befund - nicht "nichts zu pruefen": die
+    # Pruefung fuer deployApps ging so stillschweigend ins Leere, als es die
+    # Funktion nicht mehr gab.
     $deploy = $functionsFile.Ast.FindAll({
         param($n)
         $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-        $n.Name -eq 'deployApps'
+        $n.Name -eq 'Start-InventoryLoop'
     }, $true)
-    if ($deploy -and $deploy[0].Extent.Text -notmatch 'Get-AppInventory') {
-        Add-Failure "InventoryAndFingerprint" "deployApps benutzt Get-AppInventory nicht - die Auswahl zeigt dann wieder nur Ordner"
+    if (-not $deploy) {
+        Add-Failure "InventoryAndFingerprint" "Start-InventoryLoop fehlt - ohne sie gibt es kein Hauptfenster"
+    }
+    elseif ($deploy[0].Extent.Text -notmatch 'Get-AppInventory') {
+        Add-Failure "InventoryAndFingerprint" "Start-InventoryLoop benutzt Get-AppInventory nicht - die Liste zeigt dann wieder nur Ordner"
     }
 
     # Der Stempel muss beim Rendern ersetzt werden, sonst steht der Platzhalter
@@ -1133,6 +1139,188 @@ if ((Test-Path -LiteralPath $detTplPath) -and ((Get-Content -LiteralPath $detTpl
     Add-Failure "DetectionOnePath" "detection_template.ps1 sucht nicht mit `$ArpName - Apps.csv 'ArpName' waere wirkungslos"
 }
 
+# ---------------------------------------------------------------------------
+# 31) Das Hauptfenster ist der einzige Einstieg, und jede Aktion hat einen Zweig.
+#     Frueher gab es drei Kacheln und zwei Auswahldialoge, die je einen Ausschnitt
+#     desselben Zustands zeigten; createApps und deployApps bauten und verteilten
+#     auf je eigenem Weg. Jetzt zeigt Start-InventoryLoop das Inventar, und:
+#       - die alten Einstiege gibt es nicht wieder,
+#       - das Startskript ruft Start-InventoryLoop,
+#       - jede Aktion, die Show-InventoryDialog zurueckgeben kann, hat in
+#         Start-InventoryLoop einen switch-Zweig - kein Knopf ohne Gegenstueck,
+#       - der Tenant-Wechsel meldet sich neu an (-Force): Initialize-IntuneConnection
+#         prueft ohne -Force nur, ob IRGENDEIN Token noch gilt, nicht fuer welchen
+#         Tenant - die Liste zeigte sonst still den falschen.
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $findFn = {
+        param($name)
+        $functionsFile.Ast.Find({
+            param($n)
+            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name
+        }, $true)
+    }
+
+    foreach ($gone in 'createApps', 'deployApps', 'Show-StartDialog', 'Open-SelectDialogWithEdit') {
+        if (& $findFn $gone) {
+            Add-Failure "MainWindowOnePath" ("{0} gibt es wieder - Anlegen/Verteilen laufen ueber das Hauptfenster (Start-InventoryLoop), ein zweiter Einstieg driftet" -f $gone)
+        }
+    }
+
+    $loopFn   = & $findFn 'Start-InventoryLoop'
+    $dialogFn = & $findFn 'Show-InventoryDialog'
+    $connect  = & $findFn 'Connect-InventoryTenant'
+    if (-not $loopFn -or -not $dialogFn -or -not $connect) {
+        Add-Failure "MainWindowOnePath" "Start-InventoryLoop, Show-InventoryDialog oder Connect-InventoryTenant fehlt"
+    }
+    else {
+        # Aktionen des Dialogs: die Literale in "& $choose '<Aktion>'"
+        $chooseCalls = $dialogFn.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.CommandAst] -and
+            $n.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand -and
+            $n.CommandElements.Count -ge 2 -and
+            $n.CommandElements[0] -is [System.Management.Automation.Language.VariableExpressionAst] -and
+            $n.CommandElements[0].VariablePath.UserPath -eq 'choose' -and
+            $n.CommandElements[1] -is [System.Management.Automation.Language.StringConstantExpressionAst]
+        }, $true)
+        $actions = @($chooseCalls | ForEach-Object { $_.CommandElements[1].Value } | Sort-Object -Unique)
+
+        # Wirkungslos waere die Pruefung ohne gefundene Aktionen - dann ist sie ein Befund.
+        if ($actions.Count -lt 5) {
+            Add-Failure "MainWindowOnePath" ("in Show-InventoryDialog nur {0} Aktionen gefunden - die Pruefung 'jeder Knopf hat einen Zweig' laeuft ins Leere" -f $actions.Count)
+        }
+
+        $actionSwitch = $loopFn.Find({
+            param($n)
+            $n -is [System.Management.Automation.Language.SwitchStatementAst] -and $n.Condition.Extent.Text -match 'Action'
+        }, $true)
+        if (-not $actionSwitch) {
+            Add-Failure "MainWindowOnePath" "Start-InventoryLoop hat keinen switch ueber die Aktion"
+        }
+        else {
+            $labels = @($actionSwitch.Clauses | ForEach-Object { $_.Item1.Extent.Text.Trim([char[]]@(39, 34)) })
+            foreach ($action in $actions) {
+                if ($labels -notcontains $action) {
+                    Add-Failure "MainWindowOnePath" ("Show-InventoryDialog kann '{0}' zurueckgeben, Start-InventoryLoop hat keinen Zweig dafuer - der Knopf tut nichts" -f $action)
+                }
+            }
+
+            $switchClause = $actionSwitch.Clauses | Where-Object { $_.Item1.Extent.Text.Trim([char[]]@(39, 34)) -eq 'SwitchTenant' } | Select-Object -First 1
+            if (-not $switchClause) {
+                Add-Failure "MainWindowOnePath" "Start-InventoryLoop hat keinen Zweig SwitchTenant"
+            }
+            elseif ($switchClause.Item2.Extent.Text -notmatch '-Force') {
+                Add-Failure "MainWindowOnePath" "Der Zweig SwitchTenant meldet nicht mit -Force neu an - das Token des alten Tenants wuerde weiterbenutzt"
+            }
+        }
+
+        if ($connect.Extent.Text -notmatch 'Initialize-IntuneConnection[^\r\n]*-Force:\$Force') {
+            Add-Failure "MainWindowOnePath" "Connect-InventoryTenant reicht -Force nicht an Initialize-IntuneConnection weiter"
+        }
+    }
+}
+
+$checked++
+foreach ($starter in @($psFiles | Where-Object { $_.Name -like "start-*.ps1" })) {
+    $starterText = $parsed[$starter.FullName].Ast.Extent.Text
+    if ($starterText -notmatch 'Start-InventoryLoop') {
+        Add-Failure "MainWindowOnePath" ("{0} ruft Start-InventoryLoop nicht auf" -f $starter.Name)
+    }
+    if ($starterText -match 'Show-StartDialog') {
+        Add-Failure "MainWindowOnePath" ("{0} ruft noch Show-StartDialog auf" -f $starter.Name)
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 32) Apps.csv hat EINEN Schreibpfad (Save-AppsCsv) und ein Paket EINEN Bauweg
+#     (Build-AppPackage). Vorher schrieb ein Auswahldialog die Datei und
+#     createApps baute; "Build" und "Deploy" im Hauptfenster brauchen denselben
+#     Weg, sonst baut eine der beiden Aktionen anders.
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $exports = $functionsFile.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Export-Csv'
+    }, $true)
+    foreach ($e in $exports) {
+        $owner = & $enclosingFunction $e
+        if ($owner -notin @('Save-AppsCsv', 'Get-DeployScripts')) {
+            Add-Failure "AppsCsvOneWriter" ("functions.ps1:{0} Export-Csv in '{1}' - Apps.csv wird nur in Save-AppsCsv geschrieben" -f $e.Extent.StartLineNumber, $owner)
+        }
+    }
+
+    $templateCalls = $functionsFile.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'New-ADTTemplate'
+    }, $true)
+    if (-not $templateCalls) {
+        Add-Failure "PackageOneBuildPath" "New-ADTTemplate wird nirgends aufgerufen - Build-AppPackage baut kein Paket mehr"
+    }
+    foreach ($t in $templateCalls) {
+        $owner = & $enclosingFunction $t
+        if ($owner -ne 'Build-AppPackage') {
+            Add-Failure "PackageOneBuildPath" ("functions.ps1:{0} New-ADTTemplate in '{1}' - Pakete werden nur in Build-AppPackage gebaut" -f $t.Extent.StartLineNumber, $owner)
+        }
+    }
+
+    # Und die Aktionen benutzen diesen Weg: Build und Deploy gehen ueber Invoke-PackageBuild.
+    $loopFn2 = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-InventoryLoop' }, $true)
+    if ($loopFn2 -and ([regex]::Matches($loopFn2.Extent.Text, 'Invoke-PackageBuild')).Count -lt 2) {
+        Add-Failure "PackageOneBuildPath" "Start-InventoryLoop ruft Invoke-PackageBuild nicht in beiden Aktionen (Build, Deploy) auf"
+    }
+}
+# ---------------------------------------------------------------------------
+# 33) Verwaiste Paketordner werden nur ueber Remove-OrphanPackages geloescht, und
+#     die verweigert, was nicht eindeutig verwaist ist. Der Schutz liegt in der
+#     Funktion, nicht im Knopf: ein Fehler beim Aktivieren des Knopfes darf keinen
+#     Ordner treffen, der eine Definition hat. Dazu: Remove-PackageFolder (der
+#     Wurzel-Schutz) hat nur diese beiden Aufrufer - Build-AppPackage (alten Ordner
+#     vor dem Neubau entfernen) und Remove-OrphanPackages.
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $orphanFn = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-OrphanPackages' }, $true)
+    $loopFn3  = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-InventoryLoop' }, $true)
+    if (-not $orphanFn) {
+        Add-Failure "OrphanRemovalGuarded" "Remove-OrphanPackages fehlt"
+    }
+    else {
+        foreach ($guard in 'HasDefinition', 'deploy.ps1', 'Remove-PackageFolder', 'Split-Path -Leaf') {
+            if ($orphanFn.Extent.Text -notmatch [regex]::Escape($guard)) {
+                Add-Failure "OrphanRemovalGuarded" ("Remove-OrphanPackages prueft/benutzt '{0}' nicht - der Schutz vor dem Loeschen eines Ordners mit Definition fehlt" -f $guard)
+            }
+        }
+    }
+
+    $removeCalls = $functionsFile.Ast.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Remove-PackageFolder'
+    }, $true)
+    foreach ($call in $removeCalls) {
+        $owner = & $enclosingFunction $call
+        if ($owner -notin @('Build-AppPackage', 'Remove-OrphanPackages')) {
+            Add-Failure "OrphanRemovalGuarded" ("functions.ps1:{0} Remove-PackageFolder in '{1}' - Ordner werden nur in Build-AppPackage und Remove-OrphanPackages entfernt" -f $call.Extent.StartLineNumber, $owner)
+        }
+    }
+
+    if ($loopFn3) {
+        $removeSwitch = $loopFn3.Find({ param($n) $n -is [System.Management.Automation.Language.SwitchStatementAst] -and $n.Condition.Extent.Text -match 'Action' }, $true)
+        $clause = $null
+        if ($removeSwitch) { $clause = $removeSwitch.Clauses | Where-Object { $_.Item1.Extent.Text.Trim([char[]]@(39, 34)) -eq 'RemoveFolder' } | Select-Object -First 1 }
+        if (-not $clause) {
+            Add-Failure "OrphanRemovalGuarded" "Start-InventoryLoop hat keinen Zweig RemoveFolder"
+        }
+        else {
+            $clauseText = $clause.Item2.Extent.Text
+            if ($clauseText -notmatch 'Remove-OrphanPackages') { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder loescht nicht ueber Remove-OrphanPackages" }
+            if ($clauseText -match 'Remove-Item|Remove-PackageFolder') { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder loescht direkt (Remove-Item/Remove-PackageFolder) und umgeht die Verweigerungsregeln" }
+            if ($clauseText -notmatch "'YesNo'")                       { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder fragt nicht vor dem Loeschen (YesNo)" }
+        }
+    }
+}
 # ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------

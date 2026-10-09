@@ -886,14 +886,23 @@ function Get-AppInventory {
         $key = ('{0} - {1}' -f $name, $version)
         if (-not $rows.ContainsKey($key)) {
             $rows[$key] = [pscustomobject]@{
+                Key         = $key
                 AppName     = $name
                 AppVersion  = $version
+                Publisher   = ''
                 Definition  = '-'
                 Package     = '-'
                 Template    = '-'
+                Status      = ''
                 Intune      = $(if ($intuneChecked) { '-' } else { 'not checked' })
                 Next        = ''
                 FullPath    = ''
+                # Fuer das Hauptfenster: dieselben Zustaende als Wahrheitswerte, der
+                # Datensatz aus Apps.csv (zum Bearbeiten) und der Tooltip.
+                HasDefinition    = $false
+                HasPackage       = $false
+                DefinitionRecord = $null
+                Detail           = ''
             }
             $null = $order.Add($key)
         }
@@ -905,11 +914,15 @@ function Get-AppInventory {
         if (-not $name) { continue }
         $row = & $touch $name ([string]$definition.Version)
         $row.Definition = 'yes'
+        $row.Publisher = [string]$definition.Publisher
+        $row.HasDefinition = $true
+        $row.DefinitionRecord = $definition
     }
 
     foreach ($package in $packages) {
         $row = & $touch ([string]$package.AppName) ([string]$package.AppVersion)
         $row.Package  = 'yes'
+        $row.HasPackage = $true
         $row.FullPath = [string]$package.FullPath
 
         $stamp = Get-PackageTemplateFingerprint -DeployScriptPath $package.FullPath
@@ -958,6 +971,23 @@ function Get-AppInventory {
             # das niemand nachgesehen hat - dann bleibt nur der Vorschlag.
             $row.Next = 'deploy'
         }
+
+        # Zustand von Definition und Paket in einem Wort (linke Seite des Fensters).
+        if (-not $row.HasDefinition)       { $row.Status = 'No definition' }
+        elseif (-not $row.HasPackage)      { $row.Status = 'Definition only' }
+        elseif ($row.Template -eq 'outdated')  { $row.Status = 'Package, template outdated' }
+        elseif ($row.Template -eq 'unstamped') { $row.Status = 'Package, template unstamped' }
+        else                               { $row.Status = 'Package' }
+
+        $packageFolder = '-'
+        if ($row.FullPath) { $packageFolder = Split-Path -Parent $row.FullPath }
+        $row.Detail = (@(
+            ('Definition: {0}' -f $row.Definition),
+            ('Package: {0}' -f $packageFolder),
+            ('Template: {0}' -f $row.Template),
+            ('Intune: {0}' -f $row.Intune),
+            ('Next: {0}' -f $row.Next)
+        ) -join "`n")
     }
 
     return @($order | ForEach-Object { $rows[$_] })
@@ -1312,50 +1342,399 @@ function Get-DeployScripts {
 }
 
 
-function deployApps{    
-    
-    # Tenant ZUERST: ohne Anmeldung kann das Inventar den Intune-Zustand nicht
-    # zeigen, und der ist die Haelfte der Information. Die Auswahl wird an jedes
-    # deploy.ps1 uebergeben, damit dort kein weiterer Dialog kommt.
-    $tenant = Initialize-IntuneConnection -Tenants $config.tenants
+# ============================================================================
+#  Hauptfenster: das Inventar ist der Ausgangspunkt
+#
+#  Muster aus SCCMAppHelper (Show-InventoryDialog). Pro App eine Zeile; links
+#  Definition und Paket, rechts die App im Tenant. Jede Aktion geht von dieser
+#  Liste aus - anlegen, bauen, verteilen. Die Kacheln "Create / Create and
+#  deploy / Deploy" und die beiden Auswahldialoge dahinter gibt es nicht mehr:
+#  sie zeigten je einen Ausschnitt desselben Zustands.
+#
+#  Das Fenster fuehrt nichts aus. Es gibt die Aktion und die markierten Zeilen
+#  zurueck (Start-InventoryLoop arbeitet sie ab), damit die Konsole dort bleibt,
+#  wo gearbeitet wird, und das Fenster nach jeder Aktion neu aufgebaut wird.
+# ============================================================================
 
-    # Den Tenant-Zustand einmal holen. Scheitert das, bleibt die Spalte leer -
-    # das Inventar ist auch ohne Intune brauchbar.
-    $intuneApps = $null
+function Get-AppsCsvColumns {
+    <#
+        Die Spalten von Apps.csv: die bekannten in fester Reihenfolge, danach
+        alles, was Zeilen sonst noch mitbringen (eine eigene Spalte darf beim
+        Speichern nicht verschwinden). EINE Quelle fuer Lesen, Bearbeiten und
+        Speichern - der Bearbeitungsdialog zeigt genau diese Spalten.
+    #>
+    [CmdletBinding()]
+    param($Definitions = @())
+
+    $columns = New-Object System.Collections.ArrayList
+    foreach ($name in @('ProgramID', 'Publisher', 'DisplayName', 'PackageName', 'Version', 'WinGetParams', 'SingleMSI',
+                        'InstallCmd', 'UninstallCmd', 'logoURL', 'Architecture', 'MinimumOS', 'MsiProductCode', 'Interactive', 'ArpName')) {
+        $null = $columns.Add($name)
+    }
+    foreach ($definition in @($Definitions)) {
+        if ($null -eq $definition) { continue }
+        foreach ($name in $definition.PSObject.Properties.Name) {
+            if ($name -ne '__InternalId' -and ($columns -notcontains $name)) { $null = $columns.Add($name) }
+        }
+    }
+    return @($columns)
+}
+
+function Get-AppsCsvPath {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$RootDir)
+    return (Join-Path $RootDir 'Apps.csv')
+}
+
+function Read-AppsCsv {
+    <# Einziger Lesepfad fuer Apps.csv. Fehlt die Datei, gibt es keine Definitionen. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$RootDir)
+
+    $path = Get-AppsCsvPath -RootDir $RootDir
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
+    return @(Import-Csv -LiteralPath $path -Delimiter ';')
+}
+
+function Save-AppsCsv {
+    <#
+        Einziger Schreibpfad fuer Apps.csv. Sortiert nach Name und Version,
+        schreibt alle Spalten (auch eigene) und behaelt das Format bei:
+        Semikolon, alles in Anfuehrungszeichen, UTF-8 mit BOM.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [AllowEmptyCollection()]$Rows = @()
+    )
+
+    $path    = Get-AppsCsvPath -RootDir $RootDir
+    $columns = @(Get-AppsCsvColumns -Definitions $Rows)
+
+    # Stabil sortieren: Sort-Object ist unter 5.1 nicht stabil, und ein zweiter Sortierschluessel
+    # (Version) vertauschte Zeilen gleichen Namens bei jedem Speichern - die Datei zeigte
+    # Aenderungen, die keine sind. Gleiche Namen behalten ihre Reihenfolge.
+    $position = 0
+    $ordered = @(@($Rows) | ForEach-Object { [pscustomobject]@{ Row = $_; Position = $position++ } } | Sort-Object { [string]$_.Row.DisplayName }, Position | ForEach-Object {
+        $row = $_.Row
+        $copy = [ordered]@{}
+        foreach ($column in $columns) { $copy[$column] = [string]$row.$column }
+        [pscustomobject]$copy
+    })
+
+    if ($ordered.Count -gt 0) {
+        $ordered | Export-Csv -LiteralPath $path -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+    }
+    else {
+        # Export-Csv schreibt ohne Zeilen auch keine Kopfzeile - dann waere die Datei leer.
+        ('"' + ($columns -join '";"') + '"') | Set-Content -LiteralPath $path -Encoding UTF8
+    }
+}
+
+function Test-AppRecord {
+    <# Liefert den Grund, warum ein Datensatz so nicht gespeichert werden soll, sonst $null. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        $Others = @()
+    )
+
+    $name    = ([string]$Record.DisplayName).Trim()
+    $version = ([string]$Record.Version).Trim()
+    if (-not $name)    { return 'DisplayName is empty - the application name and the package folder come from it.' }
+    if (-not $version) { return 'Version is empty - use LatestAvailable for a WinGet app.' }
+
+    $clash = @(@($Others) | Where-Object { ([string]$_.DisplayName).Trim() -eq $name -and ([string]$_.Version).Trim() -eq $version })
+    if ($clash.Count -gt 0) {
+        return ("'{0} - {1}' already exists. Name and version make the package folder name and must be unique." -f $name, $version)
+    }
+    return $null
+}
+
+function Edit-AppRecord {
+    <#
+        Oeffnet den Bearbeitungsdialog fuer einen Datensatz (oder einen leeren) und
+        gibt das Ergebnis als Objekt zurueck - $null bei Abbruch.
+    #>
+    [CmdletBinding()]
+    param(
+        $Record,
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter(Mandatory = $true)][string[]]$ColumnOrder,
+        [System.Collections.IDictionary]$Info,
+        $Others = @()
+    )
+
+    $hash = @{}
+    foreach ($column in $ColumnOrder) {
+        if ($Record) { $hash[$column] = [string]$Record.$column } else { $hash[$column] = '' }
+    }
+
+    $edited = Open-EditDialog -item $hash -title $Title -PropertyOrder $ColumnOrder -Info $Info -Others $Others
+    $edited = @($edited | Where-Object { $_ -is [System.Collections.IDictionary] }) | Select-Object -First 1
+    if (-not $edited) { return $null }
+
+    $result = [ordered]@{}
+    foreach ($column in $ColumnOrder) { $result[$column] = [string]$edited[$column] }
+    return [pscustomobject]$result
+}
+
+function Read-TenantWin32Apps {
+    <#
+        Liest die Win32-Apps des Tenants. $null heisst "nicht abgefragt" und ist
+        ein anderer Zustand als "keine gefunden" (leeres Array) - das Inventar
+        unterscheidet beides. Scheitert die Abfrage, bleibt die Intune-Spalte
+        leer; das Inventar ist auch ohne Tenant brauchbar.
+    #>
+    [CmdletBinding()]
+    param()
+
     try {
         Write-Host "Reading the Win32 apps of the tenant..."
-        $intuneApps = @(Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -ErrorAction Stop })
-        Write-Host ("{0} Win32 app(s) in the tenant." -f @($intuneApps).Count)
+        $apps = @(Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -ErrorAction Stop })
+        Write-Host ("{0} Win32 app(s) in the tenant." -f $apps.Count)
+        return , $apps
     }
     catch {
         Write-Host ("Tenant state could not be read ({0}) - the Intune column stays empty." -f $_.Exception.Message) -ForegroundColor Yellow
+        return $null
+    }
+}
+
+function Connect-InventoryTenant {
+    <#
+        Tenant waehlen und anmelden - ueber Initialize-IntuneConnection, den
+        einzigen Pfad dafuer. Scheitert das (Abbruch, Anmeldung), geht das Tool
+        offline weiter: die Intune-Spalte bleibt leer, der Rest funktioniert.
+
+        -Force ist beim WECHSEL des Tenants noetig: Initialize-IntuneConnection
+        prueft ohne -Force nur, ob IRGENDEIN Token noch gilt - nicht, fuer
+        welchen Tenant. Das Token des alten Tenants wuerde sonst weiterbenutzt
+        und die Liste zeigte still den falschen Tenant.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Tenants,
+        $Tenant,
+        [switch]$Force
+    )
+
+    try {
+        return (Initialize-IntuneConnection -Tenant $Tenant -Tenants $Tenants -Force:$Force)
+    }
+    catch {
+        Write-Host ("No connection to a tenant ({0}) - the Intune column stays empty." -f $_.Exception.Message) -ForegroundColor Yellow
+        return $null
+    }
+}
+
+function Build-AppPackage {
+    <#
+        .SYNOPSIS
+        Baut das Paket zu einer Definition aus Apps.csv.
+
+        .DESCRIPTION
+        Der einzige Weg, ein Paket anzulegen. Stand frueher als Schleifenrumpf in
+        createApps; jetzt von "Build" und von "Deploy" (fuer Zeilen ohne Paket)
+        gemeinsam benutzt. Gibt den Paketordner zurueck.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$App,
+        [Parameter(Mandatory = $true)][string]$PacketRoot,
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [Parameter(Mandatory = $true)][string]$ToolVersion,
+        [bool]$RemoveExisting = $true
+    )
+
+    $AppName = $App.DisplayName
+    $AppVersion = $App.Version
+    $AppPublisher = $App.Publisher
+    $AppNameCombined = $AppName + " - " + $AppVersion
+    $SourcePath = "$PacketRoot\$AppNameCombined"
+    $ProgramId = $App.ProgramID
+    $InstallCmdInternal = $App.InstallCmd
+    $UninstallCmdInternal = $App.UninstallCmd
+    $winGetParams = $App.WinGetParams -replace "`"",""
+
+    Write-Host "Creating PSADT application: $AppNameCombined" -ForegroundColor Cyan
+    if($RemoveExisting -eq $true){
+        $null = Remove-PackageFolder -Path $SourcePath -PacketRoot $PacketRoot
+    }
+    $null = New-ADTTemplate -Destination $PacketRoot -Name $AppNameCombined
+
+    Write-Host "Wait 5 seconds..."
+    Start-Sleep -Seconds 5
+
+    # erstellen von \in und \out, move eine ebene tiefer nach \in,
+    Write-Host "Moving data to .\in"
+    $psadtdirs = Get-ChildItem $SourcePath
+    $null = New-Item -ItemType Directory -Path "$SourcePath\in"
+    $null = New-Item -ItemType Directory -Path "$SourcePath\out"
+    $psadtdirs | ForEach-Object { Move-Item -LiteralPath $_.FullName -Destination "$SourcePath\in" }
+
+    # log path ändern
+    $psadtconfigfilepath = "$SourcePath\in\Config\config.psd1"
+    $psadtconfig= Get-Content $psadtconfigfilepath
+    $psadtconfig= $psadtconfig.Replace("envWinDir\Logs\Software", "envProgramData\Microsoft\IntuneManagementExtension\Logs")
+    $psadtconfigfolderPath = Get-Item "$SourcePath\in\Config"
+    (Get-Item $psadtconfigfolderPath).Attributes = ((Get-Item $psadtconfigfolderPath).Attributes -band -bnot [System.IO.FileAttributes]::ReadOnly)
+    $psadtconfig | Out-File $psadtconfigfilepath -Encoding utf8 -Force
+
+    # für normale Pakete
+    # kopieren von detect.ps1 und anpassen
+    # Gemeinsamer Pfad mit Update-DeployScript (Write-DetectionScript).
+    Write-Host "Writing detection.ps1 from template"
+    $arpSearchName = Get-ArpSearchName -DisplayName $AppName -ArpName ([string]$App.ArpName)
+    $null = Write-DetectionScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion -RootDir $RootDir `
+        -ProgramId $ProgramId -ArpName $arpSearchName
+    # ServiceUI.exe nur fuer Pakete, die Dialoge zeigen sollen (Apps.csv
+    # "Interactive"). Dieselbe Entscheidung wie im Installationsbefehl.
+    if ((Get-DeployCommandLine -Interactive ([string]$App.Interactive)).NeedsServiceUI) {
+        Write-Host "Copying: ServiceUI.exe (Interactive)"
+        Copy-Item -LiteralPath "$RootDir\ServiceUI.exe" -Destination "$SourcePath\in"
     }
 
-    $definitions = @()
-    try { $definitions = @(Import-Csv -Path (Join-Path $rootDir 'apps.csv') -Delimiter ';') }
-    catch { Write-Host ("Apps.csv could not be read ({0}) - the Definition column stays empty." -f $_.Exception.Message) -ForegroundColor Yellow }
-
-    $inventory = Get-AppInventory -Definitions $definitions -PacketRoot $packetRoot -RootDir $rootDir -IntuneApps $intuneApps
-
-    $selection = Get-DialogSelection -Value (Open-SelectDialog -data @($inventory) `
-        -title "Inventory - definition, package, tenant. Select what to deploy" -large)
-
-    # Abbruchbedingung: Cancel oder Fenster geschlossen.
-    # return, NICHT break: deployApps hat keine eigene Schleife, ein break wuerde die
-    # while-Schleife im Startskript beenden und damit das ganze Tool schliessen.
-    if (@($selection).Count -eq 0) { return }
-
-    # Verteilen kann nur, was ein Paket hat.
-    $appsToDeploy = @($selection | Where-Object { $_.FullPath })
-    $withoutPackage = @($selection).Count - @($appsToDeploy).Count
-    if ($withoutPackage -gt 0) {
-        Write-Host ("{0} selected row(s) have no package yet and are skipped - create them first." -f $withoutPackage) -ForegroundColor Yellow
+    # einpflegen von publisher, appname, version ins invoke-AppDeployToolkit.ps1
+    # Update der Invoke-AppDeployToolkit.ps1, außer im Fall des Zero-Config Deployment mit 1 single MSI, dann darf hier nichts angepasst werden
+    if(-not $App.SingleMSI){
+        Write-Host "Copying and customizing: Invoke-AppDeployToolkit.ps1"
+        $creationdate = Get-Date -Format "yyyy-MM-dd"
+        $psadtscript = Get-Content "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+        $psadtscript -replace "AppVendor = ''","AppVendor = '$AppPublisher'" -replace "AppName = ''", "AppName = '$AppName'" -replace "AppVersion = ''", "AppVersion = '$AppVersion'" `
+            -replace "AppScriptDate = '2000-12-31'", "AppScriptDate = '$creationdate'" -replace "AppScriptAuthor = '<author name>'", "AppScriptAuthor = 'alexander@zarenko.net'" `
+            | Out-File "$SourcePath\in\Invoke-AppDeployToolkit.ps1" -Encoding utf8 -Force
     }
-    if (@($appsToDeploy).Count -eq 0) { return }
+    if($InstallCmdInternal){
+        $null = Insert-Commands -Install $InstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+    }
+    if($UninstallCmdInternal){
+        $null = Insert-Commands -Uninstall $UninstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+    }
+    if($AppVersion -eq "LatestAvailable"){
+        $InstallCmdInternal = Get-WinGetCommands -type Install -id $ProgramId -wgparams $winGetParams
+        $UninstallCmdInternal= Get-WinGetCommands -type Uninstall -id $ProgramId -wgparams $winGetParams
+        $null = Insert-Commands -Install $InstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+        $null = Insert-Commands -Uninstall $UninstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+    }
 
-    # Verarbeitung der ausgewählten Apps
-    $isBulk = (@($appsToDeploy).Count -gt 1)
-    if($isBulk){ write-host "Parameter -bulk is set." } else { write-host "Parameter -bulk is NOT set." }
+    #App version setzen
+    if($AppVersion -eq "LatestAvailable"){
+        $desc = "Installed using PSADT and WinGet"
+    }
+    else{
+        $desc = "Installed using PSADT"
+    }
+
+    # Logo: ein Pfad, der nie abbricht und nichts zu Dritten hochlaedt.
+    $null = Resolve-PackageLogo -AppFolder $SourcePath -AppName $AppName -LogoUrl $App.logoURL -RootDir $RootDir
+
+    #deploy template an App anpassen und kopieren
+    # Gemeinsamer Pfad mit Update-DeployScript - Anlegen und Erneuern nutzen EINE Quelle.
+    $null = Write-DeployScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion `
+        -Publisher $AppPublisher -Description $desc -RootDir $RootDir -ToolVersion $ToolVersion `
+        -Architecture ([string]$App.Architecture) -MinimumOS ([string]$App.MinimumOS) `
+        -MsiProductCode ([string]$App.MsiProductCode) -Interactive ([string]$App.Interactive)
+
+    # Dateien muss weiterhin ein Mensch bereitstellen - fuer eine
+    # Nicht-WinGet-App gibt es keine Quelle, aus der das Tool sie holen
+    # koennte. Die Befehle dagegen leitet es jetzt selbst ab.
+    if($AppVersion -ne "LatestAvailable"){
+        Write-Host "ToDo: now add/copy all required files for setup, then press ENTER" -ForegroundColor Cyan
+        explorer "$SourcePath\in\Files"
+        pause
+
+        $needsEditor = $true
+        if(-not $InstallCmdInternal -and -not $UninstallCmdInternal){
+            $derived = Get-DerivedInstallCommands -ContentPath "$SourcePath\in" -AppName $arpSearchName
+            if($derived){
+                Write-Host ("Derived from {0} (engine: {1}):" -f $derived.FileName, $derived.Engine) -ForegroundColor Green
+                Write-Host ("  Install:   {0}" -f $derived.Install)
+                Write-Host ("  Uninstall: {0}" -f $derived.Uninstall)
+                $null = Insert-Commands -Install $derived.Install -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+                $null = Insert-Commands -Uninstall $derived.Uninstall -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+                # Nur wenn geraten wurde, muss noch jemand draufschauen.
+                $needsEditor = -not $derived.Certain
+                if($derived.Note){ Write-Host ("  Note: {0}" -f $derived.Note) -ForegroundColor Yellow }
+            }
+            else{
+                Write-Host "No single installer found in Files\ - fill the Install and Uninstall sections by hand." -ForegroundColor Yellow
+            }
+        }
+        else{
+            # Apps.csv gibt die Befehle vor, die stehen schon im Skript.
+            $needsEditor = $false
+        }
+
+        if($needsEditor){
+            Write-Host "ToDo: check the Install & Uninstall sections, then press ENTER." -ForegroundColor Cyan
+            Open-ScriptForEditing -Path "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
+            pause
+        }
+    }
+
+    return $SourcePath
+}
+
+function Invoke-PackageBuild {
+    <#
+        Baut die Pakete der uebergebenen Inventarzeilen. Eine Zeile, die scheitert,
+        haelt die uebrigen nicht auf. Liefert die gebauten Pakete (AppName,
+        AppVersion, FullPath des deploy.ps1) und die Namen der gescheiterten.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Rows,
+        [Parameter(Mandatory = $true)][string]$PacketRoot,
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [Parameter(Mandatory = $true)][string]$ToolVersion,
+        [bool]$RemoveExisting = $true
+    )
+
+    $built  = @()
+    $failed = @()
+    foreach ($row in @($Rows)) {
+        try {
+            $folder = @(Build-AppPackage -App $row.DefinitionRecord -PacketRoot $PacketRoot -RootDir $RootDir `
+                -ToolVersion $ToolVersion -RemoveExisting $RemoveExisting) | Select-Object -Last 1
+            $built += [pscustomobject]@{
+                AppName    = [string]$row.AppName
+                AppVersion = [string]$row.AppVersion
+                FullPath   = (Join-Path $folder 'deploy.ps1')
+            }
+        }
+        catch {
+            Write-Host ("FAILED: {0} - {1}" -f $row.Key, $_.Exception.Message) -ForegroundColor Red
+            $failed += [string]$row.Key
+        }
+    }
+
+    Write-Host ""
+    Write-Host ("Build summary: {0} built, {1} failed." -f $built.Count, $failed.Count) -ForegroundColor Cyan
+    foreach ($package in $built) { Write-Host ("  OK      {0} - {1}" -f $package.AppName, $package.AppVersion) -ForegroundColor Green }
+    foreach ($name in $failed)   { Write-Host ("  FAILED  {0}" -f $name) -ForegroundColor Red }
+
+    return [pscustomobject]@{ Built = @($built); Failed = @($failed) }
+}
+
+function Invoke-PackageDeploy {
+    <#
+        Verteilt Pakete nach Intune: erneuert das deploy.ps1 bei Bedarf und ruft es
+        mit dem Tenant auf. Stand frueher als Rumpf in deployApps.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Packages,
+        [Parameter(Mandatory = $true)]$Tenant,
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [Parameter(Mandatory = $true)][string]$ToolVersion
+    )
+
+    $appsToDeploy = @(@($Packages) | Where-Object { $_.FullPath })
+    if ($appsToDeploy.Count -eq 0) { return }
+
+    $isBulk = ($appsToDeploy.Count -gt 1)
+    if($isBulk){ Write-Host "Parameter -bulk is set." } else { Write-Host "Parameter -bulk is NOT set." }
 
     $succeeded = @()
     $failed    = @()
@@ -1364,17 +1743,16 @@ function deployApps{
         $appLabel = "$($app.AppName) - $($app.AppVersion)"
         Write-Host "Deploy Application: $appLabel" -ForegroundColor Cyan
 
-        # Aeltere deploy.ps1 kennen -Tenant nicht und wuerden erneut fragen:
-        # aus der aktuellen Vorlage nachziehen (Sicherung wird angelegt).
-        $null = Update-DeployScript -DeployScriptPath $app.FullPath -RootDir $rootDir -ToolVersion $toolVersion
-
-        #deploy.ps1 aufrufen
         try {
+            # Aeltere deploy.ps1 kennen -Tenant nicht und wuerden erneut fragen:
+            # aus der aktuellen Vorlage nachziehen (Sicherung wird angelegt).
+            $null = Update-DeployScript -DeployScriptPath $app.FullPath -RootDir $RootDir -ToolVersion $ToolVersion
+
             if($isBulk){
-                & $app.FullPath -bulk -Tenant $tenant
+                & $app.FullPath -bulk -Tenant $Tenant
             }
             else{
-                & $app.FullPath -Tenant $tenant
+                & $app.FullPath -Tenant $Tenant
             }
             $succeeded += $appLabel
         }
@@ -1388,654 +1766,1069 @@ function deployApps{
     Write-DeploymentSummary -Succeeded $succeeded -Failed $failed
 }
 
-function createApps{
+function Show-InventoryDialog {
+    <#
+        .SYNOPSIS
+        Das Hauptfenster. Gibt { Action, Selection, TenantName } zurueck.
+
+        .DESCRIPTION
+        Action: Add | NewVersion | Edit | Delete | Build | Deploy | OpenFolder |
+                RemoveFolder | Refresh | SwitchTenant | Cancel | Closed
+        Jede Aktion hier hat in Start-InventoryLoop einen Zweig - das prueft
+        Tests\Invoke-RepoChecks.ps1 (kein Knopf ohne Gegenstueck).
+    #>
+    [CmdletBinding()]
     param(
-        [switch]$createAndDeploy,
-        [string]$csvPath
+        [Parameter(Mandatory = $true)]$Inventory,
+        [string]$Title = 'IntuneWin32Helper',
+        [string]$PacketRoot = '',
+        [string[]]$TenantNames = @(),
+        [string]$TenantName = '',
+        [bool]$IntuneRead = $true,
+        [string]$ConfigPath = '',
+        # Schluessel ("<Name> - <Version>") der Zeilen, die beim Oeffnen markiert
+        # sein sollen. Das Fenster wird nach jeder Aktion neu gebaut; die Zeile,
+        # an der gerade gearbeitet wurde, soll nicht neu gesucht werden muessen.
+        [string[]]$Select = @()
     )
-    $csvPath = "$rootDir\apps.csv"
-	$config = Get-ToolConfig -RootDir $rootDir
-	$packetRoot = $config.packetRoot
 
-    # Bleibt ueber alle Schleifendurchlaeufe erhalten: einmal gewaehlt, immer wieder benutzt.
-    $tenant = $null
+    Add-Type -AssemblyName PresentationCore      -ErrorAction SilentlyContinue | Out-Null
+    Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue | Out-Null
 
-    # --- Wiederholte Auswahl + Verarbeitung, bis Nutzer abbricht ---
-    while ($true) {
-        # Dialog öffnen (gibt nur bei OK ein Ergebnis zurück)
-        if($createAndDeploy){$title = "Select Applications to create and deploy"}else{$title = "Select Applications to create"}
-        $apps = Open-SelectDialogWithEdit -CsvPath $csvPath -title $title -size large
+    $rows = @($Inventory)
 
-        # Rückgabe bereinigen (bekannter Workaround gegen int-Werte in Collections)
-        if ($apps -ne $null) {
-            $apps = $apps | Where-Object { $_ -is [System.Management.Automation.PSCustomObject] }
-        }
+    $window = New-Object Windows.Window
+    $window.Title = $Title
+    $window.Width = 1280
+    $window.Height = 720
+    $window.MinWidth = 960
+    $window.MinHeight = 480
+    $window.WindowStartupLocation = 'CenterScreen'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($window, 'MainDialog')
 
-        # Abbruchbedingung: wenn Nutzer "Cancel" klickt oder Fenster schließt → keine gültigen Items
-        if ($apps -eq $null -or ($apps | Measure-Object).Count -eq 0) {
-            break
-        }
-
-        # Verarbeitung der ausgewählten Apps
-
-        # Bei "create and deploy" den Ziel-Tenant einmal pro Lauf waehlen.
-        # $tenant ueberlebt die Schleife, der Dialog kommt daher nur beim ersten Stapel.
-        if($createAndDeploy){
-            $tenant = Initialize-IntuneConnection -Tenant $tenant -Tenants $config.tenants
-        }
-
-        $succeeded = @()
-        $failed    = @()
-
-    foreach($app in $apps){
-        # Erstellen der Anwendung
-        $AppName = $app.DisplayName
-        $AppVersion = $app.Version
-        $AppPublisher = $app.Publisher
-        $AppDescription = $AppName
-        $AppNameCombined = $AppName + " - " + $AppVersion
-        $SourcePath = "$packetRoot\$AppNameCombined"
-        $ProgramId = $app.ProgramID
-        $InstallCmdInternal = $app.InstallCmd
-        $UninstallCmdInternal = $app.UninstallCmd
-        $winGetParams = $app.WinGetParams -replace "`"",""
-
-        Write-Host "Creating PSADT application: $AppNameCombined" -ForegroundColor Cyan
-        if($config.removeExistingPacketDirOnEachRun -eq $true){
-            $null = Remove-PackageFolder -Path $SourcePath -PacketRoot $packetRoot
-        }
-        New-ADTTemplate -Destination $packetRoot -Name $AppNameCombined
-
-        Write-Host "Wait 5 seconds..."
-        Start-Sleep -Seconds 5
-    
-        # erstellen von \in und \out, move eine ebene tiefer nach \in, 
-        Write-Host "Moving data to .\in"
-        $psadtdirs = Get-ChildItem $SourcePath
-        md $SourcePath\in
-        md $SourcePath\out
-        $psadtdirs | %{mv $_.fullname $SourcePath\in}
-    
-        # log path ändern
-        $psadtconfigfilepath = "$SourcePath\in\Config\config.psd1" 
-        $psadtconfig= get-content $psadtconfigfilepath
-        $psadtconfig= $psadtconfig.Replace("envWinDir\Logs\Software", "envProgramData\Microsoft\IntuneManagementExtension\Logs")
-        $psadtconfigfolderPath = Get-Item "$SourcePath\in\Config"
-        (Get-Item $psadtconfigfolderPath).Attributes = ((Get-Item $psadtconfigfolderPath).Attributes -band -bnot [System.IO.FileAttributes]::ReadOnly)
-        $psadtconfig | Out-File $psadtconfigfilepath -Encoding utf8 -Force
-
-        # für normale Pakete
-        # kopieren von detect.ps1 und anpassen
-        # Gemeinsamer Pfad mit Update-DeployScript (Write-DetectionScript).
-        Write-Host "Writing detection.ps1 from template"
-        $arpSearchName = Get-ArpSearchName -DisplayName $AppName -ArpName ([string]$app.ArpName)
-        Write-DetectionScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion -RootDir $rootDir `
-            -ProgramId $ProgramId -ArpName $arpSearchName
-        # ServiceUI.exe nur fuer Pakete, die Dialoge zeigen sollen (Apps.csv
-        # "Interactive"). Dieselbe Entscheidung wie im Installationsbefehl.
-        if ((Get-DeployCommandLine -Interactive ([string]$app.Interactive)).NeedsServiceUI) {
-            Write-Host "Copying: ServiceUI.exe (Interactive)"
-            cp $rootDir\ServiceUI.exe $SourcePath\in
-        }
-
-        # einpflegen von publisher, appname, version ins invoke-AppDeployToolkit.ps1
-        # Update der Invoke-AppDeployToolkit.ps1, außer im Fall des Zero-Config Deployment mit 1 single MSI, dann darf hier nichts angepasst werden
-        if(-not $app.SingleMSI){
-            Write-Host "Copying and customizing: Invoke-AppDeployToolkit.ps1"    
-            $creationdate = get-date -Format "yyyy-MM-dd"
-            $psadtscript = get-content "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
-            $psadtscript -replace "AppVendor = ''","AppVendor = '$AppPublisher'" -replace "AppName = ''", "AppName = '$AppName'" -replace "AppVersion = ''", "AppVersion = '$AppVersion'" `
-                -replace "AppScriptDate = '2000-12-31'", "AppScriptDate = '$creationdate'" -replace "AppScriptAuthor = '<author name>'", "AppScriptAuthor = 'alexander@zarenko.net'" `
-                | Out-File "$SourcePath\in\Invoke-AppDeployToolkit.ps1" -Encoding utf8 -Force
-        }
-        if($InstallCmdInternal){
-            Insert-Commands -Install $InstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
-        }
-        if($UninstallCmdInternal){
-            Insert-Commands -Uninstall $UninstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
-        }
-        if($AppVersion -eq "LatestAvailable"){        
-            $InstallCmdInternal = get-WinGetCommands -type Install -id $ProgramId -wgparams $winGetParams
-            $UninstallCmdInternal= get-WinGetCommands -type Uninstall -id $ProgramId -wgparams $winGetParams
-            Insert-Commands -Install $InstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
-            Insert-Commands -Uninstall $UninstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"        
-        }
-
-        #App version setzen
-        if($AppVersion -eq "LatestAvailable"){
-            $desc = "Installed using PSADT and WinGet"
-        }
-        else{
-            $desc = "Installed using PSADT"
-        }
-
-        # Logo: ein Pfad, der nie abbricht und nichts zu Dritten hochlaedt.
-        $null = Resolve-PackageLogo -AppFolder $SourcePath -AppName $AppName -LogoUrl $app.logoURL -RootDir $rootDir
-
-        #deploy template an App anpassen und kopieren
-        # Gemeinsamer Pfad mit Update-DeployScript - Anlegen und Erneuern nutzen EINE Quelle.
-        Write-DeployScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion `
-            -Publisher $AppPublisher -Description $desc -RootDir $rootDir -ToolVersion $toolVersion `
-            -Architecture ([string]$app.Architecture) -MinimumOS ([string]$app.MinimumOS) `
-            -MsiProductCode ([string]$app.MsiProductCode) -Interactive ([string]$app.Interactive)
-
-        # Dateien muss weiterhin ein Mensch bereitstellen - fuer eine
-        # Nicht-WinGet-App gibt es keine Quelle, aus der das Tool sie holen
-        # koennte. Die Befehle dagegen leitet es jetzt selbst ab.
-        if($AppVersion -ne "LatestAvailable"){
-            Write-Host "ToDo: now add/copy all required files for setup, then press ENTER" -ForegroundColor Cyan
-            explorer "$SourcePath\in\Files"
-            pause
-
-            $needsEditor = $true
-            if(-not $InstallCmdInternal -and -not $UninstallCmdInternal){
-                $derived = Get-DerivedInstallCommands -ContentPath "$SourcePath\in" -AppName $arpSearchName
-                if($derived){
-                    Write-Host ("Derived from {0} (engine: {1}):" -f $derived.FileName, $derived.Engine) -ForegroundColor Green
-                    Write-Host ("  Install:   {0}" -f $derived.Install)
-                    Write-Host ("  Uninstall: {0}" -f $derived.Uninstall)
-                    Insert-Commands -Install $derived.Install -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
-                    Insert-Commands -Uninstall $derived.Uninstall -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
-                    # Nur wenn geraten wurde, muss noch jemand draufschauen.
-                    $needsEditor = -not $derived.Certain
-                    if($derived.Note){ Write-Host ("  Note: {0}" -f $derived.Note) -ForegroundColor Yellow }
-                }
-                else{
-                    Write-Host "No single installer found in Files\ - fill the Install and Uninstall sections by hand." -ForegroundColor Yellow
-                }
-            }
-            else{
-                # Apps.csv gibt die Befehle vor, die stehen schon im Skript.
-                $needsEditor = $false
-            }
-
-            if($needsEditor){
-                Write-Host "ToDo: check the Install & Uninstall sections, then press ENTER. Deployment to Intune will begin if previously selected." -ForegroundColor Cyan
-                Open-ScriptForEditing -Path "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
-                pause
-            }
-        }
-        if($createAndDeploy){
-            #deploy.ps1 aufrufen - der Tenant kommt aus dem Lauf, daher kein weiterer Dialog
-            try {
-                if(@($apps).Count -gt 1){
-                    write-host "Parameter -bulk is set."
-                    & $SourcePath\deploy.ps1 -bulk -Tenant $tenant
-                }
-                else{
-                    write-host "Parameter -bulk is NOT set."
-                    & $SourcePath\deploy.ps1 -Tenant $tenant
-                }
-                $succeeded += $AppNameCombined
-            }
-            catch {
-                # Den Lauf nicht abbrechen: die restlichen Apps sollen noch durchlaufen.
-                Write-Host ("FAILED: {0} - {1}" -f $AppNameCombined, $_.Exception.Message) -ForegroundColor Red
-                $failed += $AppNameCombined
-            }
-            # und weiter gehts mit der nächsten App
-        }
+    $grid = New-Object Windows.Controls.Grid
+    $grid.Margin = '12'
+    foreach ($height in 'Auto', '*', 'Auto', 'Auto') {
+        $rowDefinition = New-Object Windows.Controls.RowDefinition
+        $rowDefinition.Height = $(if ($height -eq '*') { New-Object Windows.GridLength -ArgumentList 1, ([Windows.GridUnitType]::Star) } else { [Windows.GridLength]::Auto })
+        $null = $grid.RowDefinitions.Add($rowDefinition)
     }
 
-        if($createAndDeploy){
-            Write-DeploymentSummary -Succeeded $succeeded -Failed $failed
+    # --- obere Leiste: Tenant, Ansicht, Filter, Refresh ---
+    $top = New-Object Windows.Controls.DockPanel
+    $top.Margin = '0,0,0,8'
+
+    $refreshButton = New-Object Windows.Controls.Button
+    $refreshButton.Content = 'Refresh'
+    $refreshButton.Padding = '14,4'
+    $refreshButton.Margin = '8,0,0,0'
+    $refreshButton.ToolTip = 'Read Apps.csv, the package folders and the tenant again'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($refreshButton, 'Refresh')
+    [Windows.Controls.DockPanel]::SetDock($refreshButton, 'Right')
+    $null = $top.Children.Add($refreshButton)
+
+    $tenantLabel = New-Object Windows.Controls.TextBlock
+    $tenantLabel.Text = 'Tenant:'
+    $tenantLabel.VerticalAlignment = 'Center'
+    $tenantLabel.Margin = '0,0,6,0'
+    [Windows.Controls.DockPanel]::SetDock($tenantLabel, 'Left')
+    $null = $top.Children.Add($tenantLabel)
+
+    $tenantItems = @('(not connected)') + @($TenantNames)
+    $initialTenantIndex = 0
+    if ($TenantName) {
+        $found = [array]::IndexOf($tenantItems, $TenantName)
+        if ($found -ge 0) { $initialTenantIndex = $found }
+    }
+    $tenantBox = New-Object Windows.Controls.ComboBox
+    $tenantBox.ItemsSource = $tenantItems
+    $tenantBox.SelectedIndex = $initialTenantIndex
+    $tenantBox.MinWidth = 200
+    $tenantBox.Margin = '0,0,12,0'
+    $tenantBox.VerticalContentAlignment = 'Center'
+    $tenantBox.ToolTip = 'The tenant whose apps the Intune column shows - and where Deploy uploads to'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($tenantBox, 'Tenant')
+    [Windows.Controls.DockPanel]::SetDock($tenantBox, 'Left')
+    $null = $top.Children.Add($tenantBox)
+
+    # Die Ansicht: welcher der drei Zustaende einer Zeile interessiert.
+    $views = @(
+        [pscustomobject]@{ Name = 'All';                              Test = { $true } },
+        [pscustomobject]@{ Name = 'Definition only (no package)';     Test = { $_.Status -eq 'Definition only' } },
+        [pscustomobject]@{ Name = 'Package, not in Intune';           Test = { $_.HasPackage -and $_.Intune -eq '-' } },
+        [pscustomobject]@{ Name = 'In Intune';                        Test = { $_.Intune -like 'yes*' -or $_.Intune -eq 'no content' } },
+        [pscustomobject]@{ Name = 'Template outdated';                Test = { $_.Template -eq 'outdated' -or $_.Template -eq 'unstamped' } },
+        [pscustomobject]@{ Name = 'Duplicates or empty in Intune';    Test = { $_.Intune -eq 'no content' -or $_.Intune -like 'yes (*' } },
+        [pscustomobject]@{ Name = 'Package without definition';       Test = { -not $_.HasDefinition } }
+    )
+    $viewLabel = New-Object Windows.Controls.TextBlock
+    $viewLabel.Text = 'Show:'
+    $viewLabel.VerticalAlignment = 'Center'
+    $viewLabel.Margin = '0,0,6,0'
+    [Windows.Controls.DockPanel]::SetDock($viewLabel, 'Left')
+    $null = $top.Children.Add($viewLabel)
+
+    $viewBox = New-Object Windows.Controls.ComboBox
+    $viewBox.ItemsSource = @($views | ForEach-Object { $_.Name })
+    $viewBox.SelectedIndex = 0
+    $viewBox.Width = 230
+    $viewBox.Margin = '0,0,8,0'
+    $viewBox.VerticalContentAlignment = 'Center'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($viewBox, 'View')
+    [Windows.Controls.DockPanel]::SetDock($viewBox, 'Left')
+    $null = $top.Children.Add($viewBox)
+
+    $filterBox = New-Object Windows.Controls.TextBox
+    $filterBox.Padding = '4'
+    $filterBox.VerticalContentAlignment = 'Center'
+    $filterBox.ToolTip = 'Filter - matches name, version, publisher, package state, Intune state and next step'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($filterBox, 'Filter')
+    $null = $top.Children.Add($filterBox)
+    [Windows.Controls.Grid]::SetRow($top, 0)
+    $null = $grid.Children.Add($top)
+
+    # --- die Liste ---
+    $dataGrid = New-Object Windows.Controls.DataGrid
+    $dataGrid.AutoGenerateColumns = $false
+    $dataGrid.IsReadOnly = $true
+    $dataGrid.CanUserSortColumns = $true
+    $dataGrid.SelectionMode = 'Extended'
+    $dataGrid.SelectionUnit = 'FullRow'
+    $dataGrid.GridLinesVisibility = 'Horizontal'
+    $dataGrid.HeadersVisibility = 'Column'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($dataGrid, 'InventoryGrid')
+
+    $converter = New-Object Windows.Media.BrushConverter
+    $leftHeaderBrush  = $converter.ConvertFromString('#EDEDED')   # Definition und Paket
+    $rightHeaderBrush = $converter.ConvertFromString('#D6E6F7')   # Tenant
+    $separatorBrush   = $converter.ConvertFromString('#7FA6D1')
+
+    # Farben je Zustand: gruen ist erledigt, blau der naechste Schritt, orange
+    # will angesehen werden, rot stimmt nicht, grau fehlt noch.
+    $statusColors = @(
+        @('Package',                      'DarkGreen'),
+        @('Package, template outdated',   'DarkOrange'),
+        @('Package, template unstamped',  'DarkOrange'),
+        @('Definition only',              'Gray'),
+        @('No definition',                'Firebrick')
+    )
+    $nextColors = @(
+        @('up to date',                                       'DarkGreen'),
+        @('deploy',                                           'DodgerBlue'),
+        @('renew from template, then deploy',                 'DarkOrange'),
+        @('check duplicates in Intune',                       'DarkOrange'),
+        @('remove the entry without content in Intune',       'Firebrick'),
+        @('package without a row in Apps.csv',                'Firebrick'),
+        @('create package',                                   'Gray')
+    )
+
+    $columnSpecs = @(
+        @{ Header = 'Application'; Binding = 'AppName';    Width = 250; Right = $false; Colors = $null },
+        @{ Header = 'Version';     Binding = 'AppVersion'; Width = 120; Right = $false; Colors = $null },
+        @{ Header = 'Publisher';   Binding = 'Publisher';  Width = 170; Right = $false; Colors = $null },
+        @{ Header = 'Package';     Binding = 'Status';     Width = 200; Right = $false; Colors = $statusColors },
+        @{ Header = 'Intune';      Binding = 'Intune';     Width = 190; Right = $true;  Colors = $null; Separator = $true },
+        @{ Header = 'Next step';   Binding = 'Next';       Width = 0;   Right = $true;  Colors = $nextColors }
+    )
+
+    foreach ($spec in $columnSpecs) {
+        $column = New-Object Windows.Controls.DataGridTextColumn
+        $column.Header = $spec.Header
+        $column.Binding = New-Object Windows.Data.Binding($spec.Binding)
+        $column.CanUserSort = $true
+        if ($spec.Width -gt 0) { $column.Width = $spec.Width }
+        else { $column.Width = New-Object Windows.Controls.DataGridLength -ArgumentList 1, ([Windows.Controls.DataGridLengthUnitType]::Star) }
+
+        try {
+            # Die Kopfzeile sagt, auf welcher Seite die Spalte steht.
+            $headerStyle = New-Object Windows.Style -ArgumentList ([Windows.Controls.Primitives.DataGridColumnHeader])
+            $headerBrush = $(if ($spec.Right) { $rightHeaderBrush } else { $leftHeaderBrush })
+            $null = $headerStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::BackgroundProperty), $headerBrush))
+            $null = $headerStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::PaddingProperty), (New-Object Windows.Thickness -ArgumentList 8, 5, 8, 5)))
+            $null = $headerStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::FontWeightProperty), ([Windows.FontWeights]::SemiBold)))
+            if ($spec.Separator) {
+                $null = $headerStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::BorderBrushProperty), $separatorBrush))
+                $null = $headerStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::BorderThicknessProperty), (New-Object Windows.Thickness -ArgumentList 2, 0, 0, 0)))
+            }
+            $column.HeaderStyle = $headerStyle
+
+            $cellStyle = New-Object Windows.Style -ArgumentList ([Windows.Controls.DataGridCell])
+            if ($spec.Separator) {
+                $null = $cellStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::BorderBrushProperty), $separatorBrush))
+                $null = $cellStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::BorderThicknessProperty), (New-Object Windows.Thickness -ArgumentList 2, 0, 0, 0)))
+            }
+            foreach ($pair in @($spec.Colors)) {
+                if (-not $pair) { continue }
+                $trigger = New-Object Windows.DataTrigger
+                $trigger.Binding = New-Object Windows.Data.Binding($spec.Binding)
+                $trigger.Value = $pair[0]
+                $brush = [System.Windows.Media.Brushes]::($pair[1])
+                $null = $trigger.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::ForegroundProperty), $brush))
+                $null = $cellStyle.Triggers.Add($trigger)
+            }
+            $column.CellStyle = $cellStyle
+        }
+        catch { }   # Optik - kein Grund, das Fenster nicht zu zeigen
+        $null = $dataGrid.Columns.Add($column)
+    }
+
+    # Der Tooltip einer Zeile nennt alle drei Zustaende.
+    try {
+        $rowStyle = New-Object Windows.Style -ArgumentList ([Windows.Controls.DataGridRow])
+        $null = $rowStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.DataGridRow]::ToolTipProperty), (New-Object Windows.Data.Binding('Detail'))))
+        $dataGrid.RowStyle = $rowStyle
+    }
+    catch { }
+
+    $dataGrid.ItemsSource = $rows
+    [Windows.Controls.Grid]::SetRow($dataGrid, 1)
+    $null = $grid.Children.Add($dataGrid)
+
+    # --- Statuszeile ---
+    $status = New-Object Windows.Controls.TextBlock
+    $status.Margin = '0,8,0,0'
+    $status.Foreground = [System.Windows.Media.Brushes]::DimGray
+    $status.TextWrapping = 'Wrap'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($status, 'Status')
+    $withPackage = @($rows | Where-Object { $_.HasPackage }).Count
+    $inIntune    = @($rows | Where-Object { $_.Intune -like 'yes*' -or $_.Intune -eq 'no content' }).Count
+    $summary = ('{0} application(s) - {1} with a package in {2} - {3} in Intune{4}' -f
+                    $rows.Count, $withPackage, $PacketRoot, $inIntune,
+                    $(if (-not $IntuneRead) { ' - the tenant was not read, the Intune column is empty' } else { '' }))
+    $status.Text = $summary
+    [Windows.Controls.Grid]::SetRow($status, 2)
+    $null = $grid.Children.Add($status)
+
+    # Ansicht und Textfilter gelten zusammen; die Statuszeile sagt, wie viele zu sehen sind.
+    $applyFilter = {
+        $view   = $views[[Math]::Max(0, $viewBox.SelectedIndex)]
+        $needle = $filterBox.Text
+        $items  = @($rows | Where-Object $view.Test)
+        if (-not [string]::IsNullOrWhiteSpace($needle)) {
+            $items = @($items | Where-Object {
+                $row = $_
+                @(@('AppName', 'AppVersion', 'Publisher', 'Status', 'Intune', 'Next') | Where-Object { [string]$row.$_ -like "*$needle*" }).Count -gt 0
+            })
+        }
+        $dataGrid.ItemsSource = $null
+        $dataGrid.ItemsSource = @($items)
+        $status.Text = $(if ($items.Count -eq $rows.Count) { $summary } else { '{0} of {1} shown - {2}' -f $items.Count, $rows.Count, $summary })
+    }
+    $filterBox.Add_TextChanged($applyFilter)
+    $viewBox.Add_SelectionChanged($applyFilter)
+
+    # --- Knopfleiste ---
+    $bar = New-Object Windows.Controls.DockPanel
+    $bar.Margin = '0,12,0,0'
+    $bar.LastChildFill = $false
+    $left = New-Object Windows.Controls.StackPanel
+    $left.Orientation = 'Horizontal'
+    [Windows.Controls.DockPanel]::SetDock($left, 'Left')
+    $right = New-Object Windows.Controls.StackPanel
+    $right.Orientation = 'Horizontal'
+    [Windows.Controls.DockPanel]::SetDock($right, 'Right')
+    $null = $bar.Children.Add($left)
+    $null = $bar.Children.Add($right)
+    [Windows.Controls.Grid]::SetRow($bar, 3)
+    $null = $grid.Children.Add($bar)
+
+    $window.Tag = $null
+    $choose = {
+        param([string]$action)
+        $selected = @($dataGrid.SelectedItems | Where-Object { $_ -isnot [int] })
+        if ($action -in 'NewVersion', 'Edit', 'Delete', 'Build', 'Deploy', 'RemoveFolder' -and $selected.Count -eq 0) {
+            $null = [System.Windows.MessageBox]::Show($window, 'Select one or more rows first.', 'IntuneWin32Helper', 'OK', 'Information')
+            return
+        }
+        $chosenTenant = ''
+        if ($tenantBox.SelectedIndex -gt 0) { $chosenTenant = [string]$tenantBox.SelectedItem }
+        $window.Tag = [pscustomobject]@{ Action = $action; Selection = $selected; TenantName = $chosenTenant }
+        $window.Close()
+    }
+
+    $newButton = {
+        param([string]$caption, [string]$id, [string]$tip, $panel)
+        $button = New-Object Windows.Controls.Button
+        $button.Content = $caption
+        $button.Padding = '14,6'
+        $button.Margin = '0,0,8,0'
+        $button.ToolTip = $tip
+        [Windows.Automation.AutomationProperties]::SetAutomationId($button, $id)
+        $null = $panel.Children.Add($button)
+        return $button
+    }
+
+    $settingsButton = New-Object Windows.Controls.Button
+    $settingsButton.ToolTip = 'Settings'
+    $settingsButton.Padding = '10,4'
+    $settingsButton.Margin = '0,0,8,0'
+    $settingsButton.MinWidth = 40
+    [Windows.Automation.AutomationProperties]::SetAutomationId($settingsButton, 'Settings')
+    $settingsIcon = New-Object Windows.Controls.TextBlock
+    $settingsIcon.Text = [char]0xE713
+    $settingsIcon.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
+    $settingsIcon.FontSize = 16
+    $settingsIcon.Foreground = [System.Windows.Media.Brushes]::Gray
+    $settingsButton.Content = $settingsIcon
+    $null = $left.Children.Add($settingsButton)
+
+    $folderButton  = & $newButton 'Open folder'      'OpenFolder' 'The package folder of the selected row, or the package root' $left
+    $orphanButton  = & $newButton 'Remove orphan folder' 'RemoveFolder' 'Delete the package folder of selected rows that have no definition in Apps.csv - the app in Intune stays' $left
+
+    $addButton     = & $newButton 'Add...'            'Add'        'Add an application definition (the editor offers WinGet and MSI to prefill)' $right
+    $versionButton = & $newButton 'New version...'    'NewVersion' 'Copy the selected definition as a new version' $right
+    $editButton    = & $newButton 'Edit'              'Edit'       'Edit the definition of the selected row' $right
+    $deleteButton  = & $newButton 'Delete definition' 'Delete'     'Remove the row from Apps.csv - the package folder and the app in Intune stay' $right
+    $buildButton   = & $newButton 'Build package'     'Build'      'Create the package on disk from the definition' $right
+    $deployButton  = & $newButton 'Deploy'            'Deploy'     'Upload to the tenant - a row without a package is built first' $right
+    $closeButton   = & $newButton 'Close'             'Cancel'     'Close the tool' $right
+    $closeButton.Margin = '0'
+    $closeButton.IsCancel = $true
+
+    $settingsButton.Add_Click({
+        try {
+            $null = Edit-SettingsDialog -Owner $window -PreferredPaths @($ConfigPath)
+        }
+        catch {
+            $null = [System.Windows.MessageBox]::Show($window, ("Error while opening the settings: {0}" -f $_.Exception.Message), 'Settings', 'OK', 'Error')
+        }
+        # Tenants und Paketordner koennen sich geaendert haben: neu lesen.
+        & $choose 'Refresh'
+    })
+    $folderButton.Add_Click({  & $choose 'OpenFolder' })
+    $orphanButton.Add_Click({  & $choose 'RemoveFolder' })
+    $addButton.Add_Click({     & $choose 'Add' })
+    $versionButton.Add_Click({ & $choose 'NewVersion' })
+    $editButton.Add_Click({    & $choose 'Edit' })
+    $deleteButton.Add_Click({  & $choose 'Delete' })
+    $buildButton.Add_Click({   & $choose 'Build' })
+    $deployButton.Add_Click({  & $choose 'Deploy' })
+    $refreshButton.Add_Click({ & $choose 'Refresh' })
+    $closeButton.Add_Click({   & $choose 'Cancel' })
+    $dataGrid.Add_MouseDoubleClick({
+        $row = $dataGrid.SelectedItem
+        if ($row -and $row.HasDefinition) { & $choose 'Edit' }
+    })
+
+    # Der Tenant-Wechsel wird erst NACH dem Setzen des Anfangswerts gemeldet.
+    $tenantBox.Add_SelectionChanged({
+        if ($tenantBox.SelectedIndex -ne $initialTenantIndex) { & $choose 'SwitchTenant' }
+    })
+
+    # Was moeglich ist, folgt aus dem, was markiert ist.
+    $syncButtons = {
+        $selected = @($dataGrid.SelectedItems | Where-Object { $_ -isnot [int] })
+        $one = ($selected.Count -eq 1)
+        $withDefinition = @($selected | Where-Object { $_.HasDefinition })
+        $editButton.IsEnabled    = $one -and ($withDefinition.Count -eq 1)
+        $versionButton.IsEnabled = $one -and ($withDefinition.Count -eq 1)
+        $deleteButton.IsEnabled  = ($withDefinition.Count -gt 0)
+        $buildButton.IsEnabled   = ($withDefinition.Count -gt 0)
+        $deployButton.IsEnabled  = (@($selected | Where-Object { $_.HasDefinition -or $_.HasPackage }).Count -gt 0)
+        # Nur ein Ordner ohne Definition ist verwaist - alles andere loescht dieser Weg nie.
+        $orphanButton.IsEnabled  = (@($selected | Where-Object { $_.HasPackage -and -not $_.HasDefinition }).Count -gt 0)
+    }
+    & $syncButtons
+    $dataGrid.Add_SelectionChanged($syncButtons)
+
+    $window.Content = $grid
+    $window.Add_Closing({
+        if ($null -eq $window.Tag) { $window.Tag = [pscustomobject]@{ Action = 'Closed'; Selection = @(); TenantName = '' } }
+    })
+
+    # Auswahl wiederherstellen, sobald das Grid seine Zeilen hat. Eine Zeile, die
+    # die Ansicht ausblendet oder die es nicht mehr gibt, fehlt einfach.
+    if ($Select.Count -gt 0) {
+        $window.Add_Loaded({
+            try {
+                $wanted = @($dataGrid.ItemsSource | Where-Object { $Select -contains $_.Key })
+                if ($wanted.Count -eq 0) { return }
+                $dataGrid.SelectedItems.Clear()
+                foreach ($row in $wanted) { $null = $dataGrid.SelectedItems.Add($row) }
+                $dataGrid.ScrollIntoView($wanted[0])
+                $null = $dataGrid.Focus()
+            }
+            catch { }   # eine Auswahl, die sich nicht herstellen laesst, ist keine Meldung wert
+        })
+    }
+
+    $null = $window.ShowDialog()
+    return $window.Tag
+}
+
+function Start-InventoryLoop {
+    <#
+        .SYNOPSIS
+        Das Tool: Inventar zeigen, Aktion abarbeiten, Inventar neu zeigen.
+
+        .DESCRIPTION
+        Ersetzt die Startkacheln samt createApps und deployApps. Der Tenant wird
+        einmal am Anfang gewaehlt (bei genau einem konfigurierten gar nicht
+        gefragt) und laesst sich im Fenster wechseln. Ohne Tenant laeuft das Tool
+        weiter, die Intune-Spalte bleibt dann leer.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [Parameter(Mandatory = $true)][string]$ToolVersion
+    )
+
+    $config  = Get-ToolConfig -RootDir $RootDir
+    $tenants = @($config.tenants | Where-Object { $_ })
+    $tenant  = $null
+    $intuneApps   = $null
+    $reloadIntune = $false
+
+    if ($tenants.Count -gt 0) {
+        $only = $null
+        if ($tenants.Count -eq 1) { $only = $tenants[0] }
+        $tenant = Connect-InventoryTenant -Tenants $tenants -Tenant $only
+        $reloadIntune = ($null -ne $tenant)
+    }
+    else {
+        Write-Host "No tenant configured - the Intune column stays empty. Add one under Settings (gear icon)." -ForegroundColor Yellow
+    }
+
+    $select = @()
+    while ($true) {
+        # Jede Runde neu lesen: Einstellungen koennen sich geaendert haben.
+        $config     = Get-ToolConfig -RootDir $RootDir
+        $tenants    = @($config.tenants | Where-Object { $_ })
+        $packetRoot = [string]$config.packetRoot
+        if ($packetRoot -and -not (Test-Path -LiteralPath $packetRoot)) { $null = New-Item -ItemType Directory -Path $packetRoot -Force }
+
+        if ($reloadIntune) {
+            $intuneApps = $null
+            if ($tenant) { $intuneApps = Read-TenantWin32Apps }
+            $reloadIntune = $false
         }
 
-        # Nach der Verarbeitung geht die Schleife automatisch weiter
-        # → Der Dialog wird erneut geöffnet, bis der Nutzer abbricht.
+        $definitions = @(Read-AppsCsv -RootDir $RootDir)
+        $columns     = @(Get-AppsCsvColumns -Definitions $definitions)
+        $inventory   = @(Get-AppInventory -Definitions $definitions -PacketRoot $packetRoot -RootDir $RootDir -IntuneApps $intuneApps)
+
+        $result = Show-InventoryDialog -Inventory $inventory `
+            -Title ("IntuneWin32Helper {0} - https://blog.zarenko.net/" -f $ToolVersion) `
+            -PacketRoot $packetRoot `
+            -TenantNames @($tenants | ForEach-Object { [string]$_.name }) `
+            -TenantName $(if ($tenant) { [string]$tenant.name } else { '' }) `
+            -IntuneRead ($null -ne $intuneApps) `
+            -ConfigPath (Get-ToolConfigPath -RootDir $RootDir) `
+            -Select $select
+
+        $selection = @($result.Selection)
+        $select    = @($selection | ForEach-Object { [string]$_.Key })
+        $removeExisting = ($config.removeExistingPacketDirOnEachRun -eq $true)
+
+        try {
+            switch ($result.Action) {
+                'Refresh' { $reloadIntune = $true }
+
+                'SwitchTenant' {
+                    if ([string]::IsNullOrEmpty($result.TenantName)) {
+                        $tenant = $null
+                        $intuneApps = $null
+                    }
+                    else {
+                        $target = $tenants | Where-Object { [string]$_.name -eq $result.TenantName } | Select-Object -First 1
+                        $tenant = Connect-InventoryTenant -Tenants $tenants -Tenant $target -Force
+                        $reloadIntune = ($null -ne $tenant)
+                        if (-not $tenant) { $intuneApps = $null }
+                    }
+                }
+
+                'Add' {
+                    $new = Edit-AppRecord -Record $null -Title 'Add application' -ColumnOrder $columns -Others $definitions
+                    if ($new) {
+                        $problem = Test-AppRecord -Record $new -Others $definitions
+                        if ($problem) {
+                            $null = [System.Windows.MessageBox]::Show($problem, 'Add application', 'OK', 'Warning')
+                        }
+                        else {
+                            Save-AppsCsv -RootDir $RootDir -Rows (@($definitions) + $new)
+                            $select = @('{0} - {1}' -f $new.DisplayName, $new.Version)
+                        }
+                    }
+                }
+
+                'NewVersion' {
+                    $row = $selection | Select-Object -First 1
+                    if ($row -and $row.DefinitionRecord) {
+                        $copy = $row.DefinitionRecord | Select-Object *
+                        $new = Edit-AppRecord -Record $copy -Title ("New version of {0}" -f $row.AppName) -ColumnOrder $columns -Info (Get-InventoryRowInfo -Row $row) -Others $definitions
+                        if ($new) {
+                            $problem = Test-AppRecord -Record $new -Others $definitions
+                            if ($problem) {
+                                $null = [System.Windows.MessageBox]::Show($problem, 'New version', 'OK', 'Warning')
+                            }
+                            else {
+                                Save-AppsCsv -RootDir $RootDir -Rows (@($definitions) + $new)
+                                $select = @('{0} - {1}' -f $new.DisplayName, $new.Version)
+                            }
+                        }
+                    }
+                }
+
+                'Edit' {
+                    $row = $selection | Select-Object -First 1
+                    if ($row -and $row.DefinitionRecord) {
+                        $record = $row.DefinitionRecord
+                        $others = @($definitions | Where-Object { -not [object]::ReferenceEquals($_, $record) })
+                        $edited = Edit-AppRecord -Record $record -Title ("Edit - {0}" -f $row.Key) -ColumnOrder $columns -Info (Get-InventoryRowInfo -Row $row) -Others $others
+                        if ($edited) {
+                            $problem = Test-AppRecord -Record $edited -Others $others
+                            if ($problem) {
+                                $null = [System.Windows.MessageBox]::Show($problem, 'Edit', 'OK', 'Warning')
+                            }
+                            else {
+                                Save-AppsCsv -RootDir $RootDir -Rows (@($others) + $edited)
+                                $select = @('{0} - {1}' -f $edited.DisplayName, $edited.Version)
+                                if ($row.HasPackage -and $select[0] -ne $row.Key) {
+                                    Write-Host ("Renamed {0} -> {1}: the existing package folder keeps its old name until it is built again." -f $row.Key, $select[0]) -ForegroundColor Yellow
+                                }
+                            }
+                        }
+                    }
+                }
+
+                'Delete' {
+                    $victims = @($selection | Where-Object { $_.HasDefinition })
+                    if ($victims.Count -gt 0) {
+                        $names = ($victims | ForEach-Object { $_.Key }) -join "`n"
+                        $answer = [System.Windows.MessageBox]::Show(
+                            ("Remove {0} definition(s) from Apps.csv?`n`n{1}`n`nThe package folders and the apps in Intune stay." -f $victims.Count, $names),
+                            'Delete definition', 'YesNo', 'Warning')
+                        if ($answer -eq 'Yes') {
+                            $remove = @($victims | ForEach-Object { $_.DefinitionRecord })
+                            Save-AppsCsv -RootDir $RootDir -Rows @($definitions | Where-Object { $remove -notcontains $_ })
+                            $select = @()
+                        }
+                    }
+                }
+
+                'Build' {
+                    $targets = @($selection | Where-Object { $_.HasDefinition })
+                    $existing = @($targets | Where-Object { $_.HasPackage })
+                    $go = $true
+                    if ($existing.Count -gt 0) {
+                        $answer = [System.Windows.MessageBox]::Show(
+                            ("{0} of the selected rows already have a package. Building creates it again from the definition; changes made by hand inside the package are lost.`n`nContinue?" -f $existing.Count),
+                            'Build package', 'YesNo', 'Warning')
+                        $go = ($answer -eq 'Yes')
+                    }
+                    if ($go -and $targets.Count -gt 0) {
+                        $null = Invoke-PackageBuild -Rows $targets -PacketRoot $packetRoot -RootDir $RootDir -ToolVersion $ToolVersion -RemoveExisting $removeExisting
+                    }
+                }
+
+                'Deploy' {
+                    # Zuerst der Tenant: scheitert das, soll nicht vorher gebaut werden.
+                    if (-not $tenant) {
+                        $tenant = Connect-InventoryTenant -Tenants $tenants -Tenant $null
+                        $reloadIntune = ($null -ne $tenant)
+                    }
+                    if (-not $tenant) {
+                        Write-Host "No tenant - nothing was deployed." -ForegroundColor Yellow
+                    }
+                    else {
+                        $packages = @($selection | Where-Object { $_.HasPackage } | ForEach-Object {
+                            [pscustomobject]@{ AppName = $_.AppName; AppVersion = $_.AppVersion; FullPath = $_.FullPath }
+                        })
+                        $toBuild = @($selection | Where-Object { $_.HasDefinition -and -not $_.HasPackage })
+                        if ($toBuild.Count -gt 0) {
+                            $built = Invoke-PackageBuild -Rows $toBuild -PacketRoot $packetRoot -RootDir $RootDir -ToolVersion $ToolVersion -RemoveExisting $removeExisting
+                            $packages = @($packages) + @($built.Built)
+                        }
+                        Invoke-PackageDeploy -Packages $packages -Tenant $tenant -RootDir $RootDir -ToolVersion $ToolVersion
+                        $reloadIntune = $true
+                    }
+                }
+
+                'OpenFolder' {
+                    $path = $packetRoot
+                    $row = $selection | Where-Object { $_.FullPath } | Select-Object -First 1
+                    if ($row) { $path = Split-Path -Parent $row.FullPath }
+                    if ($path -and (Test-Path -LiteralPath $path)) { Start-Process -FilePath 'explorer.exe' -ArgumentList ('"{0}"' -f $path) }
+                }
+
+                'RemoveFolder' {
+                    # Nur Ordner ohne Definition. Die Auswahl der Zeilen entscheidet der Knopf, die
+                    # Verweigerung liegt in Remove-OrphanPackages: ein Ordner MIT Definition wird dort
+                    # auch dann nicht angefasst, wenn er hier durchrutschte.
+                    $orphans = @($selection | Where-Object { $_.HasPackage -and -not $_.HasDefinition })
+                    if ($orphans.Count -eq 0) {
+                        $null = [System.Windows.MessageBox]::Show('None of the selected rows is an orphan: only a package folder without a row in Apps.csv can be removed here.', 'Remove orphan folder', 'OK', 'Information')
+                    }
+                    else {
+                        $lines = foreach ($orphan in $orphans) {
+                            $folder  = Split-Path -Parent ([string]$orphan.FullPath)
+                            $summary = Get-PackageFolderSummary -Path $folder
+                            $stays   = $(if ($orphan.Intune -like 'yes*' -or $orphan.Intune -eq 'no content') { '  (the app stays in Intune)' } else { '' })
+                            ("{0}`n    {1}  -  {2} file(s), {3:N1} MB{4}" -f $orphan.Key, $folder, $summary.Files, ($summary.Bytes / 1MB), $stays)
+                        }
+                        $answer = [System.Windows.MessageBox]::Show(
+                            ("Delete {0} package folder(s) that have no definition in Apps.csv?`n`n{1}`n`nThis cannot be undone. The apps in Intune are not touched." -f $orphans.Count, ($lines -join "`n`n")),
+                            'Remove orphan folder', 'YesNo', 'Warning', 'No')
+                        if ($answer -eq 'Yes') {
+                            $outcome = Remove-OrphanPackages -Rows $orphans -PacketRoot $packetRoot
+                            Write-Host ("Orphan folders: {0} removed, {1} skipped, {2} failed." -f $outcome.Removed.Count, $outcome.Skipped.Count, $outcome.Failed.Count) -ForegroundColor Cyan
+                            foreach ($name in $outcome.Removed) { Write-Host ("  REMOVED  {0}" -f $name) -ForegroundColor Green }
+                            foreach ($name in $outcome.Skipped) { Write-Host ("  SKIPPED  {0}" -f $name) -ForegroundColor Yellow }
+                            foreach ($name in $outcome.Failed)  { Write-Host ("  FAILED   {0}" -f $name) -ForegroundColor Red }
+                            $select = @()
+                        }
+                    }
+                }
+
+                'Cancel' { return }
+                'Closed' { return }
+                default {
+                    Write-Host ("Unexpected action: {0}" -f $result.Action) -ForegroundColor Yellow
+                    return
+                }
+            }
+        }
+        catch {
+            # Eine gescheiterte Aktion beendet das Tool nicht.
+            Write-Host ("Action [{0}] failed: {1}" -f $result.Action, $_.Exception.Message) -ForegroundColor Red
+            $null = [System.Windows.MessageBox]::Show(("Action [{0}] failed:`n`n{1}" -f $result.Action, $_.Exception.Message), 'IntuneWin32Helper', 'OK', 'Error')
+        }
     }
 }
 
-function Show-StartDialog {
+function Get-RequirementRuleChoices {
+    <#
+        Zulaessige Werte fuer Architecture und MinimumOS - aus dem Modul gelesen,
+        nicht aus einer Kopie: sie gehen in New-IntuneWin32AppRequirementRule, und
+        ein Wert, den das Modul nicht kennt, scheitert erst beim Upload. Der Parameter
+        heisst im Modul MinimumSupportedWindowsRelease (MinimumSupportedOperatingSystem
+        ist sein Alias). Die Rueckfallliste gilt nur, wenn das Modul nicht lesbar ist.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $architecture = @('x64', 'x86', 'arm64', 'x64x86', 'AllWithARM64')
+    $minimumOs    = @('W10_1607', 'W10_1703', 'W10_1709', 'W10_1803', 'W10_1809', 'W10_1903', 'W10_1909', 'W10_2004',
+                      'W10_20H2', 'W10_21H1', 'W10_21H2', 'W10_22H2', 'W11_21H2', 'W11_22H2')
+    try {
+        $command = Get-Command -Name New-IntuneWin32AppRequirementRule -ErrorAction Stop
+        $set = @($command.Parameters['Architecture'].Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] })
+        if ($set.Count -gt 0) { $architecture = @($set[0].ValidValues) }
+        $set = @($command.Parameters['MinimumSupportedWindowsRelease'].Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] })
+        if ($set.Count -gt 0) { $minimumOs = @($set[0].ValidValues) }
+    }
+    catch { }
+    return [pscustomobject]@{ Architecture = $architecture; MinimumOS = $minimumOs }
+}
+
+function Get-InventoryRowInfo {
+    <# Die Fakten einer Inventarzeile fuer den Kopf des Bearbeitungsdialogs (nur lesen). #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Row)
+
+    $folder = '- (not built yet)'
+    if ($Row.FullPath) { $folder = Split-Path -Parent $Row.FullPath }
+    return [ordered]@{
+        'Package'   = $folder
+        'Template'  = [string]$Row.Template
+        'Intune'    = [string]$Row.Intune
+        'Next step' = [string]$Row.Next
+    }
+}
+
+function Get-PackageFolderSummary {
+    <# Dateien und Groesse eines Ordners - fuer die Rueckfrage vor dem Loeschen. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $files = @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force -ErrorAction SilentlyContinue)
+    $bytes = 0
+    foreach ($file in $files) { $bytes += $file.Length }
+    return [pscustomobject]@{ Files = $files.Count; Bytes = [long]$bytes }
+}
+
+function Remove-OrphanPackages {
+    <#
+        .SYNOPSIS
+        Loescht Paketordner, zu denen es keine Definition in Apps.csv gibt.
+
+        .DESCRIPTION
+        Der einzige Weg dafuer. Er verweigert, was nicht eindeutig verwaist ist - der
+        Schutz liegt hier und nicht im Knopf, denn ein Fehler beim Aktivieren des
+        Knopfes darf keinen Ordner treffen, der eine Definition hat:
+          - eine Zeile MIT Definition wird uebersprungen,
+          - ein Ordner, dessen Name nicht "<Name> - <Version>" ist, wird uebersprungen
+            (das hat das Tool nicht angelegt),
+          - ein Ordner ohne deploy.ps1 wird uebersprungen,
+          - das Loeschen selbst macht Remove-PackageFolder (Ordner muss UNTER der
+            Wurzel liegen).
+        Die App in Intune bleibt unberuehrt.
+    #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$false)]
-        [System.Windows.Window]$Owner,
-        [string]$Title = "IntuneWin32Helper - https://blog.zarenko.net/",
-        [int]$TileWidth = 220 # Breite je Kachel zur sauberen Textumbruch-Steuerung
+        [Parameter(Mandatory = $true)]$Rows,
+        [Parameter(Mandatory = $true)][string]$PacketRoot
     )
 
-    Add-Type -AssemblyName PresentationCore           | Out-Null
-    Add-Type -AssemblyName PresentationFramework      | Out-Null
-    Add-Type -AssemblyName System.Windows.Forms       | Out-Null
+    $removed = @(); $skipped = @(); $failed = @()
+    foreach ($row in @($Rows)) {
+        $key = [string]$row.Key
+        if ($row.HasDefinition)                              { $skipped += ("{0}: has a definition in Apps.csv" -f $key); continue }
+        if (-not $row.HasPackage -or -not $row.FullPath)     { $skipped += ("{0}: no package folder" -f $key); continue }
 
-    # Fenster
-    $dlg = New-Object Windows.Window
-    $dlg.Title = $Title
-    $dlg.Width = 740
-    $dlg.Height = 450
-    if ($Owner -ne $null) {
-        $dlg.Owner = $Owner
-        $dlg.WindowStartupLocation = "CenterOwner"
-    } else {
-        $dlg.WindowStartupLocation = "CenterScreen"
-    }
-    $dlg.ResizeMode = 'NoResize'
+        $folder = Split-Path -Parent ([string]$row.FullPath)
+        if ((Split-Path -Leaf $folder) -ne $key)             { $skipped += ("{0}: folder name '{1}' is not '<Name> - <Version>' - not made by this tool" -f $key, (Split-Path -Leaf $folder)); continue }
+        if (-not (Test-Path -LiteralPath (Join-Path $folder 'deploy.ps1'))) { $skipped += ("{0}: no deploy.ps1 in the folder" -f $key); continue }
 
-    # Root-Grid
-    $root = New-Object Windows.Controls.Grid
-    $root.Margin = "16"
-    $rowTitle   = New-Object Windows.Controls.RowDefinition; $rowTitle.Height   = [Windows.GridLength]::Auto
-    $rowContent = New-Object Windows.Controls.RowDefinition; $rowContent.Height = New-Object Windows.GridLength -ArgumentList 1, ([Windows.GridUnitType]::Star)
-    $rowFooter  = New-Object Windows.Controls.RowDefinition; $rowFooter.Height  = [Windows.GridLength]::Auto
-    $null = $root.RowDefinitions.Add($rowTitle)
-    $null = $root.RowDefinitions.Add($rowContent)
-    $null = $root.RowDefinitions.Add($rowFooter)
-
-    # Titel
-    $txtTitle = New-Object Windows.Controls.TextBlock
-    $txtTitle.Text = "What would you like to do?"
-    $txtTitle.FontSize = 18
-    $txtTitle.FontWeight = 'Bold'
-    $txtTitle.Margin = "0,0,0,12"
-    [Windows.Controls.Grid]::SetRow($txtTitle, 0)
-    $null = $root.Children.Add($txtTitle)
-
-    # Inhalte: 3 Kacheln in UniformGrid
-    $uniform = New-Object Windows.Controls.Primitives.UniformGrid
-    $uniform.Rows = 1
-    $uniform.Columns = 3
-    $uniform.Margin = "0,8,0,0"
-    [Windows.Controls.Grid]::SetRow($uniform, 1)
-    $null = $root.Children.Add($uniform)
-
-    # Hilfsfunktion: Kachel erstellen (Border + StackPanel + Icon + Texte)
-    function New-OptionTile {
-        param(
-            [string]$Caption,
-            [string]$Description,
-            [System.Windows.UIElement]$IconElement,
-            [string]$ReturnValue,
-            [int]$Width = 220
-        )
-
-        # Umrandete, hoverbare Kachel
-        $border = New-Object Windows.Controls.Border
-        $border.BorderBrush = [System.Windows.Media.Brushes]::LightGray
-        $border.BorderThickness = '1'
-        $border.CornerRadius = '6'
-        $border.Margin = '6'
-        $border.Padding = '12'
-        $border.Background = [System.Windows.Media.Brushes]::White
-        $border.SnapsToDevicePixels = $true
-        $border.Width = $Width
-        $border.Cursor = 'Hand'
-
-        # >>> stabiler Rückgabewert direkt an der Kachel speichern
-        $border.Tag = $ReturnValue
-
-        # Hover-Effekt
-        $border.Add_MouseEnter({ param($s,$e) $s.BorderBrush = [System.Windows.Media.Brushes]::DodgerBlue })
-        $border.Add_MouseLeave({ param($s,$e) $s.BorderBrush = [System.Windows.Media.Brushes]::LightGray })
-
-        # Inhalt
-        $stack = New-Object Windows.Controls.StackPanel
-        $stack.Orientation = 'Vertical'
-        $stack.VerticalAlignment = 'Center'
-        $stack.HorizontalAlignment = 'Center'
-        $stack.Width = $Width - 24
-
-        if ($IconElement -ne $null) {
-            $iconHost = New-Object Windows.Controls.ContentControl
-            $iconHost.Content = $IconElement
-            $iconHost.HorizontalAlignment = 'Center'
-            $iconHost.Margin = '0,6,0,8'
-            $null = $stack.Children.Add($iconHost)
-        }
-
-        $lbl = New-Object Windows.Controls.TextBlock
-        $lbl.Text = $Caption
-        $lbl.FontWeight = 'Bold'
-        $lbl.FontSize = 14
-        $lbl.HorizontalAlignment = 'Center'
-        $lbl.TextAlignment = 'Center'
-        $lbl.TextWrapping = 'Wrap'
-        $lbl.Margin = '0,0,0,4'
-        $lbl.MaxWidth = $Width - 24
-
-        $desc = New-Object Windows.Controls.TextBlock
-        $desc.Text = $Description
-        $desc.TextAlignment = 'Center'
-        $desc.Foreground = [System.Windows.Media.Brushes]::DimGray
-        $desc.Margin = '0,0,0,6'
-        $desc.TextWrapping = 'Wrap'
-        $desc.MaxWidth = $Width - 24
-
-        $null = $stack.Children.Add($lbl)
-        $null = $stack.Children.Add($desc)
-
-        $border.Child = $stack
-
-        return $border
-    }
-
-    # ---------- ICONS ----------
-    $glyphAdd         = [char]0xE710  # Add
-    $glyphCloudUpload = [char]0xE898  # CloudUpload
-    $glyphSettings    = [char]0xE713  # Settings
-
-    # Links: Add-Icon (einzeln)
-    $iconCreate = New-Object Windows.Controls.TextBlock
-    $iconCreate.Text = $glyphAdd
-    $iconCreate.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
-    $iconCreate.FontSize = 42
-    $iconCreate.Foreground = [System.Windows.Media.Brushes]::DodgerBlue
-    $iconCreate.HorizontalAlignment = 'Center'
-    $iconCreate.Margin = '0,6,0,8'
-
-    # Mitte: Add + CloudUpload nebeneinander
-    $iconCreateDeployWrap = New-Object Windows.Controls.StackPanel
-    $iconCreateDeployWrap.Orientation = 'Horizontal'
-    $iconCreateDeployWrap.HorizontalAlignment = 'Center'
-    $iconCreateDeployWrap.Margin = '0,6,0,8'
-
-    $iconCreateDeployAdd = New-Object Windows.Controls.TextBlock
-    $iconCreateDeployAdd.Text = $glyphAdd
-    $iconCreateDeployAdd.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
-    $iconCreateDeployAdd.FontSize = 36
-    $iconCreateDeployAdd.Foreground = [System.Windows.Media.Brushes]::DodgerBlue
-    $iconCreateDeployAdd.HorizontalAlignment = 'Center'
-    $iconCreateDeployAdd.Margin = '0,0,8,0'
-
-    $iconCreateDeployUpload = New-Object Windows.Controls.TextBlock
-    $iconCreateDeployUpload.Text = $glyphCloudUpload
-    $iconCreateDeployUpload.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
-    $iconCreateDeployUpload.FontSize = 36
-    $iconCreateDeployUpload.Foreground = [System.Windows.Media.Brushes]::DodgerBlue
-    $iconCreateDeployUpload.HorizontalAlignment = 'Center'
-
-    $null = $iconCreateDeployWrap.Children.Add($iconCreateDeployAdd)
-    $null = $iconCreateDeployWrap.Children.Add($iconCreateDeployUpload)
-
-    # Rechts: CloudUpload-Icon (einzeln)
-    $iconDeploy = New-Object Windows.Controls.TextBlock
-    $iconDeploy.Text = $glyphCloudUpload
-    $iconDeploy.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
-    $iconDeploy.FontSize = 42
-    $iconDeploy.Foreground = [System.Windows.Media.Brushes]::DodgerBlue
-    $iconDeploy.HorizontalAlignment = 'Center'
-    $iconDeploy.Margin = '0,6,0,8'
-    # ---------- ENDE ICONS ----------
-
-    # Kacheln erstellen
-    $tileCreate = New-OptionTile -Caption 'Create apps' `
-        -Description 'Create app packages in the file system.' `
-        -IconElement $iconCreate `
-        -ReturnValue 'CreateNew' `
-        -Width $TileWidth
-
-    $tileCreateDeploy = New-OptionTile -Caption 'Create and deploy apps' `
-        -Description 'Create app packages in the file system and deploy them to Intune.' `
-        -IconElement $iconCreateDeployWrap `
-        -ReturnValue 'CreateNewAndDeploy' `
-        -Width $TileWidth
-
-    $tileDeploy = New-OptionTile -Caption 'Deploy existing apps' `
-        -Description 'Deploy existing app packages to Intune.' `
-        -IconElement $iconDeploy `
-        -ReturnValue 'DeployExisting' `
-        -Width $TileWidth
-
-    # Rückgabewert direkt an den Kacheln speichern
-    $tileCreate.Tag        = 'CreateNew'
-    $tileCreateDeploy.Tag  = 'CreateNewAndDeploy'
-    $tileDeploy.Tag        = 'DeployExisting'
-
-    $null = $uniform.Children.Add($tileCreate)
-    $null = $uniform.Children.Add($tileCreateDeploy)
-    $null = $uniform.Children.Add($tileDeploy)
-
-    # --- ZENTRALER Klick-Handler: PreviewMouseLeftButtonUp am UniformGrid ---
-    # Greift, egal ob auf Icon, Text, leere Fläche oder Stack geklickt wird.
-    $uniform.Add_PreviewMouseLeftButtonUp({
-        param($s,$e)
-
-        # Ursprüngliches Ziel der Maus
-        $src = $e.OriginalSource
-
-        # Zum nächsten Border (Tile) nach oben laufen
-        $elem = $src
-        $borderFound = $null
-
-        while ($elem -ne $null -and $borderFound -eq $null) {
-            if ($elem -is [Windows.Controls.Border]) {
-                $borderFound = $elem
-            } else {
-                # Parent über FrameworkElement/VisualTree ermitteln
-                if ($elem -is [System.Windows.FrameworkElement] -and $elem.Parent -ne $null) {
-                    $elem = $elem.Parent
-                } else {
-                    $elem = [System.Windows.Media.VisualTreeHelper]::GetParent($elem)
-                }
-            }
-        }
-
-        if ($borderFound -ne $null -and $borderFound.Tag -ne $null -and [string]::IsNullOrWhiteSpace([string]$borderFound.Tag) -eq $false) {
-            $dlg.Tag = [string]$borderFound.Tag
-            $dlg.Close()
-        }
-    })
-
-    # --- Footer mit Zahnrad links & Cancel rechts ---
-    $footer = New-Object Windows.Controls.Grid
-    $footer.Margin = "0,14,0,0"
-    $colLeft = New-Object Windows.Controls.ColumnDefinition; $colLeft.Width = "Auto"
-    $colFill = New-Object Windows.Controls.ColumnDefinition; $colFill.Width = "*"
-    $colRight = New-Object Windows.Controls.ColumnDefinition; $colRight.Width = "Auto"
-    $null = $footer.ColumnDefinitions.Add($colLeft)
-    $null = $footer.ColumnDefinitions.Add($colFill)
-    $null = $footer.ColumnDefinitions.Add($colRight)
-
-    # Einstellungen links
-    $btnSettings = New-Object Windows.Controls.Button
-    $btnSettings.ToolTip = "Settings"
-    $btnSettings.Padding = "10,6"
-    $btnSettings.MinWidth = 40
-    $btnSettings.HorizontalAlignment = "Left"
-    $btnSettings.VerticalAlignment = "Center"
-    $settingsIcon = New-Object Windows.Controls.TextBlock
-    $settingsIcon.Text = $glyphSettings
-    $settingsIcon.FontFamily = New-Object System.Windows.Media.FontFamily 'Segoe MDL2 Assets'
-    $settingsIcon.FontSize = 18
-    $settingsIcon.Foreground = [System.Windows.Media.Brushes]::Gray
-    $btnSettings.Content = $settingsIcon
-    [Windows.Controls.Grid]::SetColumn($btnSettings, 0)
-    $null = $footer.Children.Add($btnSettings)
-
-    # Cancel rechts
-    $spClose = New-Object Windows.Controls.StackPanel
-    $spClose.Orientation = 'Horizontal'
-    $spClose.HorizontalAlignment = 'Right'
-    $btnClose = New-Object Windows.Controls.Button
-    $btnClose.Content = 'Cancel'
-    $btnClose.Padding = '14,6'
-    $btnClose.Margin = '0,0,0,0'
-    $btnClose.Add_Click({
-        $dlg.Tag = 'Cancel'
-        $dlg.Close()
-    })
-    $null = $spClose.Children.Add($btnClose)
-    [Windows.Controls.Grid]::SetColumn($spClose, 2)
-    $null = $footer.Children.Add($spClose)
-    [Windows.Controls.Grid]::SetRow($footer, 2)
-    $null = $root.Children.Add($footer)
-
-    # Click: Einstellungen öffnen (modal, zentriert)
-    $btnSettings.Add_Click({
         try {
-            $null = Edit-SettingsDialog -Owner $dlg -PreferredPaths @(                
-                (Join-Path $rootDir "Config\config.json")
-            )
-        } catch {
-            [System.Windows.MessageBox]::Show(("Error while opening the settings: {0}" -f $_.Exception.Message), "Settings", "OK", "Error") | Out-Null
+            if (Remove-PackageFolder -Path $folder -PacketRoot $PacketRoot) { $removed += $key }
+            else { $skipped += ("{0}: folder already gone" -f $key) }
         }
-    })
-
-    # Fensterinhalt setzen
-    $dlg.Content = $root
-
-    # Initiales Tag
-    $dlg.Tag = $null
-
-    # [X]-Schließen → 'Closed' setzen, falls noch kein Wert
-    $dlg.Add_Closing({
-        if ($dlg.Tag -eq $null -or [string]::IsNullOrWhiteSpace([string]$dlg.Tag)) {
-            $dlg.Tag = 'Closed'
-        }
-    })
-
-    # Anzeigen (ohne DialogResult) und Rückgabe
-    $null = $dlg.ShowDialog()
-    return $dlg.Tag
+        catch { $failed += ("{0}: {1}" -f $key, $_.Exception.Message) }
+    }
+    return [pscustomobject]@{ Removed = @($removed); Skipped = @($skipped); Failed = @($failed) }
 }
 
 function Open-EditDialog {
-    param (
-        [hashtable]$item,
+    <#
+        .SYNOPSIS
+        Bearbeitungsdialog fuer eine Definition aus Apps.csv.
+
+        .DESCRIPTION
+        Gibt die Werte als geordnetes Dictionary zurueck, bei Abbruch nichts.
+        Aufbau wie im SCCMAppHelper: oben die Fakten zur Zeile (nur lesen), darunter
+        die Felder in Gruppen, Beschriftung links und Feld rechts. Jedes Feld hat das
+        passende Steuerelement (Auswahlliste, Haken, mehrzeilig) und, wo es etwas zu
+        erklaeren gibt, einen Hinweis darunter. Jedes Steuerelement traegt als
+        AutomationId den Spaltennamen, damit der Dialog maschinell testbar ist.
+        OK prueft Name und Version, auch auf Doppelte (-Others), und bleibt bei einem
+        Fehler offen.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$item,
         [string]$title,
-        [string[]]$PropertyOrder
+        [string[]]$PropertyOrder,
+        # Nur lesende Fakten oberhalb der Felder (Paket, Vorlage, Intune, naechster Schritt)
+        [System.Collections.IDictionary]$Info,
+        # Die uebrigen Definitionen: Name + Version muessen eindeutig bleiben
+        $Others = @()
     )
 
-    Add-Type -AssemblyName PresentationFramework
+    Add-Type -AssemblyName PresentationCore      -ErrorAction SilentlyContinue | Out-Null
+    Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue | Out-Null
+
+    $keys = if ($PropertyOrder) { @($PropertyOrder) } else { @($item.Keys) }
+    $choices = Get-RequirementRuleChoices
+
+    # Gruppen und Reihenfolge; unbekannte (eigene) Spalten landen unter "Other".
+    $groups = [ordered]@{
+        'Application'  = @('DisplayName', 'Publisher', 'Version', 'PackageName')
+        'Source'       = @('ProgramID', 'WinGetParams', 'SingleMSI', 'MsiProductCode', 'logoURL')
+        'Installation' = @('InstallCmd', 'UninstallCmd', 'Interactive')
+        'Intune'       = @('Architecture', 'MinimumOS', 'ArpName')
+    }
+    $known = @($groups.Values | ForEach-Object { $_ })
+    $other = @($keys | Where-Object { $known -notcontains $_ })
+    if ($other.Count -gt 0) { $groups['Other'] = $other }
+
+    $comboValues = @{ Architecture = $choices.Architecture; MinimumOS = $choices.MinimumOS }
+    $checkText = @{
+        SingleMSI   = 'Zero-config MSI: the PSADT script is not customised (a package that only holds one MSI)'
+        Interactive = 'Show PSADT dialogs through ServiceUI'
+    }
+    $multiline = @('InstallCmd', 'UninstallCmd')
+    $hints = @{
+        Version        = 'LatestAvailable makes this a WinGet app: a thin wrapper that installs through winget on the device.'
+        PackageName    = 'Not used by the tool - the package name comes from DisplayName.'
+        ProgramID      = 'WinGet package id. Used only when Version is LatestAvailable.'
+        WinGetParams   = 'Extra winget arguments, e.g. "--scope=machine". Used only when Version is LatestAvailable.'
+        MsiProductCode = 'Detection by the MSI product code - native in Intune, version included. Empty: detection.ps1 is used.'
+        logoURL        = 'Empty: Logos\<DisplayName>.png if it exists, otherwise the default logo. Nothing is uploaded anywhere.'
+        InstallCmd     = 'PSADT code for the install section. Empty: derived from the installer in Files\ when the package is built.'
+        UninstallCmd   = 'PSADT code for the uninstall section. Empty: derived like the install command.'
+        Interactive    = 'Runs the setup AS SYSTEM IN THE USER SESSION. A setup that starts its app when it is done leaves it running as SYSTEM on the desktop. Leave off unless the package must show dialogs.'
+        Architecture   = 'Empty means x64.'
+        MinimumOS      = 'Empty means W10_20H2.'
+    }
 
     $window = New-Object Windows.Window
     $window.Title = $title
-    $window.Width = 900                     # breiter
-    $window.Height = 800
-    $window.SizeToContent = 'Height'        # Breite bleibt fix, Höhe passt sich an
+    $window.Width = 780
+    $window.MinWidth = 640
+    $window.SizeToContent = 'Height'
+    $window.MaxHeight = [Math]::Max(480, [System.Windows.SystemParameters]::WorkArea.Height - 40)
     $window.WindowStartupLocation = 'CenterScreen'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($window, 'EditDialog')
 
-    $scrollViewer = New-Object Windows.Controls.ScrollViewer
-    $scrollViewer.VerticalScrollBarVisibility = 'Auto'
-    $scrollViewer.HorizontalScrollBarVisibility = 'Disabled' # wir wollen Inhalte strecken statt horizontal scrollen
-    $scrollViewer.HorizontalAlignment = 'Stretch'
+    $dock = New-Object Windows.Controls.DockPanel
 
-    $stackPanel = New-Object Windows.Controls.StackPanel
-    $stackPanel.Margin = "10"
-    $stackPanel.Orientation = 'Vertical'
-    $stackPanel.HorizontalAlignment = 'Stretch'              # wichtig für Breitenübernahme
+    # --- unten: Fehler und Knoepfe (ausserhalb des Scrollbereichs, immer sichtbar) ---
+    $bottom = New-Object Windows.Controls.StackPanel
+    $bottom.Margin = '12,0,12,12'
+    [Windows.Controls.DockPanel]::SetDock($bottom, 'Bottom')
 
-    $textBoxes = [ordered]@{}
+    $errorText = New-Object Windows.Controls.TextBlock
+    $errorText.Foreground = [System.Windows.Media.Brushes]::Firebrick
+    $errorText.TextWrapping = 'Wrap'
+    $errorText.Margin = '0,6,0,6'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($errorText, 'Error')
+    $null = $bottom.Children.Add($errorText)
 
-    $keys = if ($PropertyOrder) { $PropertyOrder } else { $item.Keys }
+    $buttonBar = New-Object Windows.Controls.DockPanel
+    $null = $bottom.Children.Add($buttonBar)
 
-    foreach ($key in $keys) {
-        $label = New-Object Windows.Controls.Label
-        $label.Content = $key
-        $label.Margin = "0,0,0,2"
-        $label.HorizontalAlignment = 'Left'
-        [void]$stackPanel.Children.Add($label)
+    $newButton = {
+        param([string]$caption, [string]$id, [string]$tip, [string]$dock)
+        $button = New-Object Windows.Controls.Button
+        $button.Content = $caption
+        $button.Padding = '14,5'
+        $button.Margin = '0,0,8,0'
+        $button.ToolTip = $tip
+        [Windows.Automation.AutomationProperties]::SetAutomationId($button, $id)
+        [Windows.Controls.DockPanel]::SetDock($button, $dock)
+        $null = $buttonBar.Children.Add($button)
+        return $button
+    }
+    $okButton     = & $newButton 'OK'       'OK'        'Save the definition' 'Right'
+    $cancelButton = & $newButton 'Cancel'   'Cancel'    'Discard the changes' 'Right'
+    $wingetButton = & $newButton 'From WinGet...' 'FromWinGet' 'Search WinGet and fill in name, publisher, id and version' 'Left'
+    $msiButton    = & $newButton 'From MSI...'    'FromMsi'    'Read name, version, publisher and product code from an MSI file' 'Left'
+    $okButton.IsDefault = $true
+    $cancelButton.IsCancel = $true
+    $okButton.Margin = '8,0,0,0'
+    $cancelButton.Margin = '0'
+    $null = $dock.Children.Add($bottom)
 
-        $value = $item[$key]
-        $isMultiline = ($value -is [string]) -and ($value -match "`n")
-        if ($key -match "cmd") { $isMultiline = $true }
+    # --- Mitte: scrollbar ---
+    $scroll = New-Object Windows.Controls.ScrollViewer
+    $scroll.VerticalScrollBarVisibility = 'Auto'
+    $scroll.HorizontalScrollBarVisibility = 'Disabled'
+    $null = $dock.Children.Add($scroll)
 
-        $textBox = New-Object Windows.Controls.TextBox
-        $textBox.Text = $value
-        $textBox.Margin = "0,0,0,8"
-        $textBox.AcceptsReturn = $isMultiline
-        $textBox.TextWrapping = 'Wrap'
-        $textBox.HorizontalAlignment = 'Stretch'             # << streckt die TextBox in Fensterbreite
-        $textBox.MinWidth = 800                               # << sorgt für breite Felder
-        if ($isMultiline) {
-            $textBox.Height = 100
-            $textBox.VerticalScrollBarVisibility = 'Auto'
-        } else {
-            $textBox.Height = 30
+    $stack = New-Object Windows.Controls.StackPanel
+    $stack.Margin = '12'
+    $scroll.Content = $stack
+
+    # Fakten zur Zeile
+    if ($Info -and $Info.Count -gt 0) {
+        $infoBorder = New-Object Windows.Controls.Border
+        $infoBorder.Background = [System.Windows.Media.Brushes]::WhiteSmoke
+        $infoBorder.BorderBrush = [System.Windows.Media.Brushes]::LightGray
+        $infoBorder.BorderThickness = '1'
+        $infoBorder.CornerRadius = '4'
+        $infoBorder.Padding = '10,8'
+        $infoBorder.Margin = '0,0,0,10'
+        [Windows.Automation.AutomationProperties]::SetAutomationId($infoBorder, 'Info')
+
+        $infoGrid = New-Object Windows.Controls.Grid
+        $c1 = New-Object Windows.Controls.ColumnDefinition; $c1.Width = New-Object Windows.GridLength -ArgumentList 100
+        $c2 = New-Object Windows.Controls.ColumnDefinition; $c2.Width = New-Object Windows.GridLength -ArgumentList 1, ([Windows.GridUnitType]::Star)
+        $null = $infoGrid.ColumnDefinitions.Add($c1)
+        $null = $infoGrid.ColumnDefinitions.Add($c2)
+        $infoRow = 0
+        foreach ($infoKey in $Info.Keys) {
+            $rd = New-Object Windows.Controls.RowDefinition; $rd.Height = [Windows.GridLength]::Auto
+            $null = $infoGrid.RowDefinitions.Add($rd)
+            $infoLabel = New-Object Windows.Controls.TextBlock
+            $infoLabel.Text = $infoKey
+            $infoLabel.Foreground = [System.Windows.Media.Brushes]::DimGray
+            $infoLabel.Margin = '0,1,8,1'
+            [Windows.Controls.Grid]::SetRow($infoLabel, $infoRow)
+            $null = $infoGrid.Children.Add($infoLabel)
+            $infoValue = New-Object Windows.Controls.TextBox
+            $infoValue.Text = [string]$Info[$infoKey]
+            $infoValue.IsReadOnly = $true
+            $infoValue.BorderThickness = '0'
+            $infoValue.Background = [System.Windows.Media.Brushes]::Transparent
+            $infoValue.TextWrapping = 'Wrap'
+            $infoValue.Margin = '0,1,0,1'
+            [Windows.Automation.AutomationProperties]::SetAutomationId($infoValue, 'Info' + ($infoKey -replace '\W', ''))
+            [Windows.Controls.Grid]::SetRow($infoValue, $infoRow)
+            [Windows.Controls.Grid]::SetColumn($infoValue, 1)
+            $null = $infoGrid.Children.Add($infoValue)
+            $infoRow++
         }
-
-        [void]$stackPanel.Children.Add($textBox)
-        $textBoxes[$key] = $textBox
+        $infoBorder.Child = $infoGrid
+        $null = $stack.Children.Add($infoBorder)
     }
 
-    # --- Neue Buttons: WinGet und MSI ---
-    $wingetButton = New-Object Windows.Controls.Button
-    $wingetButton.Content = "WinGet"
-    $wingetButton.Width = 100
-    $wingetButton.Margin = "5"
+    # Felder: eine Gruppe = ein Kopf plus ein Grid mit Beschriftung links, Feld rechts
+    $controls = [ordered]@{}
+    $hintBlocks = @{}
+    foreach ($groupName in $groups.Keys) {
+        $groupKeys = @($groups[$groupName] | Where-Object { $keys -contains $_ })
+        if ($groupKeys.Count -eq 0) { continue }
 
-    $msiButton = New-Object Windows.Controls.Button
-    $msiButton.Content = "MSI"
-    $msiButton.Width = 100
-    $msiButton.Margin = "5"
+        $header = New-Object Windows.Controls.TextBlock
+        $header.Text = $groupName
+        $header.FontWeight = [Windows.FontWeights]::SemiBold
+        $header.FontSize = 14
+        $header.Margin = '0,8,0,4'
+        $null = $stack.Children.Add($header)
 
-    $wingetButton.Add_Click({        
-            $info = Show-WinGetSearchDialog
-            #$packName = $info.Name.Replace(" ","")
-            # Felder befüllen – flexible Zuordnung
-            Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('DisplayName') -Value $info.Name
-            #Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('PackageName') -Value $packName
-            Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('Version','ProductVersion') -Value "LatestAvailable"
-            Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('Publisher','Hersteller','Vendor','Company') -Value $info.Publisher
-            Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('ProgramID','Id','PackageIdentifier') -Value $info.Id
-            Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('cmd','InstallCmd','Command') -Value $info.InstallCmd
-            Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('WinGetParams') -Value '"--scope=machine"'
+        $fieldGrid = New-Object Windows.Controls.Grid
+        $lc = New-Object Windows.Controls.ColumnDefinition; $lc.Width = New-Object Windows.GridLength -ArgumentList 150
+        $vc = New-Object Windows.Controls.ColumnDefinition; $vc.Width = New-Object Windows.GridLength -ArgumentList 1, ([Windows.GridUnitType]::Star)
+        $null = $fieldGrid.ColumnDefinitions.Add($lc)
+        $null = $fieldGrid.ColumnDefinitions.Add($vc)
+        $rowIndex = 0
+
+        foreach ($key in $groupKeys) {
+            $rd = New-Object Windows.Controls.RowDefinition; $rd.Height = [Windows.GridLength]::Auto
+            $null = $fieldGrid.RowDefinitions.Add($rd)
+
+            $value = [string]$item[$key]
+            $isMulti = ($multiline -contains $key) -or ($value -match "`n")
+            $isCheck = $checkText.ContainsKey($key)
+            $isCombo = $comboValues.ContainsKey($key)
+
+            $label = New-Object Windows.Controls.Label
+            $label.Content = $key
+            $label.Margin = '0,0,8,4'
+            $label.VerticalAlignment = $(if ($isMulti) { 'Top' } else { 'Center' })
+            [Windows.Controls.Grid]::SetRow($label, $rowIndex)
+            $null = $fieldGrid.Children.Add($label)
+
+            if ($isCheck) {
+                $control = New-Object Windows.Controls.CheckBox
+                $control.Content = $checkText[$key]
+                $control.IsChecked = ($value.Trim() -ne '' -and $value -notmatch '^\s*(?i)(false|0|no|nein)\s*$')
+                $control.VerticalAlignment = 'Center'
+                $control.Margin = '0,5,0,4'
+            }
+            elseif ($isCombo) {
+                $control = New-Object Windows.Controls.ComboBox
+                $control.IsEditable = $true            # ein unbekannter Wert in einer alten Zeile ueberlebt das Ansehen
+                $control.ItemsSource = @($comboValues[$key])
+                $control.Text = $value
+                $control.Height = 26
+                $control.Margin = '0,0,0,4'
+            }
+            else {
+                $control = New-Object Windows.Controls.TextBox
+                $control.Text = $value
+                $control.TextWrapping = 'Wrap'
+                $control.VerticalContentAlignment = 'Center'
+                $control.Margin = '0,0,0,4'
+                if ($isMulti) { $control.AcceptsReturn = $true; $control.Height = 78; $control.VerticalScrollBarVisibility = 'Auto'; $control.VerticalContentAlignment = 'Top' }
+                else { $control.Height = 26 }
+            }
+            [Windows.Automation.AutomationProperties]::SetAutomationId($control, $key)
+            [Windows.Automation.AutomationProperties]::SetName($control, $key)
+            [Windows.Controls.Grid]::SetRow($control, $rowIndex)
+            [Windows.Controls.Grid]::SetColumn($control, 1)
+            $null = $fieldGrid.Children.Add($control)
+            $controls[$key] = $control
+            $rowIndex++
+
+            # Hinweis unter dem Feld (bei ArpName ein lebender Text, siehe unten)
+            if ($hints.ContainsKey($key) -or $key -eq 'ArpName') {
+                $rd2 = New-Object Windows.Controls.RowDefinition; $rd2.Height = [Windows.GridLength]::Auto
+                $null = $fieldGrid.RowDefinitions.Add($rd2)
+                $hint = New-Object Windows.Controls.TextBlock
+                $hint.Foreground = [System.Windows.Media.Brushes]::DimGray
+                $hint.TextWrapping = 'Wrap'
+                $hint.Margin = '2,0,0,8'
+                if ($hints.ContainsKey($key)) { $hint.Text = $hints[$key] }
+                [Windows.Automation.AutomationProperties]::SetAutomationId($hint, $key + 'Hint')
+                [Windows.Controls.Grid]::SetRow($hint, $rowIndex)
+                [Windows.Controls.Grid]::SetColumn($hint, 1)
+                $null = $fieldGrid.Children.Add($hint)
+                $hintBlocks[$key] = $hint
+                $rowIndex++
+            }
+        }
+        $null = $stack.Children.Add($fieldGrid)
+    }
+
+    $getValue = {
+        param([string]$key)
+        $c = $controls[$key]
+        if ($c -is [Windows.Controls.CheckBox]) { if ($c.IsChecked) { return 'true' } else { return '' } }
+        return [string]$c.Text
+    }
+    $setValue = {
+        param([string]$key, [string]$value)
+        if ([string]::IsNullOrWhiteSpace($value)) { return }
+        if (-not $controls.Contains($key)) { return }
+        $c = $controls[$key]
+        if ($c -is [Windows.Controls.CheckBox]) { $c.IsChecked = ($value -notmatch '^\s*(?i)(false|0|no|nein)\s*$') }
+        else { $c.Text = $value }
+    }
+
+    # WinGet-Felder gelten nur bei Version = LatestAvailable.
+    $syncWinGet = {
+        if (-not $controls.Contains('Version')) { return }
+        $isWinGet = (([string]$controls['Version'].Text).Trim() -eq 'LatestAvailable')
+        foreach ($k in 'ProgramID', 'WinGetParams') { if ($controls.Contains($k)) { $controls[$k].IsEnabled = $isWinGet } }
+    }
+    if ($controls.Contains('Version')) { $controls['Version'].Add_TextChanged($syncWinGet) }
+    & $syncWinGet
+
+    # Der Suchname der Programmliste - wie ihn Erkennung und Deinstallation benutzen.
+    $syncArp = {
+        if (-not $hintBlocks.ContainsKey('ArpName')) { return }
+        $name = ''; $arp = ''
+        if ($controls.Contains('DisplayName')) { $name = [string]$controls['DisplayName'].Text }
+        if ($controls.Contains('ArpName'))     { $arp  = [string]$controls['ArpName'].Text }
+        $search = Get-ArpSearchName -DisplayName $name -ArpName $arp
+        $hintBlocks['ArpName'].Text = ("Detection and uninstall look for programs whose name STARTS WITH '{0}'. Empty ArpName = DisplayName. Set it when the entry in Apps & features is named differently, or to be more precise - the uninstall removes every match." -f $search)
+    }
+    foreach ($k in 'DisplayName', 'ArpName') { if ($controls.Contains($k)) { $controls[$k].Add_TextChanged($syncArp) } }
+    & $syncArp
+
+    # --- Vorbelegung aus WinGet / MSI (verhalten wie bisher) ---
+    $wingetButton.Add_Click({
+        try {
+            $found = Show-WinGetSearchDialog
+            if ($found) {
+                & $setValue 'DisplayName' ([string]$found.Name)
+                & $setValue 'Version' 'LatestAvailable'
+                & $setValue 'Publisher' ([string]$found.Publisher)
+                & $setValue 'ProgramID' ([string]$found.Id)
+                & $setValue 'InstallCmd' ([string]$found.InstallCmd)
+                & $setValue 'WinGetParams' '"--scope=machine"'
+            }
+        }
+        catch { $errorText.Text = ("WinGet search failed: {0}" -f $_.Exception.Message) }
     })
-
     $msiButton.Add_Click({
         try {
-            Add-Type -AssemblyName PresentationFramework
-            $ofd = New-Object Microsoft.Win32.OpenFileDialog
-            $ofd.Title  = "Select MSI"
-            $ofd.Filter = "MSI files (*.msi)|*.msi|All files (*.*)|*.*"
-            $ofd.Multiselect = $false
-            $ok = $ofd.ShowDialog()
-            if ($ok -eq $true -and $ofd.FileName) {
-                $props = Get-MsiProperties -Path $ofd.FileName
-                #$packName = $props.ProductName.Replace(" ","")
-                # Name / Display
-                #Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('PackageName') -Value $packName
-                Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('Display','DisplayName','Name','App','AppName','ProductName') -Value $props.ProductName
-                # Version / Publisher
-                Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('Version','ProductVersion') -Value $props.ProductVersion
-                Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('Publisher','Hersteller','Vendor','Company') -Value $props.Manufacturer
-                # ProductCode (eigene Spalte, wenn vorhanden)
-                Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('ProductCode','MsiProductCode') -Value $props.ProductCode
-                Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('SingleMSI') -Value "true"
-                # Install- & Uninstall-Command
-                $msiInstall = 'msiexec /i "{0}" /qn' -f $ofd.FileName
-                #Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('cmd','InstallCmd','Command') -Value $msiInstall
-
-                if ($props.ProductCode) {
-                    $msiUninstall = 'msiexec /x {0} /qn' -f $props.ProductCode  # /x = Uninstall, /qn = quiet
-                    #Set-IfPresent -TextBoxes $textBoxes -CandidateKeys @('Uninstall','UninstallCmd','RemoveCmd') -Value $msiUninstall
-                }
+            $dialog = New-Object Microsoft.Win32.OpenFileDialog
+            $dialog.Title  = 'Select MSI'
+            $dialog.Filter = 'MSI files (*.msi)|*.msi|All files (*.*)|*.*'
+            $dialog.Multiselect = $false
+            if ($dialog.ShowDialog() -eq $true -and $dialog.FileName) {
+                $props = Get-MsiProperties -Path $dialog.FileName
+                & $setValue 'DisplayName' ([string]$props.ProductName)
+                & $setValue 'Version' ([string]$props.ProductVersion)
+                & $setValue 'Publisher' ([string]$props.Manufacturer)
+                & $setValue 'MsiProductCode' ([string]$props.ProductCode)
+                & $setValue 'SingleMSI' 'true'
             }
-        } catch { }
+        }
+        catch { $errorText.Text = ("Reading the MSI failed: {0}" -f $_.Exception.Message) }
     })
 
-    # OK/Cancel
-    $okButton = New-Object Windows.Controls.Button
-    $okButton.Content = "OK"
-    $okButton.Width = 100
-    $okButton.Margin = "5"
-    $okButton.Add_Click({ $window.DialogResult = $true })
+    # --- OK: pruefen, bei Fehler offen bleiben ---
+    $okButton.Add_Click({
+        $values = [ordered]@{}
+        foreach ($k in $keys) { $values[$k] = (& $getValue $k) }
+        $problem = Test-AppRecord -Record ([pscustomobject]$values) -Others $Others
+        if ($problem) {
+            $errorText.Text = $problem
+            return
+        }
+        $window.DialogResult = $true
+    })
 
-    $cancelButton = New-Object Windows.Controls.Button
-    $cancelButton.Content = "Cancel"
-    $cancelButton.Width = 100
-    $cancelButton.Margin = "5"
-    $cancelButton.Add_Click({ $window.DialogResult = $false })
-
-    $buttonPanel = New-Object Windows.Controls.StackPanel
-    $buttonPanel.Orientation = 'Horizontal'
-    $buttonPanel.HorizontalAlignment = 'Right'
-
-    # Reihenfolge: WinGet | MSI | OK | Cancel  (WinGet/MSI links neben OK)
-    [void]$buttonPanel.Children.Add($wingetButton)
-    [void]$buttonPanel.Children.Add($msiButton)
-    [void]$buttonPanel.Children.Add($okButton)
-    [void]$buttonPanel.Children.Add($cancelButton)
-
-    [void]$stackPanel.Children.Add($buttonPanel)
-    $scrollViewer.Content = $stackPanel
-    $window.Content = $scrollViewer
-
+    $window.Content = $dock
     $result = $window.ShowDialog()
 
     if ($result -eq $true) {
         $newItem = [ordered]@{}
-        foreach ($key in $keys) { $newItem[$key] = $textBoxes[$key].Text }
+        foreach ($k in $keys) { $newItem[$k] = (& $getValue $k) }
         return $newItem
     }
 }
@@ -2081,307 +2874,6 @@ function Show-WinGetSearchDialog {
         $selectedApp | Add-Member -NotePropertyName Publisher -NotePropertyValue $publisher
     }
     return $selectedApp
-}
-
-# --- Hilfsfunktion: Wert in vorhandene Textbox schreiben (wenn Key existiert) ---
-function Set-IfPresent {
-    param(
-        [Parameter(Mandatory=$true)][hashtable]$TextBoxes,
-        [Parameter(Mandatory=$true)][string[]]$CandidateKeys,
-        [Parameter()][string]$Value
-    )
-    if ([string]::IsNullOrWhiteSpace($Value)) { return }
-    foreach ($k in $CandidateKeys) {
-        if ($TextBoxes.Contains($k)) {
-            $TextBoxes[$k].Text = $Value
-            break
-        }
-    }
-}
-
-function Open-SelectDialogWithEdit {
-    param (
-        [string]$CsvPath,
-        [string]$title = "Selection",
-        [ValidateSet("small", "medium", "large")]
-        [string]$size = "medium"
-    )
-
-    Add-Type -AssemblyName PresentationFramework | Out-Null
-
-    function Save-Data {
-        param (
-            [System.Collections.IEnumerable]$data,
-            [string[]]$columnOrder
-        )
-        $exportData = $data | Select-Object -Property $columnOrder
-        $exportData | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8 -Delimiter ";"
-    }
-
-    # Initiales Laden + Sortieren + Speichern
-    $data = Import-Csv -Path $CsvPath -Delimiter ";" |
-    ForEach-Object {
-        $obj = $_ | Select-Object *
-        $obj | Add-Member -MemberType NoteProperty -Name __InternalId -Value ([guid]::NewGuid().ToString())
-        $obj
-    }
-
-    # Sortieren nach DisplayName, falls vorhanden
-    if ("DisplayName" -in $data[0].PSObject.Properties.Name) {
-        $data = $data | Sort-Object DisplayName
-    }
-
-    # CSV sofort neu schreiben (ohne __InternalId)
-    $exportData = $data | Select-Object -Property ($data[0].PSObject.Properties.Name | Where-Object { $_ -ne "__InternalId" })
-    $exportData | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8 -Delimiter ";"
-
-    # Grid vollständig neu laden
-    function Load-Data {
-        Import-Csv -Path $CsvPath -Delimiter ";" |
-        ForEach-Object {
-            $obj = $_ | Select-Object *
-            $obj | Add-Member -MemberType NoteProperty -Name __InternalId -Value ([guid]::NewGuid().ToString())
-            $obj
-        }
-    }
-
-    $data = Load-Data
-
-    # Fenster
-    $window = New-Object Windows.Window
-    $window.Title = $title
-    switch ($size) {
-        "small"  { $window.Width = 500;  $window.Height = 400 }
-        "medium" { $window.Width = 800;  $window.Height = 600 }
-        "large"  { $window.Width = 2048; $window.Height = 768 }
-    }
-    $window.WindowStartupLocation = "CenterScreen"
-    $window.ResizeMode = 'CanResize'
-
-    # DataGrid
-    $dataGrid = New-Object Windows.Controls.DataGrid
-    $dataGrid.AutoGenerateColumns = $false
-    $dataGrid.CanUserSortColumns = $true
-    $dataGrid.SelectionMode = 'Extended'
-    $dataGrid.SelectionUnit = 'FullRow'
-
-    $firstItem   = $data | Select-Object -First 1
-    $columnOrder = $firstItem.PSObject.Properties.Name | Where-Object { $_ -ne "__InternalId" }
-
-    foreach ($property in $columnOrder) {
-        $column = New-Object Windows.Controls.DataGridTextColumn
-        $column.Header  = $property
-        $column.Binding = New-Object Windows.Data.Binding($property)
-        $column.CanUserSort = $true
-        [void]$dataGrid.Columns.Add($column)
-    }
-
-    function Refresh-Grid {
-        $data = Load-Data
-        $dataGrid.ItemsSource = $null
-        $dataGrid.ItemsSource = $data
-    }
-    Refresh-Grid
-
-    # Buttons
-    $okButton = New-Object Windows.Controls.Button
-    $okButton.Content = "OK"
-    $okButton.Width   = 100
-    $okButton.Margin  = "5"
-    $okButton.IsDefault = $true
-
-    $cancelButton = New-Object Windows.Controls.Button
-    $cancelButton.Content = "Cancel"
-    $cancelButton.Width   = 100
-    $cancelButton.Margin  = "5"
-    $cancelButton.IsCancel = $true
-
-    $editButton = New-Object Windows.Controls.Button
-    $editButton.Content = "Edit"
-    $editButton.Width   = 100
-    $editButton.Margin  = "5"
-
-    $newButton = New-Object Windows.Controls.Button
-    $newButton.Content = "New"
-    $newButton.Width   = 100
-    $newButton.Margin  = "5"
-
-    $duplicateButton = New-Object Windows.Controls.Button
-    $duplicateButton.Content = "Duplicate"
-    $duplicateButton.Width   = 100
-    $duplicateButton.Margin  = "5"
-
-    $deleteButton = New-Object Windows.Controls.Button
-    $deleteButton.Content = "Delete"
-    $deleteButton.Width   = 100
-    $deleteButton.Margin  = "5"
-
-    # --- Ereignisse (ohne DialogResult) ---
-    $okButton.Add_Click({
-        # Auswahl einsammeln
-        $selection = @()
-        foreach ($item in $dataGrid.SelectedItems) {
-            if ($item -isnot [int]) {
-                $selection += $item
-            }
-        }
-        # Ergebnis im Tag ablegen
-        $window.Tag = [pscustomobject]@{
-            Result    = 'Ok'
-            Selection = $selection
-        }
-        $window.Close()
-    })
-
-    $cancelButton.Add_Click({
-        $window.Tag = [pscustomobject]@{
-            Result    = 'Cancel'
-            Selection = @()
-        }
-        $window.Close()
-    })
-
-    $editButton.Add_Click({
-        if ($dataGrid.SelectedItem) {
-            $selected = $dataGrid.SelectedItem
-            $hash = @{}
-            foreach ($prop in $columnOrder) { $hash[$prop] = $selected.$prop }
-
-            $edited = Open-EditDialog -item $hash -title "Edit entry" -PropertyOrder $columnOrder
-            $edited = $edited | Where-Object { $_ -isnot [int] }
-
-            if ($edited) {
-                foreach ($key in $edited.Keys) {
-                    $selected.$key = $edited[$key]
-                }
-                Save-Data -data $dataGrid.ItemsSource -columnOrder $columnOrder
-                Refresh-Grid
-            }
-        }
-    })
-
-    $newButton.Add_Click({
-        $template = [ordered]@{}
-        foreach ($property in $columnOrder) { $template[$property] = "" }
-
-        $newItem = Open-EditDialog -item $template -title "Add new entry" -PropertyOrder $columnOrder
-        $newItem = $newItem | Where-Object { $_ -isnot [int] }
-
-        if ($newItem) {
-            $newObject = New-Object PSObject
-            foreach ($key in $newItem.Keys) {
-                $newObject | Add-Member -MemberType NoteProperty -Name $key -Value $newItem[$key]
-            }
-            $newObject | Add-Member -MemberType NoteProperty -Name __InternalId -Value ([guid]::NewGuid().ToString())
-
-            $data = @($dataGrid.ItemsSource) + $newObject
-            Save-Data -data $data -columnOrder $columnOrder
-            Refresh-Grid
-        }
-    })
-
-    $duplicateButton.Add_Click({
-        if ($dataGrid.SelectedItem) {
-            $selected = $dataGrid.SelectedItem
-            $hash = @{}
-            foreach ($prop in $columnOrder) { $hash[$prop] = $selected.$prop }
-
-            $duplicated = Open-EditDialog -item $hash -title "Edit duplicate entry" -PropertyOrder $columnOrder
-            $duplicated = $duplicated | Where-Object { $_ -isnot [int] }
-
-            if ($duplicated) {
-                $newObject = New-Object PSObject
-                foreach ($key in $duplicated.Keys) {
-                    $newObject | Add-Member -MemberType NoteProperty -Name $key -Value $duplicated[$key]
-                }
-                $newObject | Add-Member -MemberType NoteProperty -Name __InternalId -Value ([guid]::NewGuid().ToString())
-
-                $data = @($dataGrid.ItemsSource) + $newObject
-                Save-Data -data $data -columnOrder $columnOrder
-                Refresh-Grid
-            }
-        }
-    })
-
-    $deleteButton.Add_Click({
-        $selectedItems = $dataGrid.SelectedItems
-        if ($selectedItems.Count -gt 0) {
-            $confirm = [System.Windows.MessageBox]::Show("Möchtest du die ausgewählten Einträge wirklich löschen?", "Löschen bestätigen", "YesNo", "Warning")
-            if ($confirm -eq "Yes") {
-                $idsToDelete = $selectedItems | ForEach-Object { $_.__InternalId }
-                $data = @($dataGrid.ItemsSource) | Where-Object { $_.__InternalId -notin $idsToDelete }
-                Save-Data -data $data -columnOrder $columnOrder
-                Refresh-Grid
-            } else {
-                Write-Host "Löschvorgang abgebrochen."
-            }
-        } else {
-            [System.Windows.MessageBox]::Show("Keine Einträge ausgewählt zum Löschen.", "Hinweis", "OK", "Information") | Out-Null
-        }
-    })
-
-    # Button-Panel
-    $buttonPanel = New-Object Windows.Controls.StackPanel
-    $buttonPanel.Orientation = 'Horizontal'
-    $buttonPanel.HorizontalAlignment = 'Right'
-    $buttonPanel.Margin = "10"
-    [void]$buttonPanel.Children.Add($newButton)
-    [void]$buttonPanel.Children.Add($duplicateButton)
-    [void]$buttonPanel.Children.Add($editButton)
-    [void]$buttonPanel.Children.Add($deleteButton)
-    [void]$buttonPanel.Children.Add($okButton)
-    [void]$buttonPanel.Children.Add($cancelButton)
-
-    # Grid-Layout
-    $grid = New-Object Windows.Controls.Grid
-    [void]$grid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition)) # Filter (nicht genutzt)
-    [void]$grid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition)) # Grid
-    [void]$grid.RowDefinitions.Add((New-Object Windows.Controls.RowDefinition)) # Buttons
-    $grid.RowDefinitions[0].Height = [Windows.GridLength]::Auto
-    $grid.RowDefinitions[2].Height = [Windows.GridLength]::Auto
-
-    [void]$grid.Children.Add($dataGrid)
-    [Windows.Controls.Grid]::SetRow($dataGrid, 1)
-
-    $footerGrid = New-Object Windows.Controls.Grid
-    $footerGrid.Margin = "10"
-    $colLeft = New-Object Windows.Controls.ColumnDefinition; $colLeft.Width = "Auto"
-    $colFill = New-Object Windows.Controls.ColumnDefinition; $colFill.Width = "*"
-    $colRight = New-Object Windows.Controls.ColumnDefinition; $colRight.Width = "Auto"
-    [void]$footerGrid.ColumnDefinitions.Add($colLeft)
-    [void]$footerGrid.ColumnDefinitions.Add($colFill)
-    [void]$footerGrid.ColumnDefinitions.Add($colRight)
-
-#    [Windows.Controls.Grid]::SetColumn($settingsButton, 0)
-#    [void]$footerGrid.Children.Add($settingsButton)
-
-    [Windows.Controls.Grid]::SetColumn($buttonPanel, 2)
-    [void]$footerGrid.Children.Add($buttonPanel)
-
-    [void]$grid.Children.Add($footerGrid)
-    [Windows.Controls.Grid]::SetRow($footerGrid, 2)
-
-    $window.Content = $grid
-
-    # [X]-Schließen: falls nichts gesetzt, auf Closed stellen (leere Auswahl)
-    $window.Add_Closing({
-        if ($window.Tag -eq $null) {
-            $window.Tag = [pscustomobject]@{
-                Result    = 'Closed'
-                Selection = @()
-            }
-        }
-    })
-
-    # --- WICHTIG: Dialog anzeigen ---
-    $null = $window.ShowDialog()
-
-    # Rückgabe: Bei OK → Auswahl; bei Cancel/Closed → leeres Array
-    if ($window.Tag -ne $null -and $window.Tag.Result -eq 'Ok') {
-        return $window.Tag.Selection
-    } else {
-        return @()
-    }
 }
 
 function Open-SelectDialog {
