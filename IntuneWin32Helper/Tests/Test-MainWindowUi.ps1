@@ -58,6 +58,47 @@ if ($Child) {
         exit 0
     }
 
+    # Szenario "confirm-<Tasten>-<Standard>": die Rueckfrage allein (Show-ConfirmDialog).
+    if ($Scenario -like 'confirm-*') {
+        $parts = $Scenario -split '-'
+        # Nach einer Sekunde festhalten, welcher Knopf Standardknopf ist und welcher den Fokus hat. Per
+        # UI Automation geht das nicht: ein Fenster, das nicht im Vordergrund liegt, bekommt keinen
+        # Tastaturfokus (HasKeyboardFocus bleibt False), der logische Fokus aber wird gesetzt.
+        Add-Type -AssemblyName WindowsBase, PresentationCore, PresentationFramework
+        $focusPath = $ResultPath + '.focus'
+        $timer = New-Object System.Windows.Threading.DispatcherTimer
+        $timer.Interval = [TimeSpan]::FromMilliseconds(1000)
+        $timer.Add_Tick({
+            $timer.Stop()
+            $snapshot = @()
+            foreach ($source in [System.Windows.PresentationSource]::CurrentSources) {
+                $win = $source.RootVisual
+                if ($win -isnot [System.Windows.Window]) { continue }
+                $focusedElement = [System.Windows.Input.FocusManager]::GetFocusedElement($win)
+                $snapshot = [pscustomobject]@{
+                    Focused = $(if ($focusedElement) { [System.Windows.Automation.AutomationProperties]::GetAutomationId($focusedElement) } else { '' })
+                    Default = @(foreach ($name in 'Yes', 'No', 'Cancel', 'OK') {
+                        $b = $null
+                        $stack = New-Object System.Collections.Stack
+                        $stack.Push($win.Content)
+                        while ($stack.Count -gt 0 -and -not $b) {
+                            $node = $stack.Pop()
+                            if ($node -is [System.Windows.Controls.Button] -and [System.Windows.Automation.AutomationProperties]::GetAutomationId($node) -eq "Confirm$name") { $b = $node }
+                            elseif ($node -is [System.Windows.Controls.Panel]) { foreach ($ch in $node.Children) { $stack.Push($ch) } }
+                            elseif ($node -is [System.Windows.Controls.ContentControl] -and $node.Content -is [System.Windows.UIElement]) { $stack.Push($node.Content) }
+                        }
+                        if ($b -and $b.IsDefault) { "Confirm$name" }
+                    })
+                }
+            }
+            [System.IO.File]::WriteAllText($focusPath, ($snapshot | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding $false))
+        })
+        $timer.Start()
+        $answer = Show-ConfirmDialog -Text "Delete the app?`nLine two of the question." -Title 'Confirm test' -Buttons $parts[1] -Default $parts[2] -Icon Warning
+        [System.IO.File]::WriteAllText($ResultPath, ([pscustomobject]@{ Answer = $answer } | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding $false))
+        exit 0
+    }
+
     # Szenario "loop": die ECHTE Start-InventoryLoop, offline (kein Tenant), gegen
     # eine Wegwerf-Kopie der Konfiguration und die echte Apps.csv. Dass die
     # Schleife das Fenster nach Refresh erneut zeigt und bei Close endet, steht
@@ -394,6 +435,55 @@ try {
     $r = Wait-ChildResult $c
     Test-That 'editcancel: the dialog returned a result' ($null -ne $r)
     if ($r) { Test-That 'editcancel: Cancel returns nothing' ($r.Cancelled -eq $true) "cancelled: $($r.Cancelled)" }
+
+    # ---- Szenario 2b: die Rueckfrage laesst sich anklicken ------------------------
+    # Jeder Fall: Tasten, Standardtaste, was getan wird (Klick auf einen Knopf oder Fenster schliessen),
+    # erwartete Antwort. Geschlossen wird immer mit der SICHEREN Antwort beantwortet, nie mit Yes.
+    $confirmCases = @(
+        @{ Buttons = 'YesNo';       Default = 'No';     Do = 'ConfirmYes';    Expect = 'Yes';    Absent = @('ConfirmCancel', 'ConfirmOK') },
+        @{ Buttons = 'YesNo';       Default = 'No';     Do = 'ConfirmNo';     Expect = 'No';     Absent = @('ConfirmCancel', 'ConfirmOK') },
+        @{ Buttons = 'YesNo';       Default = 'No';     Do = 'close';         Expect = 'No';     Absent = @() },
+        @{ Buttons = 'YesNoCancel'; Default = 'Yes';    Do = 'ConfirmNo';     Expect = 'No';     Absent = @('ConfirmOK') },
+        @{ Buttons = 'YesNoCancel'; Default = 'Yes';    Do = 'ConfirmCancel'; Expect = 'Cancel'; Absent = @('ConfirmOK') },
+        @{ Buttons = 'YesNoCancel'; Default = 'Yes';    Do = 'close';         Expect = 'Cancel'; Absent = @() },
+        @{ Buttons = 'OK';          Default = 'OK';     Do = 'ConfirmOK';     Expect = 'OK';     Absent = @('ConfirmYes', 'ConfirmNo', 'ConfirmCancel') }
+    )
+    foreach ($case in $confirmCases) {
+        $label = "confirm $($case.Buttons)/default $($case.Default)/$($case.Do)"
+        $c = Start-Child ("confirm-{0}-{1}" -f $case.Buttons, $case.Default)
+        $dlg = Wait-UiaWindow -ProcessId $c.Process.Id -AutomationId 'ConfirmDialog' -TimeoutSeconds 60
+        Test-That "$label : the question appears" ($null -ne $dlg)
+        if ($dlg) {
+            $shown = Find-UiaElement -Root $dlg -AutomationId 'ConfirmText' -TimeoutSeconds 5
+            Test-That "$label : the question text is shown" ($shown -and $shown.Current.Name -like 'Delete the app?*') "name: $(if ($shown) { $shown.Current.Name })"
+            foreach ($absent in $case.Absent) {
+                Test-That "$label : no button $absent" ($null -eq (Find-UiaElement -Root $dlg -AutomationId $absent -TimeoutSeconds 1))
+            }
+            $defaultButton = Find-UiaElement -Root $dlg -AutomationId ("Confirm" + $case.Default) -TimeoutSeconds 5
+            Test-That "$label : the default button exists" ($null -ne $defaultButton)
+            if ($defaultButton) {
+                # Standardknopf und Fokus: vom Kindprozess festgehalten (siehe dort).
+                $snapshotFile = $c.ResultFile + '.focus'
+                foreach ($i in 1..30) { if (Test-Path -LiteralPath $snapshotFile) { break }; Start-Sleep -Milliseconds 150 }
+                $snapshot = $null
+                if (Test-Path -LiteralPath $snapshotFile) { $snapshot = Get-Content -LiteralPath $snapshotFile -Raw | ConvertFrom-Json }
+                Test-That "$label : the state of the question was recorded" ($null -ne $snapshot)
+                if ($snapshot) {
+                    Test-That "$label : exactly $($case.Default) is the default button" ((@($snapshot.Default) -join ',') -eq ("Confirm" + $case.Default)) "default: $(@($snapshot.Default) -join ',')"
+                    Test-That "$label : the focus is on $($case.Default)" ($snapshot.Focused -eq ("Confirm" + $case.Default)) "focus: $($snapshot.Focused)"
+                }
+            }
+            if ($case.Do -eq 'close') {
+                $dlg.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern).Close()
+            }
+            else {
+                Invoke-UiaElement -Element (Find-UiaElement -Root $dlg -AutomationId $case.Do -TimeoutSeconds 5)
+            }
+        }
+        $r = Wait-ChildResult $c
+        Test-That "$label : the question returned an answer" ($null -ne $r)
+        if ($r) { Test-That "$label : the answer is $($case.Expect)" ($r.Answer -eq $case.Expect) "was '$($r.Answer)'" }
+    }
 
     # ---- Szenario 3: Close gibt Cancel zurueck --------------------------------
     $c = Start-Child 'close'

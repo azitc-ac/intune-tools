@@ -1450,7 +1450,7 @@ if ($functionsFile) {
     }
 
     # Die Rueckfrage hat die Standardantwort Nein (einfache Anfuehrungszeichen: $Buttons soll woertlich gesucht werden).
-    $askDefaultNo = '''Warning'',\s*\$\(if \(\$Buttons -eq ''YesNo''\) \{ ''No'' \}'
+    $askDefaultNo = 'Show-ConfirmDialog[^\r\n]*-Default \$\(if \(\$Buttons -eq ''YesNo''\) \{ ''No'' \}'
 
     $order = {
         param($fnAst, [string[]]$names, [string]$label)

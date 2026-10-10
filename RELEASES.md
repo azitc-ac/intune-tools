@@ -483,7 +483,7 @@ ausdrückliche Freigabe des Inhabers und eine Test-App, nicht eine produktive):
       `Deployment summary: 1 succeeded`; im Portal genau eine App mit neuer Id und Inhalt.
 - [ ] **Zuweisungszahl** in der Rückfrage gegen eine App mit bekannter Zuweisung.
 - [ ] **Dubletten bereinigen** mit Retire (Test-Tenant mit zwei gleichen Apps).
-- [ ] **Die Rückfrage** ist ein Win32-`MessageBox`; per UI Automation nicht bedient. Geprüft ist,
+- [x] **Die Rückfrage** ist seit 2026-10-10 ein eigenes Fenster (`Show-ConfirmDialog`), das per UI Automation geklickt wird (`Test-MainWindowUi.ps1`: Tasten, Standardknopf, Fokus, Schließen = sichere Antwort). Vorher geprüft war,
       welcher Text und welche Tasten übergeben werden, und dass die Vorgabe Nein ist (Prüfung 35).
 ## Offene Feldprüfung: Deploy-Plan statt blindem Anlegen (Stufe 3, 2026-10-10)
 
@@ -531,7 +531,7 @@ Paket steht einmal als `Package, template outdated` da und wird beim nächsten D
       Lauf ist die Zuweisung noch da, `committedContentVersion` ist gestiegen, Erkennungsregel
       unverändert. Erst das belegt, dass „Zuweisungen bleiben" stimmt.
 - [ ] **Erneuern vorhandener Pakete** (`template outdated` → Deploy) mit dem neuen Template.
-- [ ] **Der Fragedialog** ist ein Win32-`MessageBox` und per UI Automation nicht bedient worden;
+- [x] **Der Fragedialog** ist seit 2026-10-10 `Show-ConfirmDialog` und per UI Automation bedient (Antworten Yes/No/Cancel, Schließen = Cancel); vorher war er ein `MessageBox`:
       geprüft ist, welcher Text und welche Tasten übergeben werden, nicht, wie er aussieht.
 - [ ] **Zwei Versionen derselben App** in einem Tenant: `yes` für beide, kein „Dubletten"-Hinweis.
 ## Offene Feldprüfung: Bearbeiten-Dialog und verwaiste Ordner (Stufe 2, 2026-10-09)
