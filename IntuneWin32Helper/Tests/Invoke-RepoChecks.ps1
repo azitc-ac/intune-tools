@@ -1501,6 +1501,52 @@ if ($functionsFile) {
     }
 }
 # ---------------------------------------------------------------------------
+# 36) Keine pauschalen Wartezeiten und keine Schnellabfrage, die langsam ist (Messung 2026-10-11):
+#       - Build-AppPackage wartete pauschal 5 s auf die Vorlage (15 s bei drei Paketen). Ein
+#         Start-Sleep ausserhalb einer Schleife (Warten AUF ETWAS) ist dort nicht erlaubt;
+#       - Get-InstalledModule (2,9 s) steht nur noch in check-prereqs als Rueckfall, nirgends sonst,
+#         und check-prereqs bricht bei gesetztem Merker $global:IntuneWin32HelperPrereqsChecked ab
+#         (sonst prueft jedes deploy.ps1 noch einmal).
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $fn36 = { param($name) $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | Where-Object { $_.Name -eq $name } | Select-Object -First 1 }
+
+    $build36 = & $fn36 'Build-AppPackage'
+    if (-not $build36) { Add-Failure "NoFixedWaits" "Build-AppPackage fehlt" }
+    else {
+        $sleeps = $build36.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Start-Sleep' }, $true)
+        foreach ($s in $sleeps) {
+            $parent = $s.Parent; $inLoop = $false
+            while ($parent -and $parent -ne $build36) {
+                if ($parent -is [System.Management.Automation.Language.LoopStatementAst]) { $inLoop = $true; break }
+                $parent = $parent.Parent
+            }
+            if (-not $inLoop) {
+                Add-Failure "NoFixedWaits" ("functions.ps1:{0} Build-AppPackage wartet pauschal (Start-Sleep ausserhalb einer Schleife) - auf die Dateien warten, die gebraucht werden" -f $s.Extent.StartLineNumber)
+            }
+        }
+    }
+
+    foreach ($c in $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Get-InstalledModule' }, $true)) {
+        $owner = & $enclosingFunction $c
+        if ($owner -ne 'check-prereqs') {
+            Add-Failure "NoFixedWaits" ("functions.ps1:{0} Get-InstalledModule in '{1}' - die Abfrage ist langsam (2,9 s); nur als Rueckfall in check-prereqs" -f $c.Extent.StartLineNumber, $owner)
+        }
+    }
+    $pre36 = & $fn36 'check-prereqs'
+    if (-not $pre36) { Add-Failure "NoFixedWaits" "check-prereqs fehlt" }
+    else {
+        if ($pre36.Extent.Text -notmatch 'if \(\$global:IntuneWin32HelperPrereqsChecked\) \{ return \}') {
+            Add-Failure "NoFixedWaits" "check-prereqs beginnt nicht mit "if ($global:IntuneWin32HelperPrereqsChecked) { return }" - jedes deploy.ps1 prueft die Module erneut"
+        }
+        $fast = $pre36.Extent.Text.IndexOf('Test-ModuleFolderPresent'); $slow = $pre36.Extent.Text.IndexOf('Get-InstalledModule')
+        if ($fast -lt 0 -or ($slow -ge 0 -and $slow -lt $fast)) {
+            Add-Failure "NoFixedWaits" "check-prereqs fragt Get-InstalledModule vor dem schnellen Weg (Test-ModuleFolderPresent)"
+        }
+    }
+}
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

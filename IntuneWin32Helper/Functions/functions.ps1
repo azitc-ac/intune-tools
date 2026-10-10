@@ -1605,8 +1605,14 @@ function Build-AppPackage {
     }
     $null = New-ADTTemplate -Destination $PacketRoot -Name $AppNameCombined
 
-    Write-Host "Wait 5 seconds..."
-    Start-Sleep -Seconds 5
+    # Auf die Vorlagen-Dateien warten, die gleich gebraucht werden - nicht pauschal 5 Sekunden
+    # (Messung 2026-10-11: 15 s bei drei Paketen, in denen nichts gewartet wurde).
+    $templateReady = $false
+    foreach ($attempt in 1..150) {
+        if ((Test-Path -LiteralPath "$SourcePath\Invoke-AppDeployToolkit.ps1") -and (Test-Path -LiteralPath "$SourcePath\Config\config.psd1")) { $templateReady = $true; break }
+        Start-Sleep -Milliseconds 200
+    }
+    if (-not $templateReady) { throw "The PSADT template was not created in '$SourcePath' (30 seconds)." }
 
     # erstellen von \in und \out, move eine ebene tiefer nach \in,
     Write-Host "Moving data to .\in"
@@ -2340,7 +2346,7 @@ function Show-ConfirmDialog {
 
     $window = New-Object Windows.Window
     $window.Title = $Title
-    $window.Width = 560
+    $window.Width = 760
     $window.SizeToContent = 'Height'
     $window.MaxHeight = 720
     $window.WindowStartupLocation = 'CenterScreen'
@@ -4426,16 +4432,42 @@ function Edit-TenantDialog {
     return $script:TenantResult
 }
 
+function Test-ModuleFolderPresent {
+    <#
+        Ob ein Modul in einem Ordner von $env:PSModulePath liegt (Ordner mit dem Modulnamen, darin eine
+        .psd1 - direkt oder in einem Versionsordner). Ein paar Dateizugriffe statt einer Abfrage der
+        PowerShellGet-Registrierung: Get-InstalledModule brauchte im Messlauf 2,9 s, Get-Module
+        -ListAvailable 1,7 s, das hier wenige Millisekunden.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    foreach ($path in @($env:PSModulePath -split ';' | Where-Object { $_ })) {
+        $folder = Join-Path $path $Name
+        if (-not (Test-Path -LiteralPath $folder -PathType Container)) { continue }
+        if (Get-ChildItem -LiteralPath $folder -Filter '*.psd1' -Recurse -Depth 1 -File -ErrorAction SilentlyContinue | Select-Object -First 1) { return $true }
+    }
+    return $false
+}
+
 function check-prereqs{
-    #Pre-reqs 
+    # Einmal je Prozess: das Hauptprogramm prueft beim Start, jedes deploy.ps1 (laeuft im selben
+    # Prozess) rief es noch einmal auf - 1 bis 5 s je App ohne neuen Befund.
+    if ($global:IntuneWin32HelperPrereqsChecked) { return }
+
     Write-Host "Checking required PowerShell modules"
-    $installedmodules=(Get-InstalledModule -ErrorAction SilentlyContinue).Name
     $requiredmodules=@(
         "IntuneWin32App"
         "Microsoft.WinGet.Client"
-				"PSAppDeployToolkit"
+        "PSAppDeployToolkit"
     )
-    foreach($requiredmodule in $requiredmodules){ 
+    $installedmodules = $null
+    foreach($requiredmodule in $requiredmodules){
+        if (Test-ModuleFolderPresent -Name $requiredmodule){
+            Write-Host "Required module [$requiredmodule] detected." -ForegroundColor Green
+            continue
+        }
+        # Nicht im Modulpfad gefunden: die genaue (langsame) Abfrage entscheidet.
+        if ($null -eq $installedmodules) { $installedmodules = @((Get-InstalledModule -ErrorAction SilentlyContinue).Name) }
         if ($installedmodules -notcontains $requiredmodule){
             Write-Host "Required module [$requiredmodule] not detected - installing..." -ForegroundColor Yellow
             Install-Module $requiredmodule -Force -Scope CurrentUser
@@ -4444,6 +4476,7 @@ function check-prereqs{
             Write-Host "Required module [$requiredmodule] detected." -ForegroundColor Green
         }
     }
+    $global:IntuneWin32HelperPrereqsChecked = $true
     #end function
 }
 

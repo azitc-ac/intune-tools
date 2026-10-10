@@ -443,6 +443,48 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Feldprüfung, zweiter Teil: Mehrfach-Deploy, Zuweisungsarten, Tenant-Wechsel, Geschwindigkeit (2026-10-11)
+
+Wieder Wegwerf-Kopie und Testapps „ZZ IW32H Multi A/B/C“ in `zarenko.onmicrosoft.com`; am Ende 69 Apps,
+keine Testreste. Die Rückfrage-Fenster sind als Bild geprüft (WPF-Rendering, kein Bildschirmfoto:
+in dieser Sitzung gibt es keinen abgreifbaren Desktop).
+
+Belegt im Feld:
+
+- **Mehrere Apps in einem Deploy**: drei Apps in einem Lauf (Plan → drei Pakete gebaut → drei Uploads,
+  `Deployment summary: 3 succeeded`). Beim ersten Lauf wiederholte das Modul einen Azure-403 beim ersten
+  Chunk selbst (Eintrag „Azure-403 beim ersten Chunk“ oben) — der Upload ging durch.
+- **Zuweisungsarten**: „alle Benutzer / available“ und eine Ausschluss-Gruppe zusammen →
+  `Get-TenantAppAssignmentInfo` zählt 2 (Graph liefert beide). Echte Gruppen anlegen konnte ich nicht:
+  die App-Registrierung darf keine Entra-Gruppen lesen (403), die Ausschluss-Gruppe war eine schon
+  vorhandene aus einer anderen App.
+- **Tenant-Wechsel**: Wechsel auf `3jr2s6t19s.onmicrosoft.com` und zurück (nur gelesen): 11 bzw. 72 Apps,
+  die Testapps nur im richtigen Tenant sichtbar, Wechsel je ca. 0,2 s.
+- **Rückfrage-Fenster** mit drei Apps, Dubletten-Hinweis und „could not be read“: lesbar bei 760 px Breite
+  (bei 560 px brachen die Id-Zeilen mitten in der Angabe um — Breite angehoben).
+
+Geschwindigkeit (gemessen, `Stopwatch`, gleiche Maschine, 39 echte Definitionen):
+
+| Schritt | vorher | jetzt |
+|---|---|---|
+| Tenant-Apps lesen (Start, Refresh, Deploy, Retire) | 14,8 s (`Get-IntuneWin32App`) | 0,3–0,4 s (Graph direkt) |
+| Zuweisungen je App in der Rückfrage | — | 0,23 s |
+| `check-prereqs` (Start und **jedes** deploy.ps1) | 2,9 s, bei jedem Aufruf | 0,05 s, nur einmal je Prozess |
+| Paketbau: Wartezeit je App | fest 5 s | wartet auf die Dateien (0 s) |
+| Drei Apps bauen und verteilen, gesamt | 112 s | 65 s |
+| Hauptfenster aufbauen (39 Zeilen) | — | 0,85 s |
+| Inventar berechnen | — | 0,05–0,15 s |
+
+Zur 112→65-s-Zeile: im ersten Lauf steckten 22 s Azure-Wiederholung (403) und 5,4 s Modulprüfung im ersten
+deploy.ps1; der reine Bau sank von 30 auf 15 s. Der Rest (je App ca. 4,5 s `IntuneWinAppUtil.exe` und
+ca. 10 s Upload) ist Arbeit außerhalb des Tools. Stichprobe, ein Lauf je Stand.
+
+Nicht belegt:
+
+- Gruppen-Zuweisungen mit „Einschließen“ (kein Gruppenzugriff), Zuweisungen mit Filter.
+- Paketbau und Upload parallelisieren (nicht versucht; Risiko: gemeinsame Laufwerksbuchstaben für `subst`).
+- Abrufdauer in einem Tenant mit deutlich mehr als 70 Apps (Graph-Seiten à 500 sind eingebaut und getestet,
+  im Feld nur 1 Seite).
 ## Feldprüfung Stufe 3 und 4 gegen den Test-Tenant (2026-10-10) — Ergebnis
 
 Gelaufen in einer Wegwerf-Kopie des Tools (eigener Paketordner, eigene `Apps.csv` mit einer Zeile
