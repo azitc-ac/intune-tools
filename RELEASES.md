@@ -443,6 +443,50 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Feldprüfung Stufe 3 und 4 gegen den Test-Tenant (2026-10-10) — Ergebnis
+
+Gelaufen in einer Wegwerf-Kopie des Tools (eigener Paketordner, eigene `Apps.csv` mit einer Zeile
+„ZZ IW32H Feldtest“, Kopie von ProcessExplorer, Version `LatestAvailable`) gegen `zarenko.onmicrosoft.com`
+mit den Tool-Funktionen (`Invoke-InventoryDeploy`, `Invoke-InventoryRetire`, `Invoke-InventoryRebuild`);
+die Antworten der Rückfragen waren skriptgesteuert (Fenster-Optik nicht gesehen). Vorher/nachher stand
+der Tenant bei 69 Apps (68 `win32LobApp` + 1 `win32CatalogApp`), keine Testapp übrig.
+
+Belegt im Feld:
+
+- **Create**: Plan „not in Intune yet“ → Paket gebaut → `deploy.ps1 -Mode New` → genau eine App.
+- **Skip**: zweiter Deploy → Rückfrage nennt „already in Intune“, mit „Ja“ bleibt es bei einer App.
+- **Update** (Rückfrage mit „Nein“): gleiche Id, `committedContentVersion` 1 → 2; die **Zuweisung blieb**
+  (Graph: 1 Zuweisung „alle Benutzer / available“ vor und nach dem Update).
+- **Erneuern**: Template geändert → Zeile `template outdated`, Next `renew from template, then deploy`;
+  nach dem Deploy `current`, `.bak`-Dateien angelegt.
+- **Retire**: „Nein“ löscht nichts; „Ja“ → `REMOVED`, App im Tenant weg (unabhängig nachgelesen),
+  Definition und Paketordner blieben, Zeile danach `Next: deploy`.
+- **Rebuild**: bauen → löschen (verifiziert) → neu anlegen; genau eine App mit neuer Id.
+- **Dubletten**: mit `deploy.ps1 -Mode New` am Plan vorbei erzwungen → Inventar `yes (2x)`, Next
+  `check duplicates in Intune`, Plan `Skip: 2 apps … remove the duplicates first`; Retire nennt beide
+  Ids und löscht beide.
+
+Was der Feldtest aufgedeckt hat (alles behoben, mit Test):
+
+1. **Die Zuweisungszahl in der Rückfrage war falsch.** `Get-IntuneWin32AppAssignment` (Modul 1.5.0) lieferte
+   für eine App mit einer „alle Benutzer“-Zuweisung **keine** Zuweisung, Graph lieferte sie. Die Rückfrage
+   hätte „assignments: 0“ gesagt, obwohl es eine gab. Jetzt liest `Get-TenantAppAssignmentInfo` direkt über
+   Graph; Feldprobe: „assignments: 1“. Ursache im Modul nicht geklärt. Test: `Test-RetireRebuild.ps1`,
+   `Test-TenantRead.ps1`, Prüfung 35.
+2. **Die Tenant-Liste hinkt hinterher.** `Get-IntuneWin32App` (Filter `isof`) führte eine gerade angelegte
+   App erst nach 40 bis 120 Sekunden; die einfache Liste ohne Filter schon nach wenigen. In der Lücke sah
+   ein zweiter Deploy „nicht in Intune“ und hätte eine Dublette angelegt. Jetzt liest
+   `Read-TenantWin32Apps` direkt über Graph; Feldprobe: die Liste direkt nach dem Anlegen enthält die App.
+   Eine Stichprobe, keine Garantie.
+3. **Eigener Fehler beim Beheben von 2:** ein Vergleich auf `win32LobApp` ließ die Enterprise-App-Catalog-App
+   „Remote Help“ (`win32CatalogApp`, vom Filter `isof` des Moduls mitgeführt) aus der Liste fallen (68 statt 69) —
+   vom Feldvergleich Modul gegen neue Liste gefunden. Test: `Test-TenantRead.ps1` (Katalog-App in der Antwort).
+
+Nicht belegt:
+
+- Die Fenster-Optik der Rückfragen im echten Hauptfenster (der Dialog selbst ist per UI Automation getestet).
+- Mehr als eine Zuweisungsart (nur „alle Benutzer / available“ geprüft), Gruppen-Zuweisungen.
+- Mehrere Apps in einem Deploy, Tenant-Wechsel im Fenster, Abrufdauer bei großen Tenants.
 ## Offene Feldprüfung: Retire und Rebuild (Stufe 4, 2026-10-10)
 
 Zwei neue Knöpfe löschen **Apps in Intune** (nicht rückgängig zu machen): **Retire from Intune**
@@ -475,14 +519,14 @@ Belegt ist **offline**:
 **Nicht belegt** (keiner dieser Läufe ist gemacht; Löschen gegen einen echten Tenant braucht die
 ausdrückliche Freigabe des Inhabers und eine Test-App, nicht eine produktive):
 
-- [ ] **Retire im Feld** gegen eine Test-App: Rückfrage, `REMOVED  <Name> - <Version>  <Id>`,
+- [x] **Retire im Feld** gegen eine Test-App: Rückfrage, `REMOVED  <Name> - <Version>  <Id>`,
       `Retire summary: 1 removed, 0 not removed.`, App im Portal weg, Definition und Paketordner da.
-- [ ] **Das Nachlesen im Feld**: dass die Liste eine gerade gelöschte App wirklich nicht mehr führt
+- [x] **Das Nachlesen im Feld**: dass die Liste eine gerade gelöschte App wirklich nicht mehr führt
       (sonst würde ein erfolgreiches Löschen als `StillListed` gemeldet - sichtbar, nicht gefährlich).
-- [ ] **Rebuild im Feld** einer Test-App: erst `Build summary`, dann `Retire summary`, dann
+- [x] **Rebuild im Feld** einer Test-App: erst `Build summary`, dann `Retire summary`, dann
       `Deployment summary: 1 succeeded`; im Portal genau eine App mit neuer Id und Inhalt.
-- [ ] **Zuweisungszahl** in der Rückfrage gegen eine App mit bekannter Zuweisung.
-- [ ] **Dubletten bereinigen** mit Retire (Test-Tenant mit zwei gleichen Apps).
+- [x] **Zuweisungszahl** in der Rückfrage gegen eine App mit bekannter Zuweisung.
+- [x] **Dubletten bereinigen** mit Retire (Test-Tenant mit zwei gleichen Apps).
 - [x] **Die Rückfrage** ist seit 2026-10-10 ein eigenes Fenster (`Show-ConfirmDialog`), das per UI Automation geklickt wird (`Test-MainWindowUi.ps1`: Tasten, Standardknopf, Fokus, Schließen = sichere Antwort). Vorher geprüft war,
       welcher Text und welche Tasten übergeben werden, und dass die Vorgabe Nein ist (Prüfung 35).
 ## Offene Feldprüfung: Deploy-Plan statt blindem Anlegen (Stufe 3, 2026-10-10)
@@ -522,15 +566,15 @@ Paket steht einmal als `Package, template outdated` da und wird beim nächsten D
 
 **Nicht belegt:**
 
-- [ ] **Create im Feld mit dem neuen Template**: eine App, die es in Intune nicht gibt; Transcript
+- [x] **Create im Feld mit dem neuen Template**: eine App, die es in Intune nicht gibt; Transcript
       mit `Decision of the calling run: create a new app`, `Finished.`, `Deployment summary: 1
       succeeded, 0 failed, 0 skipped`, App in Intune mit Inhalt.
-- [ ] **Skip im Feld**: dieselbe App direkt nochmal deployen — das Fenster fragt, bei „Ja" kommt
+- [x] **Skip im Feld**: dieselbe App direkt nochmal deployen — das Fenster fragt, bei „Ja" kommt
       `SKIPPED  <Name> - <Version>: already in Intune`, in Intune bleibt **eine** App.
-- [ ] **Update im Feld** (Frage mit „Nein" beantworten) gegen eine App **mit Zuweisung**: nach dem
+- [x] **Update im Feld** (Frage mit „Nein" beantworten) gegen eine App **mit Zuweisung**: nach dem
       Lauf ist die Zuweisung noch da, `committedContentVersion` ist gestiegen, Erkennungsregel
       unverändert. Erst das belegt, dass „Zuweisungen bleiben" stimmt.
-- [ ] **Erneuern vorhandener Pakete** (`template outdated` → Deploy) mit dem neuen Template.
+- [x] **Erneuern vorhandener Pakete** (`template outdated` → Deploy) mit dem neuen Template.
 - [x] **Der Fragedialog** ist seit 2026-10-10 `Show-ConfirmDialog` und per UI Automation bedient (Antworten Yes/No/Cancel, Schließen = Cancel); vorher war er ein `MessageBox`:
       geprüft ist, welcher Text und welche Tasten übergeben werden, nicht, wie er aussieht.
 - [ ] **Zwei Versionen derselben App** in einem Tenant: `yes` für beide, kein „Dubletten"-Hinweis.

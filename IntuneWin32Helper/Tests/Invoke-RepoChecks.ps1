@@ -1481,6 +1481,14 @@ if ($functionsFile) {
         }
     }
 
+    # Die Zuweisungszahl der Rueckfrage kommt von Graph, nicht aus dem Modul-Cmdlet: Get-IntuneWin32AppAssignment
+    # (1.5.0) meldete im Feldtest eine "alle Benutzer"-Zuweisung nicht - die Rueckfrage haette "0" behauptet.
+    $assignFn35 = & $fn35 'Get-TenantAppAssignmentInfo'
+    if (-not $assignFn35) { Add-Failure "IntuneDeleteVerified" "Get-TenantAppAssignmentInfo fehlt" }
+    elseif (& $cmd35 $assignFn35 'Get-IntuneWin32AppAssignment') {
+        Add-Failure "IntuneDeleteVerified" "Get-TenantAppAssignmentInfo liest die Zuweisungen ueber Get-IntuneWin32AppAssignment - das Modul uebersieht 'alle Benutzer'-Zuweisungen; direkt ueber Graph lesen"
+    }
+
     $loop35 = & $fn35 'Start-InventoryLoop'
     if ($loop35) {
         foreach ($name in 'Remove-TenantWin32Apps', 'Remove-IntuneWin32App') {

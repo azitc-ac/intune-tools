@@ -71,10 +71,17 @@ function Remove-IntuneWin32App {
     }
     $script:tenantApps = @($script:tenantApps | Where-Object { $_.id -ne $ID })
 }
-function Get-IntuneWin32AppAssignment {
-    [CmdletBinding()] param([string]$ID)
-    if ($script:assignWarn -contains $ID) { Write-Warning "An error occurred while retrieving Win32 app assignments for app with ID: $ID"; return }
-    if ($script:assignments.ContainsKey($ID)) { return $script:assignments[$ID] }
+# Zuweisungen kommen direkt von Graph (das Modul-Cmdlet meldete im Feld eine "alle Benutzer"-Zuweisung
+# nicht): Invoke-RestMethod nachgebaut, mit dem Header des Moduls.
+$global:AuthenticationHeader = @{ Authorization = 'Bearer test' }
+function Invoke-RestMethod {
+    [CmdletBinding()] param([string]$Method, [string]$Uri, $Headers)
+    if (-not $Headers -or -not $Headers.Authorization) { throw 'no authorization header was sent' }
+    if ($Uri -notmatch '/mobileApps/([^/]+)/assignments$') { throw "unexpected uri $Uri" }
+    $id = $Matches[1]
+    if ($script:assignWarn -contains $id) { throw 'simulated Graph error' }
+    $items = @(); if ($script:assignments.ContainsKey($id)) { $items = @($script:assignments[$id]) }
+    return [pscustomobject]@{ value = $items }
 }
 function Invoke-PackageBuild {
     param($Rows, $PacketRoot, $RootDir, $ToolVersion, $RemoveExisting)
@@ -123,7 +130,8 @@ try {
             (New-App 'Ghost' '1.0' 'ghost-1' '' 'notPublished'),
             (New-App 'Unrelated' '9.9')
         )
-        $script:assignments = @{ 'id-Have-1.0' = @([pscustomobject]@{ GroupName = 'g1' }, [pscustomobject]@{ GroupName = 'g2' }) }
+        # 'dup-a': genau EINE Zuweisung (Feldfund: eine einzelne "alle Benutzer"-Zuweisung wurde als 0 gemeldet)
+        $script:assignments = @{ 'id-Have-1.0' = @([pscustomobject]@{ GroupName = 'g1' }, [pscustomobject]@{ GroupName = 'g2' }); 'dup-a' = @([pscustomobject]@{ target = 'allLicensedUsers' }) }
     }
     & $resetTenant
     $stale = @(Get-AppInventory -Definitions $script:defs -PacketRoot $packets -RootDir $rootDir -IntuneApps @() 6>$null)   # Fenster mit leerem Intune
@@ -138,7 +146,7 @@ try {
     Test-That (@($res | Where-Object { $_.State -eq 'Removed' }).Count -eq 3) "retire: expected 3 x Removed, got: $(@($res | ForEach-Object { $_.State }) -join ',')"
     Test-That ($script:asked.Count -eq 1 -and $script:asked[0].Buttons -eq 'YesNo') "retire: expected one YesNo question, got $($script:asked.Count) ($($script:asked[0].Buttons))"
     $q = [string]$script:asked[0].Text
-    foreach ($needle in 'id-Have-1.0', 'dup-a', 'dup-b', 'assignments: 2', 'ALL are deleted', 'cannot be undone', 'AND their assignments') {
+    foreach ($needle in 'id-Have-1.0', 'dup-a', 'dup-b', 'assignments: 2', 'assignments: 1', 'assignments: 0', 'ALL are deleted', 'cannot be undone', 'AND their assignments') {
         Test-That ($q -match [regex]::Escape($needle)) "retire: the question lacks '$needle'"
     }
     Test-That ($q -notmatch 'Other') "retire: the question names an app that is not deleted (Other 1.0 is another version)"

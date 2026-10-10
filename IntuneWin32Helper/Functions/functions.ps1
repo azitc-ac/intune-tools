@@ -1506,13 +1506,34 @@ function Read-TenantWin32Apps {
         ein anderer Zustand als "keine gefunden" (leeres Array) - das Inventar
         unterscheidet beides. Scheitert die Abfrage, bleibt die Intune-Spalte
         leer; das Inventar ist auch ohne Tenant brauchbar.
+
+        Direkt ueber Graph, NICHT ueber Get-IntuneWin32App: dessen Liste (Filter isof(win32LobApp))
+        fuehrte im Feldtest (2026-10-10) eine gerade angelegte App erst nach 40 bis 120 Sekunden -
+        die einfache Liste (ohne Filter) schon nach wenigen. In dieser Luecke sah ein zweiter Deploy
+        "nicht in Intune" und haette eine Dublette angelegt. Die Objekte haben dieselben Eigenschaften
+        wie die des Moduls (Graph-Namen: id, displayName, displayVersion, committedContentVersion, ...).
+        Das Token ist das des Moduls ($global:AuthenticationHeader).
     #>
     [CmdletBinding()]
     param()
 
     try {
         Write-Host "Reading the Win32 apps of the tenant..."
-        $apps = @(Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -ErrorAction Stop })
+        $header = $global:AuthenticationHeader
+        if (-not $header) { throw 'not signed in to Intune Graph' }
+        # Wie der Filter isof(win32LobApp) des Moduls: auch abgeleitete Typen (win32CatalogApp = Enterprise App Catalog;
+        # Feldfund 2026-10-10: ein reiner Vergleich auf win32LobApp liess dort 'Remote Help' aus der Liste fallen).
+        $win32Types = @('#microsoft.graph.win32LobApp', '#microsoft.graph.win32CatalogApp')
+        $apps = @()
+        $uri = 'https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$top=500'
+        $pages = 0
+        while ($uri) {
+            $pages++
+            if ($pages -gt 100) { throw 'the app list has more than 100 pages - stopped' }
+            $response = Invoke-RestMethod -Method Get -Uri $uri -Headers $header -ErrorAction Stop
+            $apps += @(@($response.value) | Where-Object { $_.'@odata.type' -in $win32Types })
+            $uri = [string]$response.'@odata.nextLink'
+        }
         Write-Host ("{0} Win32 app(s) in the tenant." -f $apps.Count)
         return , $apps
     }
@@ -2013,23 +2034,32 @@ function Get-RetirePlan {
 
 function Get-TenantAppAssignmentInfo {
     <#
-        Zuweisungen einer App - fuer die Rueckfrage vor dem Loeschen. Das Modul warnt bei einem
-        Lesefehler nur (kein throw); ohne Pruefung der Warnungen sieht "nicht lesbar" wie "keine
-        Zuweisungen" aus. Known = $false heisst: nicht sicher.
+        Zuweisungen einer App - fuer die Rueckfrage vor dem Loeschen. Known = $false heisst: nicht
+        sicher (kein Token, Graph-Fehler) - die Rueckfrage sagt dann "could not be read" statt "0".
+
+        Direkt ueber Graph, NICHT ueber Get-IntuneWin32AppAssignment: das Modul (1.5.0) meldete im
+        Feldtest (2026-10-10) fuer eine App mit einer "alle Benutzer"-Zuweisung KEINE Zuweisung,
+        waehrend Graph sie lieferte. Eine Rueckfrage vor dem Loeschen, die "0" sagt, obwohl es eine
+        gibt, ist schlimmer als keine Zahl. Das Token ist das des Moduls ($global:AuthenticationHeader,
+        gesetzt von Connect-MSIntuneGraph).
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Id)
 
+    $header = $global:AuthenticationHeader
+    if (-not $header) { return [pscustomobject]@{ Count = 0; Known = $false } }
+
     try {
-        $read = Invoke-IntuneModuleCall -Label 'Get-IntuneWin32AppAssignment' -Operation {
-            $assignmentWarning = $null
-            $assignmentItems = @(Get-IntuneWin32AppAssignment -ID $Id -WarningAction SilentlyContinue -WarningVariable assignmentWarning)
-            [pscustomobject]@{ Items = $assignmentItems; Warnings = @($assignmentWarning) }
+        $count = 0
+        $uri = 'https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/{0}/assignments' -f $Id
+        $pages = 0
+        while ($uri -and $pages -lt 20) {
+            $response = Invoke-RestMethod -Method Get -Uri $uri -Headers $header -ErrorAction Stop
+            $count += @($response.value).Count
+            $uri = [string]$response.'@odata.nextLink'
+            $pages++
         }
-        return [pscustomobject]@{
-            Count = @(@($read.Items) | Where-Object { $_ }).Count
-            Known = (@(@($read.Warnings) | Where-Object { $_ }).Count -eq 0)
-        }
+        return [pscustomobject]@{ Count = $count; Known = ($pages -lt 20) }
     }
     catch {
         return [pscustomobject]@{ Count = 0; Known = $false }
