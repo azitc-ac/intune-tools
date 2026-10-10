@@ -12,7 +12,7 @@ left** the definition and the package, **on the right** the app in the tenant. E
 that list:
 
 ```
-Tenant [xyz.onmicrosoft.com v]  Show [All v]  [Filter...]                    [Refresh]
+Tenant [xyz.onmicrosoft.com v]  Show [All (foreign Intune apps hidden) v]  [Filter...]                    [Refresh]
  Application | Version | Publisher | Package         |  Intune  | Next step
  (grey header: definition and package)                | (blue header: tenant)
 [gear] [Open folder] [Remove orphan folder] [Retire from Intune]
@@ -24,6 +24,15 @@ Tenant [xyz.onmicrosoft.com v]  Show [All v]  [Filter...]                    [Re
 | `Package` | `Definition only`, `Package`, `Package, template outdated` / `unstamped`, or `No definition` (a package folder without a row in `Apps.csv`) |
 | `Intune` | matched by **name and version**: `yes` is an app with this name and this version; `other version: 1.0.5` means the name exists, this version does not (a deploy creates it; the other version stays); `yes (2x)` means the same name **and** version twice (duplicates); `no content` means an entry a failed upload left behind (not published, no committed content); `not checked` when no tenant is connected |
 | `Next step` | the sensible next step, derived from the row |
+
+**Apps that only exist in Intune** get a row too (status `Intune only` or `Foreign app`). The tool
+writes the note `Created by IntuneWin32Helper <version>` into every app it creates; an app with that
+note is *created by this tool* (view *Intune only (created by this tool)*), an app without it is
+**foreign** - made by hand, by another tool, or from the Enterprise App Catalog. Foreign apps are
+hidden in the default view (the status line says how many); *Foreign apps in Intune* and *Everything,
+incl. foreign apps* show them. A foreign app can never be retired from here - that protection sits in
+`Get-RetirePlan`, not only in the button. Apps the tool created before it wrote the note, and apps
+without a note, show up as foreign.
 
 The tenant is chosen once at the start (not asked at all when only one is configured) and can be
 switched in the window; a switch signs in again, because a token that is still valid for the
@@ -195,7 +204,9 @@ besides `Build-AppPackage`, a deploy that bypasses the plan (`Invoke-PackageDepl
 going through `Invoke-InventoryDeploy`, `deploy.ps1` called without `-Mode` or with `-bulk`, a discarded
 update result in the template), or an unguarded delete in Intune (`Remove-IntuneWin32App` outside
 `Remove-TenantWin32Apps`, no read-back after deleting, no question before deleting, a question that does
-not default to No, Rebuild deleting before building, the loop deleting directly).
+not default to No, Rebuild deleting before building, the loop deleting directly), a fixed wait or a slow module query
+back in the build, or foreign Intune apps no longer protected from Retire (or the note that identifies the tool's
+own apps no longer written).
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the
 check red.
@@ -205,6 +216,7 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 | Test | What it proves |
 | --- | --- |
 | `Test-Prereqs.ps1` | `check-prereqs` finds the modules in the module path without the slow `Get-InstalledModule` query, checks once per process (every `deploy.ps1` ran it again), installs only what is missing |
+| `Test-IntuneOnly.ps1` | apps only in Intune get a row, the tool note tells "created by this tool" from "foreign" (one note in a duplicate is enough, a note without version counts), a defined app never gets a second row, foreign apps are never planned for Retire |
 | `Test-TenantRead.ps1` | the tenant list and the assignment count are read straight from Graph (the module's filtered list lagged behind new apps and its assignment cmdlet missed an "all users" assignment): all pages, Win32 and catalog apps only, an error or a missing token means "not read", not "empty" / "0" |
 | `Test-RetireRebuild.ps1` | only apps with the row's name **and** version from the fresh tenant are deleted (not another version, not what the window showed), the question names every app and its assignments, "No" and an unreadable tenant delete nothing, a delete that only warns is reported as `StillListed` and not as removed, Rebuild goes build -> delete -> create and never creates over a leftover |
 | `Test-DeployPlan.ps1` | the plan: Intune is matched by name **and** version, Create/Skip/Update per state, duplicates and empty entries are never replaced, the decision reaches `deploy.ps1` as `-Mode`, Intune is read fresh before planning, only planned apps are built and deployed, nothing happens on cancel or an unreadable tenant |

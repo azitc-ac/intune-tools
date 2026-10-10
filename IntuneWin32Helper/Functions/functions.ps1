@@ -818,6 +818,16 @@ function Test-IntuneAppHasContent {
     return $true
 }
 
+function Test-IntuneAppCreatedByTool {
+    <#
+        Hat dieses Werkzeug die App angelegt? deploy.ps1 setzt beim Anlegen den Vermerk
+        "Created by IntuneWin32Helper <Version>" (Add-IntuneWin32App -Notes). Eine App ohne diesen
+        Vermerk ist "fremd": von Hand, von einem anderen Werkzeug oder aus dem Enterprise App Catalog.
+    #>
+    param([Parameter(Mandatory = $true)]$App)
+    return ([string]$App.notes -like 'Created by IntuneWin32Helper*')
+}
+
 function Get-AppInventory {
     <#
         .SYNOPSIS
@@ -906,6 +916,10 @@ function Get-AppInventory {
                 # IntuneOther = andere Version. Daraus entscheidet Get-DeployPlan.
                 IntuneSame       = @()
                 IntuneOther      = @()
+                # Eine App, die nur in Intune liegt (keine Definition, kein Paket hier). Origin sagt dann,
+                # ob dieses Werkzeug sie angelegt hat ('tool') oder nicht ('foreign'); sonst leer.
+                IntuneOnly       = $false
+                Origin           = ''
             }
             $null = $order.Add($key)
         }
@@ -934,6 +948,24 @@ function Get-AppInventory {
         else                                        { $row.Template = 'outdated' }
     }
 
+    # Apps, die nur in Intune liegen, bekommen eine eigene Zeile (Name - Version wie sonst auch). Ob sie
+    # von diesem Werkzeug stammen, sagt der Vermerk; ohne ihn sind sie "fremd" und werden im Fenster
+    # standardmaessig ausgeblendet und nie von hier aus geloescht (Get-RetirePlan).
+    if ($intuneChecked) {
+        $intuneOnlyKeys = @{}
+        foreach ($app in @($IntuneApps)) {
+            $name = [string]$app.displayName
+            if (-not $name) { continue }
+            $key = ('{0} - {1}' -f $name, [string]$app.displayVersion)
+            if ($rows.ContainsKey($key) -and -not $intuneOnlyKeys.ContainsKey($key)) { continue }
+            $row = & $touch $name ([string]$app.displayVersion)
+            $row.IntuneOnly = $true
+            $intuneOnlyKeys[$key] = $true
+            # Eine Dublette gilt als "tool", sobald EINE der Apps den Vermerk traegt.
+            if ((Test-IntuneAppCreatedByTool -App $app) -or $row.Origin -eq 'tool') { $row.Origin = 'tool' } else { $row.Origin = 'foreign' }
+        }
+    }
+
     foreach ($key in $order) {
         $row = $rows[$key]
         $emptyCount = 0
@@ -956,9 +988,15 @@ function Get-AppInventory {
             else                                         { $row.Intune = ('yes ({0}x)' -f $count) }
         }
         # Der naechste sinnvolle Schritt folgt aus dem Zustand der Zeile.
-        if ($emptyCount -gt 0) {
+        if ($row.IntuneOnly -and $row.Origin -eq 'foreign') {
+            $row.Next = 'not created by this tool'
+        }
+        elseif ($emptyCount -gt 0) {
             # Zuerst: ein inhaltsloser Eintrag verdeckt sonst jeden anderen Befund.
             $row.Next = 'remove the entry without content in Intune'
+        }
+        elseif ($row.IntuneOnly) {
+            $row.Next = $(if ($row.Intune -like 'yes (*') { 'check duplicates in Intune' } else { 'in Intune only - no definition or package here' })
         }
         elseif ($row.Package -ne 'yes') {
             $row.Next = 'create package'
@@ -990,7 +1028,8 @@ function Get-AppInventory {
         }
 
         # Zustand von Definition und Paket in einem Wort (linke Seite des Fensters).
-        if (-not $row.HasDefinition)       { $row.Status = 'No definition' }
+        if ($row.IntuneOnly)               { $row.Status = $(if ($row.Origin -eq 'foreign') { 'Foreign app' } else { 'Intune only' }) }
+        elseif (-not $row.HasDefinition)   { $row.Status = 'No definition' }
         elseif (-not $row.HasPackage)      { $row.Status = 'Definition only' }
         elseif ($row.Template -eq 'outdated')  { $row.Status = 'Package, template outdated' }
         elseif ($row.Template -eq 'unstamped') { $row.Status = 'Package, template unstamped' }
@@ -2020,7 +2059,10 @@ function Get-RetirePlan {
         if ([string]$row.Intune -eq 'not checked') {
             throw ("The Intune state of '{0}' was not read - nothing can be retired without it." -f $row.Key)
         }
-        $apps = @(@($row.IntuneSame) | Where-Object { $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.id) } | ForEach-Object {
+        # Fremde Apps (nur in Intune, ohne den Vermerk dieses Werkzeugs) loescht dieser Weg nie: es gibt
+        # keine Definition, die sagt, dass das Werkzeug fuer sie zustaendig ist.
+        $protected = ($row.IntuneOnly -and [string]$row.Origin -eq 'foreign')
+        $apps = @(@($(if ($protected) { @() } else { $row.IntuneSame })) | Where-Object { $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.id) } | ForEach-Object {
             [pscustomobject]@{
                 Id         = [string]$_.id
                 Name       = [string]$_.displayName
@@ -2033,7 +2075,7 @@ function Get-RetirePlan {
             Key    = [string]$row.Key
             Row    = $row
             Apps   = $apps
-            Reason = $(if ($apps.Count -eq 0) { 'no app with this name and version in Intune' } else { '' })
+            Reason = $(if ($protected) { 'not created by this tool - not retired from here' } elseif ($apps.Count -eq 0) { 'no app with this name and version in Intune' } else { '' })
         }
     }
 }
@@ -2501,13 +2543,16 @@ function Show-InventoryDialog {
 
     # Die Ansicht: welcher der drei Zustaende einer Zeile interessiert.
     $views = @(
-        [pscustomobject]@{ Name = 'All';                              Test = { $true } },
+        [pscustomobject]@{ Name = 'All (foreign Intune apps hidden)'; Test = { $_.Origin -ne 'foreign' } },
         [pscustomobject]@{ Name = 'Definition only (no package)';     Test = { $_.Status -eq 'Definition only' } },
         [pscustomobject]@{ Name = 'Package, not in Intune';           Test = { $_.HasPackage -and ($_.Intune -eq '-' -or $_.Intune -like 'other version*') } },
         [pscustomobject]@{ Name = 'In Intune';                        Test = { $_.Intune -like 'yes*' -or $_.Intune -eq 'no content' } },
         [pscustomobject]@{ Name = 'Template outdated';                Test = { $_.Template -eq 'outdated' -or $_.Template -eq 'unstamped' } },
         [pscustomobject]@{ Name = 'Duplicates or empty in Intune';    Test = { $_.Intune -eq 'no content' -or $_.Intune -like 'yes (*' } },
-        [pscustomobject]@{ Name = 'Package without definition';       Test = { -not $_.HasDefinition } }
+        [pscustomobject]@{ Name = 'Package without definition';       Test = { $_.HasPackage -and -not $_.HasDefinition } },
+        [pscustomobject]@{ Name = 'Intune only (created by this tool)'; Test = { $_.IntuneOnly -and $_.Origin -eq 'tool' } },
+        [pscustomobject]@{ Name = 'Foreign apps in Intune';           Test = { $_.Origin -eq 'foreign' } },
+        [pscustomobject]@{ Name = 'Everything, incl. foreign apps';   Test = { $true } }
     )
     $viewLabel = New-Object Windows.Controls.TextBlock
     $viewLabel.Text = 'Show:'
@@ -2628,7 +2673,8 @@ function Show-InventoryDialog {
     }
     catch { }
 
-    $dataGrid.ItemsSource = $rows
+    # Die erste Ansicht (fremde Intune-Apps ausgeblendet) gilt schon beim Oeffnen, nicht erst nach dem ersten Filterwechsel.
+    $dataGrid.ItemsSource = @($rows | Where-Object $views[0].Test)
     [Windows.Controls.Grid]::SetRow($dataGrid, 1)
     $null = $grid.Children.Add($dataGrid)
 
@@ -2638,12 +2684,16 @@ function Show-InventoryDialog {
     $status.Foreground = [System.Windows.Media.Brushes]::DimGray
     $status.TextWrapping = 'Wrap'
     [Windows.Automation.AutomationProperties]::SetAutomationId($status, 'Status')
-    $withPackage = @($rows | Where-Object { $_.HasPackage }).Count
-    $inIntune    = @($rows | Where-Object { $_.Intune -like 'yes*' -or $_.Intune -eq 'no content' }).Count
-    $summary = ('{0} application(s) - {1} with a package in {2} - {3} in Intune{4}' -f
-                    $rows.Count, $withPackage, $PacketRoot, $inIntune,
+    $ownRows     = @($rows | Where-Object { $_.Origin -ne 'foreign' })
+    $foreignRows = @($rows | Where-Object { $_.Origin -eq 'foreign' })
+    $withPackage = @($ownRows | Where-Object { $_.HasPackage }).Count
+    $inIntune    = @($ownRows | Where-Object { $_.Intune -like 'yes*' -or $_.Intune -eq 'no content' }).Count
+    $summary = ('{0} application(s) - {1} with a package in {2} - {3} in Intune{4}{5}' -f
+                    $ownRows.Count, $withPackage, $PacketRoot, $inIntune,
+                    $(if ($foreignRows.Count -gt 0) { (' - {0} foreign Intune app(s) hidden (see Show:)' -f $foreignRows.Count) } else { '' }),
                     $(if (-not $IntuneRead) { ' - the tenant was not read, the Intune column is empty' } else { '' }))
     $status.Text = $summary
+    $defaultShownCount = $ownRows.Count
     [Windows.Controls.Grid]::SetRow($status, 2)
     $null = $grid.Children.Add($status)
 
@@ -2660,7 +2710,7 @@ function Show-InventoryDialog {
         }
         $dataGrid.ItemsSource = $null
         $dataGrid.ItemsSource = @($items)
-        $status.Text = $(if ($items.Count -eq $rows.Count) { $summary } else { '{0} of {1} shown - {2}' -f $items.Count, $rows.Count, $summary })
+        $status.Text = $(if ($items.Count -eq $defaultShownCount -and $viewBox.SelectedIndex -le 0 -and [string]::IsNullOrWhiteSpace($needle)) { $summary } else { '{0} of {1} shown - {2}' -f $items.Count, $rows.Count, $summary })
     }
     $filterBox.Add_TextChanged($applyFilter)
     $viewBox.Add_SelectionChanged($applyFilter)
@@ -2779,7 +2829,8 @@ function Show-InventoryDialog {
         $buildButton.IsEnabled   = ($withDefinition.Count -gt 0)
         $deployButton.IsEnabled  = (@($selected | Where-Object { $_.HasDefinition -or $_.HasPackage }).Count -gt 0)
         # Retire loescht in Intune, was zu Name UND Version der Zeile gehoert - ohne eine solche App gibt es nichts zu tun.
-        $retireButton.IsEnabled  = (@($selected | Where-Object { $_.Intune -like 'yes*' -or $_.Intune -eq 'no content' }).Count -gt 0)
+        # Fremde Apps (nur in Intune, nicht von diesem Werkzeug) werden von hier nie geloescht.
+        $retireButton.IsEnabled  = (@($selected | Where-Object { ($_.Intune -like 'yes*' -or $_.Intune -eq 'no content') -and $_.Origin -ne 'foreign' }).Count -gt 0)
         # Rebuild baut aus der Definition.
         $rebuildButton.IsEnabled = ($withDefinition.Count -gt 0)
         # Nur ein Ordner ohne Definition ist verwaist - alles andere loescht dieser Weg nie.

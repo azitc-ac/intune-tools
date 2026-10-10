@@ -123,7 +123,7 @@ if ($Child) {
         exit 0
     }
 
-    function New-SampleRow([string]$name, [string]$status, [bool]$hasDef, [bool]$hasPkg, [string]$intune, [string]$next, [string]$template) {
+    function New-SampleRow([string]$name, [string]$status, [bool]$hasDef, [bool]$hasPkg, [string]$intune, [string]$next, [string]$template, [string]$origin = '') {
         [pscustomobject]@{
             Key = "$name - 1.0"; AppName = $name; AppVersion = '1.0'; Publisher = 'Sample Inc'
             Definition = $(if ($hasDef) { 'yes' } else { '-' }); Package = $(if ($hasPkg) { 'yes' } else { '-' })
@@ -131,12 +131,15 @@ if ($Child) {
             FullPath = $(if ($hasPkg) { "C:\x\$name - 1.0\deploy.ps1" } else { '' })
             HasDefinition = $hasDef; HasPackage = $hasPkg; DefinitionRecord = $(if ($hasDef) { [pscustomobject]@{ DisplayName = $name; Version = '1.0' } } else { $null })
             Detail = "Definition: $hasDef"
+            IntuneOnly = [bool]$origin; Origin = $origin
         }
     }
     $rows = @(
         (New-SampleRow 'DefOnly' 'Definition only' $true  $false '-'   'create package' '-'),
         (New-SampleRow 'Both'    'Package'         $true  $true  'yes' 'up to date'     'current'),
-        (New-SampleRow 'Orphan'  'No definition'   $false $true  '-'   'package without a row in Apps.csv' 'current')
+        (New-SampleRow 'Orphan'  'No definition'   $false $true  '-'   'package without a row in Apps.csv' 'current'),
+        (New-SampleRow 'ToolOnly' 'Intune only'    $false $false 'yes' 'in Intune only - no definition or package here' '-' 'tool'),
+        (New-SampleRow 'Foreign' 'Foreign app'     $false $false 'yes' 'not created by this tool' '-' 'foreign')
     )
 
     $result = Show-InventoryDialog -Inventory $rows -Title 'UI test' -PacketRoot 'C:\x' `
@@ -227,7 +230,7 @@ try {
         }
 
         if ($grid) {
-            Test-That 'three rows are listed' ((Get-UiaElement -Root $grid -ControlType DataItem).Count -eq 3) "rows: $((Get-UiaElement -Root $grid -ControlType DataItem).Count)"
+            Test-That 'four rows are listed (the foreign Intune app is hidden)' ((Get-UiaElement -Root $grid -ControlType DataItem).Count -eq 4) "rows: $((Get-UiaElement -Root $grid -ControlType DataItem).Count)"
 
             # Die mitgegebene Auswahl ist beim Oeffnen markiert: DefOnly -> alles moeglich.
             Start-Sleep -Milliseconds 800
@@ -242,6 +245,30 @@ try {
             $null = Select-GridRowByCell $grid 'Both'
             Start-Sleep -Milliseconds 300
             Test-ButtonStates $window @{ RemoveFolder = $false; Rebuild = $true; Retire = $true } 'Both (definition, package, app in Intune)'
+            # Eine App nur in Intune, vom Tool angelegt: loeschen ja, alles andere nein.
+            $null = Select-GridRowByCell $grid 'ToolOnly'
+            Start-Sleep -Milliseconds 300
+            Test-ButtonStates $window @{ Edit = $false; NewVersion = $false; Delete = $false; Build = $false; Deploy = $false; RemoveFolder = $false; Rebuild = $false; Retire = $true } 'ToolOnly (only in Intune, created by the tool)'
+
+            # Fremde Apps sind standardmaessig ausgeblendet, in ihrer Ansicht zu sehen - und nie zu loeschen.
+            Test-That 'the foreign Intune app is hidden in the default view' ($null -eq (Select-GridRowByCell $grid 'Foreign'))
+            $viewBox = Find-UiaElement -Root $window -AutomationId 'View'
+            $viewBox.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+            Start-Sleep -Milliseconds 400
+            $choice = @(Get-UiaElement -Root $viewBox -ControlType ListItem | Where-Object { $_.Current.Name -eq 'Foreign apps in Intune' })
+            Test-That 'the view list offers the foreign apps' ($choice.Count -eq 1) ('items: ' + ((Get-UiaElement -Root $viewBox -ControlType ListItem | ForEach-Object { $_.Current.Name }) -join ' | '))
+            if ($choice.Count -eq 1) {
+                $choice[0].GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select()
+                Start-Sleep -Milliseconds 500
+                Test-That 'the foreign view lists exactly the foreign app' ((Get-UiaElement -Root $grid -ControlType DataItem).Count -eq 1) "rows: $((Get-UiaElement -Root $grid -ControlType DataItem).Count)"
+                $null = Select-GridRowByCell $grid 'Foreign'
+                Start-Sleep -Milliseconds 300
+                Test-ButtonStates $window @{ Edit = $false; Deploy = $false; Rebuild = $false; Retire = $false } 'Foreign app (only in Intune, not created by the tool)'
+                $viewBox.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+                Start-Sleep -Milliseconds 400
+                $back = @(Get-UiaElement -Root $viewBox -ControlType ListItem | Where-Object { $_.Current.Name -like 'All (foreign*' })
+                if ($back.Count -eq 1) { $back[0].GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select(); Start-Sleep -Milliseconds 500 }
+            }
             $null = Select-GridRowByCell $grid 'Orphan'
             Start-Sleep -Milliseconds 300
 
@@ -252,7 +279,7 @@ try {
             Test-That 'the filter narrows the list to one row' ((Get-UiaElement -Root $grid -ControlType DataItem).Count -eq 1) "rows: $((Get-UiaElement -Root $grid -ControlType DataItem).Count)"
             $filter.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue('')
             Start-Sleep -Milliseconds 500
-            Test-That 'clearing the filter shows all rows again' ((Get-UiaElement -Root $grid -ControlType DataItem).Count -eq 3)
+            Test-That 'clearing the filter shows all rows again' ((Get-UiaElement -Root $grid -ControlType DataItem).Count -eq 4)
 
             # Edit auf einer Zeile mit Definition gibt Aktion + Zeile zurueck.
             $null = Select-GridRowByCell $grid 'Both'

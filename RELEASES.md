@@ -443,6 +443,35 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Stufe 5: Apps, die nur in Intune liegen (2026-10-11)
+
+Das Inventar kannte nur Definitionen und Pakete. Jetzt hat auch jede App im Tenant, zu der es hier weder
+Definition noch Paket gibt, eine Zeile. Der Vermerk `Created by IntuneWin32Helper <Version>`, den
+`deploy.ps1` seit jeher beim Anlegen schreibt (`Add-IntuneWin32App -Notes`), trennt „vom Tool“ von „fremd“.
+Fremde Apps sind standardmäßig ausgeblendet (Ansicht „All (foreign Intune apps hidden)“), eigene Ansichten
+zeigen sie; Retire lässt fremde Apps nie zu (Schutz in `Get-RetirePlan`, zusätzlich im Knopf).
+
+Belegt:
+
+- `Tests/Test-IntuneOnly.ps1` (neu) und Erweiterung von `Test-RetireRebuild.ps1` (fremde App gewählt →
+  nichts gelöscht, App mit Vermerk → gelöscht), `Test-MainWindowUi.ps1` (201 Prüfungen: fremde Zeile in der
+  Standardansicht nicht da, in ihrer Ansicht da, Retire dort aus; ToolOnly-Zeile: nur Retire möglich),
+  Prüfung 37 (Schutz in `Get-RetirePlan`, Vermerk in der Vorlage).
+- Sieben RÃ¼ckbauten in neun LÃ¤ufen (Schutz entfernt — gegen drei Tests und die Prüfung —, Vermerk-Erkennung auf „immer ja“,
+  Intune-only-Zeile nicht angelegt, doppelte Zeile für definierte App, Standardansicht ungefiltert,
+  Retire-Knopf ohne Fremd-Regel, Vermerk in der Vorlage geändert) — jede schlug an.
+- **Gegen den echten Tenant, nur gelesen** (`zarenko.onmicrosoft.com`, 69 Apps): 24 mit dem Vermerk,
+  45 ohne. Inventar: 62 Zeilen in 0,2 s — 39 mit Definition, 8 „Intune only“ (u. a. die fünf Reste des
+  Feldtests vom 28.09. und zwei Chrome-Versionen), 15 fremde.
+
+Nicht belegt / Grenzen:
+
+- **Ältere Apps ohne Vermerk gelten als fremd**, auch wenn das Tool sie angelegt hat; sie sind dann
+  nur über „Foreign apps in Intune“ zu sehen und von hier nicht zu löschen. Gehört eine solche App dazu,
+  hilft eine Definition in `Apps.csv` (dann ist sie keine Intune-only-Zeile mehr). Ob 45 Apps ohne Vermerk
+  im Tenant überwiegend solche sind, ist nicht geprüft.
+- Die Ansichtsauswahl ist nicht gespeichert: das Fenster startet immer mit ausgeblendeten fremden Apps.
+- Aus einer Intune-only-Zeile lässt sich (noch) keine Definition erzeugen.
 ## Feldprüfung, zweiter Teil: Mehrfach-Deploy, Zuweisungsarten, Tenant-Wechsel, Geschwindigkeit (2026-10-11)
 
 Wieder Wegwerf-Kopie und Testapps „ZZ IW32H Multi A/B/C“ in `zarenko.onmicrosoft.com`; am Ende 69 Apps,

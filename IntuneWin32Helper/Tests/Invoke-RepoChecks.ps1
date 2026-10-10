@@ -1547,6 +1547,27 @@ if ($functionsFile) {
     }
 }
 # ---------------------------------------------------------------------------
+# 37) Fremde Apps (nur in Intune, ohne den Vermerk "Created by IntuneWin32Helper") werden von hier nie
+#     geloescht: der Schutz steht in Get-RetirePlan (dem einzigen Ort, an dem die Ids entstehen), nicht
+#     nur im Knopf - und das Anlegen schreibt den Vermerk, auf den sich die Erkennung stuetzt.
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $plan37 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-RetirePlan' }, $true) | Select-Object -First 1
+    if (-not $plan37) { Add-Failure "ForeignAppsProtected" "Get-RetirePlan fehlt" }
+    elseif ($plan37.Extent.Text -notmatch "IntuneOnly" -or $plan37.Extent.Text -notmatch "'foreign'") {
+        Add-Failure "ForeignAppsProtected" "Get-RetirePlan schliesst fremde Intune-only-Zeilen (IntuneOnly, Origin 'foreign') nicht aus - der Schutz stuende nur im Knopf"
+    }
+    if ($functionsFile.Ast.Extent.Text -notmatch "Created by IntuneWin32Helper\*") {
+        Add-Failure "ForeignAppsProtected" "Test-IntuneAppCreatedByTool sucht den Vermerk 'Created by IntuneWin32Helper*' nicht"
+    }
+}
+if (Test-Path -LiteralPath $templatePath) {
+    if ((Get-Content -LiteralPath $templatePath -Raw) -notmatch '-Notes "Created by IntuneWin32Helper') {
+        Add-Failure "ForeignAppsProtected" "deploy_template.ps1 schreibt den Vermerk 'Created by IntuneWin32Helper' nicht mehr (Add-IntuneWin32App -Notes) - das Inventar hielte alle neuen Apps fuer fremd"
+    }
+}
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

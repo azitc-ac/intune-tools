@@ -194,6 +194,23 @@ try {
     try { $null = @(Get-RetirePlan -Rows @(Get-AppInventory -Definitions $script:defs[0..0] -PacketRoot $packets -RootDir $rootDir -IntuneApps $null 6>$null)) } catch { $threw = $true }
     Test-That $threw "retire plan: a row whose Intune state was not read was planned"
 
+    # Fremde Apps (nur in Intune, ohne den Vermerk dieses Werkzeugs) loescht Retire nie, auch wenn die Zeile
+    # gewaehlt ist; eine App, die nur in Intune liegt und den Vermerk traegt, schon.
+    Reset-Run; & $resetTenant
+    $foreignApp = New-App 'Foreign' '3.0'
+    $toolApp = New-App 'ToolOnly' '4.0'; $toolApp | Add-Member -NotePropertyName notes -NotePropertyValue 'Created by IntuneWin32Helper 2.0.9' -Force
+    $script:tenantApps = @($script:tenantApps) + @($foreignApp, $toolApp)
+    $withIntuneOnly = @(Get-AppInventory -Definitions $script:defs -PacketRoot $packets -RootDir $rootDir -IntuneApps $script:tenantApps 6>$null)
+    $rowOf = { param([string]$key) @($withIntuneOnly | Where-Object { $_.Key -eq $key }) }
+    Test-That ((& $rowOf 'Foreign - 3.0')[0].Origin -eq 'foreign') 'intune-only: an app without the tool note is not classed as foreign'
+    Test-That ((& $rowOf 'ToolOnly - 4.0')[0].Origin -eq 'tool') 'intune-only: an app with the tool note is not classed as created by the tool'
+    $null = Invoke-InventoryRetire -Selection (& $rowOf 'Foreign - 3.0') -RootDir $rootDir -PacketRoot $packets -Ask $ask 6>$null
+    Test-That ((Get-RemovedIds).Count -eq 0) "retire (foreign app selected): removed [$((Get-RemovedIds) -join ',')] - a foreign app was deleted"
+    Test-That (@($script:tenantApps | Where-Object { $_.displayName -eq 'Foreign' }).Count -eq 1) 'retire (foreign app selected): the foreign app is gone from the tenant'
+    Reset-Run
+    $null = Invoke-InventoryRetire -Selection (@(& $rowOf 'Foreign - 3.0') + @(& $rowOf 'ToolOnly - 4.0') + @(& $rowOf 'Have - 1.0')) -RootDir $rootDir -PacketRoot $packets -Ask $ask 6>$null
+    Test-That (((Get-RemovedIds) -join ',') -eq 'id-Have-1.0,id-ToolOnly-4.0') "retire (foreign + tool-only + defined): removed [$((Get-RemovedIds) -join ',')], expected only id-Have-1.0 and id-ToolOnly-4.0"
+    Test-That ($script:asked[0].Text -notmatch 'Foreign') 'retire (foreign app selected): the question names the foreign app'
     # ------------------------------------------------------------------ Rebuild
     Reset-Run; & $resetTenant; $script:failBuild = @('BuildFail - 1.0'); $script:stuck = @('stuck-1')
     $orphanPkg = $null
