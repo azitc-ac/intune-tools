@@ -443,6 +443,34 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Keine MessageBox mehr, Knopf „Check tenant“ (2026-10-11)
+
+**MessageBox.** 30 Aufrufe von `[System.Windows.MessageBox]::Show` in `functions.ps1` (Hinweise, Validierung,
+Fehler, drei Rückfragen) gehen jetzt über `Show-ConfirmDialog`: derselbe Dialog, per UI Automation bedienbar,
+nie „Yes“ als Standard (die Rückfragen stehen auf „No“). Neu am Dialog: `-Icon Error` und `-Owner` (zentriert
+über Einstellungen bzw. Tenant-Dialog). Umgestellt per AST-Skript, nicht von Hand; Gegenstück ist Prüfung 40
+(kein `MessageBox`-Typ in irgendeiner Datei außerhalb von `Tests\`). Eine bestehende Prüfung (33, „fragt vor dem
+Löschen“) suchte den Text `'YesNo'` und wurde auf `-Buttons YesNo` angepasst. `UiAutomation.psm1` findet jetzt
+auch Fenster mit Besitzer (sie hängen im UIA-Baum unter dem Besitzer, nicht unter dem Desktop).
+
+**Check tenant** (`Functions\tenantcheck.ps1`, neu): prüft Eintrag, Anmeldung, Recht
+`DeviceManagementApps.ReadWrite.All` im Token, Lesezugriff auf die App-Liste und den Tenant des Tokens. Schreiben
+wird nicht erprobt (das legte eine App im Tenant an); das Recht steht im Token. Nach einer gescheiterten Prüfung gilt
+wieder das Token von vorher.
+
+Belegt:
+- `Test-TenantCheck.ps1` (neu, Anmeldung und Graph ersetzt, alles andere echter Code) und im Hauptfenster-Test
+  der Knopf `CheckTenant` sowie die Fehlermeldung mit Besitzerfenster (`confirm-owner`, 205 Prüfungen).
+- Gegenproben, alle erkannt: B1 (ein `MessageBox` zurück → Prüfung 40), B2 (`Error` aus `ValidateSet` → UI-Test),
+  B3 (`-Owner` ohne Wirkung → UI-Test, erst nach Ergänzung der Prüfung „gehört zum Elternfenster“; vorher grün,
+  also wertlos), T1–T6 (Token zurücksetzen, Rechteprüfung, früher Ausstieg, Base64url-Auffüllung, Tenantvergleich,
+  `-Force`) und L1 (Datei nicht geladen → neue Prüfung 41: jede Datei in `Functions\` wird vom Startskript geladen).
+- Einmal gegen den Test-Tenant `zarenko.onmicrosoft.com` (nur Lesen): alle fünf Schritte OK, Token trägt
+  `DeviceManagementApps.ReadWrite.All`.
+
+Nicht belegt: der Knopf im Hauptfenster von Hand (nur sein Vorhandensein per UI Automation; der Zweig in
+`Start-InventoryLoop` ist durch Prüfung „Knopf ohne Zweig“ gedeckt, aber nicht durchgeklickt); ein Tenant, dem
+das Recht fehlt (nur mit selbst gebautem Token getestet, kein echter Fall).
 ## Fehlermeldungen mit Fundstelle (2026-10-11)
 
 Aus dem Vergleich mit dem SCCMAppHelper (Befund eines UnterstÃ¼tzer-Agenten, Zahlen von mir nachgeprÃ¼ft): dort steht
@@ -715,9 +743,9 @@ Dialoggröße mit einer echten Definition (VSC-Wizard): 780 × 1243 px auf einem
 
 **Nicht belegt:**
 
-- [ ] **Die Rückfrage vor dem Löschen** ist ein Win32-`MessageBox` und per UI Automation nicht
-      bedienbar; geprüft ist nur, dass der Zweig `YesNo` verlangt (Prüfung 33), nicht, wie der
-      Text aussieht. Beleg: einen verwaisten Ordner im Fenster wirklich entfernen — Transcript
+- [ ] **Die Rückfrage vor dem Löschen** ist seit 2026-10-11 ein `Show-ConfirmDialog` (kein `MessageBox` mehr); geprüft ist
+      per UI Automation der Dialog selbst und dass der Zweig `YesNo` verlangt (Prüfung 33), nicht, wie der
+      Text im Feld aussieht. Beleg: einen verwaisten Ordner im Fenster wirklich entfernen — Transcript
       mit `REMOVED  <Name>`, Ordner weg, App in Intune unberührt.
 - [ ] **Bearbeiten, Anlegen und Duplizieren im Fenster gegen echte Daten**: `Apps.csv` danach
       unverändert bis auf die bearbeitete Zeile (`git diff`).

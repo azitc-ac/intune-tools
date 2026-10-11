@@ -12,7 +12,7 @@ left** the definition and the package, **on the right** the app in the tenant. E
 that list:
 
 ```
-Tenant [xyz.onmicrosoft.com v]  Show [All (foreign Intune apps hidden) v]  [Filter...]                    [Refresh]
+Tenant [xyz.onmicrosoft.com v]  Show [All (foreign Intune apps hidden) v]  [Filter...]      [Check tenant] [Refresh]
  Application | Version | Publisher | Package         |  Intune  | Next step
  (grey header: definition and package)                | (blue header: tenant)
 [gear] [Open folder] [Remove orphan folder] [Retire from Intune]
@@ -38,6 +38,13 @@ The tenant is chosen once at the start (not asked at all when only one is config
 switched in the window; a switch signs in again, because a token that is still valid for the
 *previous* tenant would otherwise be reused. Without a tenant the tool keeps working - the Intune
 column is simply empty.
+
+**Check tenant** answers "does the app registration have what the tool needs?" before the first deploy
+instead of in the middle of it as a 403: it signs in again and reports step by step - the entry in
+`config.json` (name, appid as GUID, clientSecret), the sign-in, the permission `DeviceManagementApps.ReadWrite.All`
+in the token, whether the app list can really be read, and whether the token belongs to the tenant that is
+configured. A failed step skips the ones that build on it. Writing is not tried (that would create an app in the
+tenant); the permission is read from the token. After a failed check the previous sign-in stays in effect.
 
 The buttons follow the selected rows: a row without a definition can be deployed, but not edited,
 deleted or built. **Deploy** builds a row that has no package first. **Delete definition** removes the
@@ -216,7 +223,7 @@ update result in the template), or an unguarded delete in Intune (`Remove-Intune
 not default to No, Rebuild deleting before building, the loop deleting directly), a fixed wait or a slow module query
 back in the build, or foreign Intune apps no longer protected from Retire (or the note that identifies the tool's
 own apps no longer written), the WinGet search not loaded at start, an unusable `Config\catalog.json`, the local index
-not excluded from git, a `[MessageBox]` in the search dialog, or a second place that downloads the index, and a failure in the tenant / build / deploy / delete workflow that prints a bare
+not excluded from git, a `[MessageBox]` anywhere (messages and questions go through `Show-ConfirmDialog`, which UI Automation can operate), a file in `Functions\` that the start script does not load, or a second place that downloads the index, and a failure in the tenant / build / deploy / delete workflow that prints a bare
 `$_.Exception.Message` instead of going through `Format-ErrorDetail` (file and line of the failing call).
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the
@@ -227,6 +234,7 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 | Test | What it proves |
 | --- | --- |
 | `Test-ErrorDetail.ps1` | an error message carries `(file:line)` of the failing call - also on the real path (the tenant read failing), without a location the message stays as it is |
+| `Test-TenantCheck.ps1` | "Check tenant" step by step with sign-in and Graph replaced: all OK; an incomplete entry never tries to sign in; a failing sign-in, a token that only reads, a failing read and a token of another tenant each fail their own step and skip what builds on it; a token without permission claims or no JWT is a remark, not a crash; a failed check restores the previous token |
 | `Test-WinGetIndex.ps1` | the local winget index with a real (small) SQLite database: update takes `index.db` out of the msix and counts the packages right (a one-row result must not fall apart into its columns), reads the schema as major.minor, a broken download keeps the working index, fetched only when missing or older than a day, search by id / name / moniker / publisher (also one hit, an apostrophe, newest version first, `0.10` before `0.9`), curated hits on top with the version from the index, fallback to the module, writing `catalog.json` |
 | `Test-WinGetDialog.ps1` | the search dialog through UI Automation: every control has an AutomationId, the curated list is the front page, Search / Return search, no hits and a failing search are reported, Remember writes the package into `catalog.json` (and says "already there"), Next returns name / id / version / publisher, Cancel nothing |
 | `Test-Prereqs.ps1` | `check-prereqs` finds the modules in the module path without the slow `Get-InstalledModule` query, checks once per process (every `deploy.ps1` ran it again), installs only what is missing |

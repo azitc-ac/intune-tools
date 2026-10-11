@@ -58,6 +58,18 @@ if ($Child) {
         exit 0
     }
 
+    # Szenario "confirm-owner": die Meldung mit Fehler-Symbol ueber einem Elternfenster (-Owner) -
+    # der Weg der Fehlermeldungen aus Einstellungen und Tenants, frueher ein MessageBox.
+    if ($Scenario -eq 'confirm-owner') {
+        Add-Type -AssemblyName WindowsBase, PresentationCore, PresentationFramework
+        $parent = New-Object System.Windows.Window
+        $parent.Width = 300; $parent.Height = 200; $parent.Left = 100; $parent.Top = 100
+        $parent.Show()
+        $answer = Show-ConfirmDialog -Text 'Save failed: disk full' -Title 'Error' -Buttons OK -Icon Error -Owner $parent
+        [System.IO.File]::WriteAllText($ResultPath, ([pscustomobject]@{ Answer = $answer; Centered = ($parent.OwnedWindows.Count -ge 0) } | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding $false))
+        exit 0
+    }
+
     # Szenario "confirm-<Tasten>-<Standard>": die Rueckfrage allein (Show-ConfirmDialog).
     if ($Scenario -like 'confirm-*') {
         $parts = $Scenario -split '-'
@@ -225,7 +237,7 @@ try {
         $grid = Find-UiaElement -Root $window -AutomationId 'InventoryGrid' -TimeoutSeconds 10
         Test-That 'the inventory grid exists' ($null -ne $grid)
 
-        foreach ($id in 'Add', 'NewVersion', 'Edit', 'Delete', 'Build', 'Deploy', 'Rebuild', 'Retire', 'OpenFolder', 'RemoveFolder', 'Settings', 'Refresh', 'Cancel', 'Filter', 'View', 'Tenant', 'Status') {
+        foreach ($id in 'Add', 'NewVersion', 'Edit', 'Delete', 'Build', 'Deploy', 'Rebuild', 'Retire', 'OpenFolder', 'RemoveFolder', 'Settings', 'Refresh', 'CheckTenant', 'Cancel', 'Filter', 'View', 'Tenant', 'Status') {
             Test-That "control $id exists" ($null -ne (Find-UiaElement -Root $window -AutomationId $id -TimeoutSeconds 5))
         }
 
@@ -462,6 +474,21 @@ try {
     $r = Wait-ChildResult $c
     Test-That 'editcancel: the dialog returned a result' ($null -ne $r)
     if ($r) { Test-That 'editcancel: Cancel returns nothing' ($r.Cancelled -eq $true) "cancelled: $($r.Cancelled)" }
+
+    # ---- Szenario 2a: Fehlermeldung mit Symbol ueber einem Elternfenster ----------
+    $c = Start-Child 'confirm-owner'
+    $dlg = Wait-UiaWindow -ProcessId $c.Process.Id -AutomationId 'ConfirmDialog' -TimeoutSeconds 60
+    Test-That 'confirm-owner: the message appears' ($null -ne $dlg)
+    if ($dlg) {
+        $shown = Find-UiaElement -Root $dlg -AutomationId 'ConfirmText' -TimeoutSeconds 5
+        Test-That 'confirm-owner: the text is shown' ($shown -and $shown.Current.Name -eq 'Save failed: disk full') "name: $(if ($shown) { $shown.Current.Name })"
+        # Mit Besitzer haengt das Fenster im UIA-Baum unter dem Elternfenster, nicht unter dem Desktop.
+        $above = [Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($dlg)
+        Test-That 'confirm-owner: the message belongs to the parent window' ($above -and $above.Current.ControlType -eq [Windows.Automation.ControlType]::Window) "parent: $(if ($above) { $above.Current.ControlType.ProgrammaticName })"
+        Invoke-UiaElement -Element (Find-UiaElement -Root $dlg -AutomationId 'ConfirmOK')
+    }
+    $r = Wait-ChildResult $c
+    Test-That 'confirm-owner: OK answered' ($r -and $r.Answer -eq 'OK') "answer: $(if ($r) { $r.Answer })"
 
     # ---- Szenario 2b: die Rueckfrage laesst sich anklicken ------------------------
     # Jeder Fall: Tasten, Standardtaste, was getan wird (Klick auf einen Knopf oder Fenster schliessen),

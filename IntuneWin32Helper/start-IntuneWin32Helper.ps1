@@ -19,6 +19,7 @@ if (Test-Path -LiteralPath $versionFile) {
 # Helfer (Start-ToolTranscript / Get-ToolConfig), nicht ueber eigene Pfade.
 . "$rootDir\functions\functions.ps1"
 . "$rootDir\functions\wingetindex.ps1"
+. "$rootDir\functions\tenantcheck.ps1"
 
 $null = Start-ToolTranscript -RootDir $rootDir
 

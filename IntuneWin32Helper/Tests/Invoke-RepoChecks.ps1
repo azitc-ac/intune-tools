@@ -1323,7 +1323,7 @@ if ($functionsFile) {
             $clauseText = $clause.Item2.Extent.Text
             if ($clauseText -notmatch 'Remove-OrphanPackages') { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder loescht nicht ueber Remove-OrphanPackages" }
             if ($clauseText -match 'Remove-Item|Remove-PackageFolder') { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder loescht direkt (Remove-Item/Remove-PackageFolder) und umgeht die Verweigerungsregeln" }
-            if ($clauseText -notmatch "'YesNo'")                       { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder fragt nicht vor dem Loeschen (YesNo)" }
+            if ($clauseText -notmatch "Show-ConfirmDialog[^\r\n]*-Buttons\s+'?YesNo")                       { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder fragt nicht vor dem Loeschen (YesNo)" }
         }
     }
 }
@@ -1660,6 +1660,33 @@ if ($functionsFile) {
         }
     }
 }
+# ---------------------------------------------------------------------------
+# 40) Keine Win32-MessageBox: sie ist per UI Automation nicht zu bedienen (UIPI) und damit nicht testbar.
+#     Jede Meldung und Rueckfrage geht ueber Show-ConfirmDialog.
+# ---------------------------------------------------------------------------
+$checked++
+foreach ($entry40 in $parsed.Values) {
+    if ($entry40.File.FullName -like '*\Tests\*') { continue }
+    $boxes40 = $entry40.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.TypeExpressionAst] -and $n.TypeName.FullName -like '*MessageBox' }, $true)
+    foreach ($box in $boxes40) {
+        Add-Failure "MessageBox" ("{0}:{1} [MessageBox] - Meldungen und Rueckfragen gehen ueber Show-ConfirmDialog (per UI Automation bedienbar)" -f $entry40.File.Name, $box.Extent.StartLineNumber)
+    }
+}
+# ---------------------------------------------------------------------------
+# 41) Jede Datei in Functions\ wird vom Startskript geladen - sonst fehlen ihre Funktionen zur Laufzeit,
+#     waehrend Tests, die die Datei einzeln laden, gruen bleiben.
+# ---------------------------------------------------------------------------
+$checked++
+$start41 = $parsed.Values | Where-Object { $_.File.Name -eq 'start-IntuneWin32Helper.ps1' } | Select-Object -First 1
+if ($start41) {
+    foreach ($entry41 in $parsed.Values) {
+        if ($entry41.File.DirectoryName -notlike '*\Functions') { continue }
+        if ($start41.Ast.Extent.Text -notmatch ('(?i)functions[\\/]' + [regex]::Escape($entry41.File.Name))) {
+            Add-Failure "FunctionsLoaded" ("Functions\{0} wird von start-IntuneWin32Helper.ps1 nicht geladen" -f $entry41.File.Name)
+        }
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------

@@ -2378,7 +2378,8 @@ function Show-ConfirmDialog {
         Gibt 'Yes' | 'No' | 'Cancel' | 'OK' zurueck, wie [MessageBox]::Show. Die Taste -Default ist die
         Standardtaste (Enter) und hat den Fokus; Esc und das Schliessen des Fensters antworten mit der
         "sicheren" Antwort (OK, No bzw. Cancel) - nie mit Yes. AutomationIds: ConfirmDialog, ConfirmText,
-        ConfirmYes, ConfirmNo, ConfirmCancel, ConfirmOK.
+        ConfirmYes, ConfirmNo, ConfirmCancel, ConfirmOK. -Owner zentriert das Fenster
+        ueber einem anderen Fenster (Einstellungen, Tenants).
     #>
     [CmdletBinding()]
     param(
@@ -2386,7 +2387,8 @@ function Show-ConfirmDialog {
         [string]$Title = 'IntuneWin32Helper',
         [ValidateSet('OK', 'YesNo', 'YesNoCancel')][string]$Buttons = 'OK',
         [ValidateSet('Yes', 'No', 'Cancel', 'OK')][string]$Default = 'OK',
-        [ValidateSet('None', 'Question', 'Warning', 'Information')][string]$Icon = 'None'
+        [ValidateSet('None', 'Question', 'Warning', 'Information', 'Error')][string]$Icon = 'None',
+        [System.Windows.Window]$Owner
     )
 
     Add-Type -AssemblyName PresentationCore      -ErrorAction SilentlyContinue | Out-Null
@@ -2406,6 +2408,7 @@ function Show-ConfirmDialog {
     $window.SizeToContent = 'Height'
     $window.MaxHeight = 720
     $window.WindowStartupLocation = 'CenterScreen'
+    if ($Owner) { $window.Owner = $Owner; $window.WindowStartupLocation = 'CenterOwner' }
     $window.ResizeMode = 'NoResize'
     $window.Tag = $safe
     [Windows.Automation.AutomationProperties]::SetAutomationId($window, 'ConfirmDialog')
@@ -2420,14 +2423,14 @@ function Show-ConfirmDialog {
 
     $body = New-Object Windows.Controls.DockPanel
     $body.LastChildFill = $true
-    $glyph = switch ($Icon) { 'Warning' { [string][char]0x26A0 } 'Question' { '?' } 'Information' { 'i' } default { '' } }
+    $glyph = switch ($Icon) { 'Warning' { [string][char]0x26A0 } 'Question' { '?' } 'Information' { 'i' } 'Error' { [string][char]0x2716 } default { '' } }
     if ($glyph) {
         $iconBlock = New-Object Windows.Controls.TextBlock
         $iconBlock.Text = $glyph
         $iconBlock.FontSize = 32
         $iconBlock.Margin = '0,0,14,0'
         $iconBlock.VerticalAlignment = 'Top'
-        $iconBlock.Foreground = $(if ($Icon -eq 'Warning') { 'DarkOrange' } else { 'SteelBlue' })
+        $iconBlock.Foreground = $(switch ($Icon) { 'Warning' { 'DarkOrange' } 'Error' { 'Firebrick' } default { 'SteelBlue' } })
         [Windows.Controls.DockPanel]::SetDock($iconBlock, 'Left')
         $null = $body.Children.Add($iconBlock)
     }
@@ -2530,6 +2533,15 @@ function Show-InventoryDialog {
     [Windows.Automation.AutomationProperties]::SetAutomationId($refreshButton, 'Refresh')
     [Windows.Controls.DockPanel]::SetDock($refreshButton, 'Right')
     $null = $top.Children.Add($refreshButton)
+
+    $checkTenantButton = New-Object Windows.Controls.Button
+    $checkTenantButton.Content = 'Check tenant'
+    $checkTenantButton.Padding = '14,4'
+    $checkTenantButton.Margin = '8,0,0,0'
+    $checkTenantButton.ToolTip = 'Sign in again and test what the app registration of this tenant may do (read, create apps)'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($checkTenantButton, 'CheckTenant')
+    [Windows.Controls.DockPanel]::SetDock($checkTenantButton, 'Right')
+    $null = $top.Children.Add($checkTenantButton)
 
     $tenantLabel = New-Object Windows.Controls.TextBlock
     $tenantLabel.Text = 'Tenant:'
@@ -2749,7 +2761,7 @@ function Show-InventoryDialog {
         param([string]$action)
         $selected = @($dataGrid.SelectedItems | Where-Object { $_ -isnot [int] })
         if ($action -in 'NewVersion', 'Edit', 'Delete', 'Build', 'Deploy', 'Rebuild', 'Retire', 'RemoveFolder' -and $selected.Count -eq 0) {
-            $null = [System.Windows.MessageBox]::Show($window, 'Select one or more rows first.', 'IntuneWin32Helper', 'OK', 'Information')
+            $null = Show-ConfirmDialog -Text 'Select one or more rows first.' -Title 'IntuneWin32Helper' -Buttons OK -Icon Information -Default OK -Owner $window
             return
         }
         $chosenTenant = ''
@@ -2805,7 +2817,7 @@ function Show-InventoryDialog {
             $null = Edit-SettingsDialog -Owner $window -PreferredPaths @($ConfigPath)
         }
         catch {
-            $null = [System.Windows.MessageBox]::Show($window, ("Error while opening the settings: {0}" -f (Format-ErrorDetail $_)), 'Settings', 'OK', 'Error')
+            $null = Show-ConfirmDialog -Text ("Error while opening the settings: {0}" -f (Format-ErrorDetail $_)) -Title 'Settings' -Buttons OK -Icon Error -Default OK -Owner $window
         }
         # Tenants und Paketordner koennen sich geaendert haben: neu lesen.
         & $choose 'Refresh'
@@ -2821,6 +2833,7 @@ function Show-InventoryDialog {
     $rebuildButton.Add_Click({ & $choose 'Rebuild' })
     $retireButton.Add_Click({  & $choose 'Retire' })
     $refreshButton.Add_Click({ & $choose 'Refresh' })
+    $checkTenantButton.Add_Click({ & $choose 'CheckTenant' })
     $closeButton.Add_Click({   & $choose 'Cancel' })
     $dataGrid.Add_MouseDoubleClick({
         $row = $dataGrid.SelectedItem
@@ -2946,6 +2959,16 @@ function Start-InventoryLoop {
             switch ($result.Action) {
                 'Refresh' { $reloadIntune = $true }
 
+                'CheckTenant' {
+                    # Pruefen meldet sich neu an: danach gilt das Token dieses Tenants, die Liste wird neu gelesen.
+                    $target = $tenant
+                    if (-not $target -and -not [string]::IsNullOrEmpty($result.TenantName)) {
+                        $target = $tenants | Where-Object { [string]$_.name -eq $result.TenantName } | Select-Object -First 1
+                    }
+                    $checked = Invoke-TenantCheck -Tenant $target -Tenants $tenants
+                    if ($checked -and -not (@($checked) | Where-Object { $_.Status -eq 'FAIL' })) { $tenant = $target; $reloadIntune = $true }
+                }
+
                 'SwitchTenant' {
                     if ([string]::IsNullOrEmpty($result.TenantName)) {
                         $tenant = $null
@@ -2964,7 +2987,7 @@ function Start-InventoryLoop {
                     if ($new) {
                         $problem = Test-AppRecord -Record $new -Others $definitions
                         if ($problem) {
-                            $null = [System.Windows.MessageBox]::Show($problem, 'Add application', 'OK', 'Warning')
+                            $null = Show-ConfirmDialog -Text $problem -Title 'Add application' -Buttons OK -Icon Warning -Default OK
                         }
                         else {
                             Save-AppsCsv -RootDir $RootDir -Rows (@($definitions) + $new)
@@ -2981,7 +3004,7 @@ function Start-InventoryLoop {
                         if ($new) {
                             $problem = Test-AppRecord -Record $new -Others $definitions
                             if ($problem) {
-                                $null = [System.Windows.MessageBox]::Show($problem, 'New version', 'OK', 'Warning')
+                                $null = Show-ConfirmDialog -Text $problem -Title 'New version' -Buttons OK -Icon Warning -Default OK
                             }
                             else {
                                 Save-AppsCsv -RootDir $RootDir -Rows (@($definitions) + $new)
@@ -3000,7 +3023,7 @@ function Start-InventoryLoop {
                         if ($edited) {
                             $problem = Test-AppRecord -Record $edited -Others $others
                             if ($problem) {
-                                $null = [System.Windows.MessageBox]::Show($problem, 'Edit', 'OK', 'Warning')
+                                $null = Show-ConfirmDialog -Text $problem -Title 'Edit' -Buttons OK -Icon Warning -Default OK
                             }
                             else {
                                 Save-AppsCsv -RootDir $RootDir -Rows (@($others) + $edited)
@@ -3017,9 +3040,7 @@ function Start-InventoryLoop {
                     $victims = @($selection | Where-Object { $_.HasDefinition })
                     if ($victims.Count -gt 0) {
                         $names = ($victims | ForEach-Object { $_.Key }) -join "`n"
-                        $answer = [System.Windows.MessageBox]::Show(
-                            ("Remove {0} definition(s) from Apps.csv?`n`n{1}`n`nThe package folders and the apps in Intune stay." -f $victims.Count, $names),
-                            'Delete definition', 'YesNo', 'Warning')
+                        $answer = Show-ConfirmDialog -Text ("Remove {0} definition(s) from Apps.csv?`n`n{1}`n`nThe package folders and the apps in Intune stay." -f $victims.Count, $names) -Title 'Delete definition' -Buttons YesNo -Icon Warning -Default No
                         if ($answer -eq 'Yes') {
                             $remove = @($victims | ForEach-Object { $_.DefinitionRecord })
                             Save-AppsCsv -RootDir $RootDir -Rows @($definitions | Where-Object { $remove -notcontains $_ })
@@ -3033,9 +3054,7 @@ function Start-InventoryLoop {
                     $existing = @($targets | Where-Object { $_.HasPackage })
                     $go = $true
                     if ($existing.Count -gt 0) {
-                        $answer = [System.Windows.MessageBox]::Show(
-                            ("{0} of the selected rows already have a package. Building creates it again from the definition; changes made by hand inside the package are lost.`n`nContinue?" -f $existing.Count),
-                            'Build package', 'YesNo', 'Warning')
+                        $answer = Show-ConfirmDialog -Text ("{0} of the selected rows already have a package. Building creates it again from the definition; changes made by hand inside the package are lost.`n`nContinue?" -f $existing.Count) -Title 'Build package' -Buttons YesNo -Icon Warning -Default No
                         $go = ($answer -eq 'Yes')
                     }
                     if ($go -and $targets.Count -gt 0) {
@@ -3095,7 +3114,7 @@ function Start-InventoryLoop {
                     # auch dann nicht angefasst, wenn er hier durchrutschte.
                     $orphans = @($selection | Where-Object { $_.HasPackage -and -not $_.HasDefinition })
                     if ($orphans.Count -eq 0) {
-                        $null = [System.Windows.MessageBox]::Show('None of the selected rows is an orphan: only a package folder without a row in Apps.csv can be removed here.', 'Remove orphan folder', 'OK', 'Information')
+                        $null = Show-ConfirmDialog -Text 'None of the selected rows is an orphan: only a package folder without a row in Apps.csv can be removed here.' -Title 'Remove orphan folder' -Buttons OK -Icon Information -Default OK
                     }
                     else {
                         $lines = foreach ($orphan in $orphans) {
@@ -3104,9 +3123,7 @@ function Start-InventoryLoop {
                             $stays   = $(if ($orphan.Intune -like 'yes*' -or $orphan.Intune -eq 'no content') { '  (the app stays in Intune)' } else { '' })
                             ("{0}`n    {1}  -  {2} file(s), {3:N1} MB{4}" -f $orphan.Key, $folder, $summary.Files, ($summary.Bytes / 1MB), $stays)
                         }
-                        $answer = [System.Windows.MessageBox]::Show(
-                            ("Delete {0} package folder(s) that have no definition in Apps.csv?`n`n{1}`n`nThis cannot be undone. The apps in Intune are not touched." -f $orphans.Count, ($lines -join "`n`n")),
-                            'Remove orphan folder', 'YesNo', 'Warning', 'No')
+                        $answer = Show-ConfirmDialog -Text ("Delete {0} package folder(s) that have no definition in Apps.csv?`n`n{1}`n`nThis cannot be undone. The apps in Intune are not touched." -f $orphans.Count, ($lines -join "`n`n")) -Title 'Remove orphan folder' -Buttons YesNo -Icon Warning -Default No
                         if ($answer -eq 'Yes') {
                             $outcome = Remove-OrphanPackages -Rows $orphans -PacketRoot $packetRoot
                             Write-Host ("Orphan folders: {0} removed, {1} skipped, {2} failed." -f $outcome.Removed.Count, $outcome.Skipped.Count, $outcome.Failed.Count) -ForegroundColor Cyan
@@ -3129,7 +3146,7 @@ function Start-InventoryLoop {
         catch {
             # Eine gescheiterte Aktion beendet das Tool nicht.
             Write-Host ("Action [{0}] failed: {1}" -f $result.Action, (Format-ErrorDetail $_)) -ForegroundColor Red
-            $null = [System.Windows.MessageBox]::Show(("Action [{0}] failed:`n`n{1}" -f $result.Action, (Format-ErrorDetail $_)), 'IntuneWin32Helper', 'OK', 'Error')
+            $null = Show-ConfirmDialog -Text ("Action [{0}] failed:`n`n{1}" -f $result.Action, (Format-ErrorDetail $_)) -Title 'IntuneWin32Helper' -Buttons OK -Icon Error -Default OK
         }
     }
 }
@@ -4017,7 +4034,7 @@ function Open-SelectDialogWithSearch {
             }
         } catch {
             $newData = @()
-            [System.Windows.MessageBox]::Show("Error while searching: $($_.Exception.Message)") | Out-Null
+            $null = Show-ConfirmDialog -Text "Error while searching: $($_.Exception.Message)" -Title 'IntuneWin32Helper' -Buttons OK -Icon None -Default OK
         }
 
         $dataGrid.ItemsSource = $null
@@ -4088,7 +4105,7 @@ function Edit-SettingsDialog {
                 $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
                 $obj = $raw | ConvertFrom-Json -ErrorAction Stop
             } catch {
-                [System.Windows.MessageBox]::Show(("JSON could not be loaded: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+                $null = Show-ConfirmDialog -Text ("JSON could not be loaded: {0}" -f $_.Exception.Message) -Title "Error" -Buttons OK -Icon Error -Default OK
             }
         }
         if ($obj -eq $null) {
@@ -4111,7 +4128,7 @@ function Edit-SettingsDialog {
             Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
             return $true
         } catch {
-            [System.Windows.MessageBox]::Show(("JSON could not be saved: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+            $null = Show-ConfirmDialog -Text ("JSON could not be saved: {0}" -f $_.Exception.Message) -Title "Error" -Buttons OK -Icon Error -Default OK
             return $false
         }
     }
@@ -4294,7 +4311,7 @@ function Edit-SettingsDialog {
                 if ($ofd.FileName) { $tbPath.Text = $ofd.FileName }
             }
         } catch {
-            [System.Windows.MessageBox]::Show(("File selection falied: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+            $null = Show-ConfirmDialog -Text ("File selection falied: {0}" -f $_.Exception.Message) -Title "Error" -Buttons OK -Icon Error -Default OK -Owner $dlg
         }
     })
 
@@ -4309,7 +4326,7 @@ function Edit-SettingsDialog {
                 if ($fbd.SelectedPath) { $tbPacketRoot.Text = $fbd.SelectedPath }
             }
         } catch {
-            [System.Windows.MessageBox]::Show(("Folder selection failed: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+            $null = Show-ConfirmDialog -Text ("Folder selection failed: {0}" -f $_.Exception.Message) -Title "Error" -Buttons OK -Icon Error -Default OK -Owner $dlg
         }
     })
 
@@ -4324,7 +4341,7 @@ function Edit-SettingsDialog {
                 $dgTenants.ItemsSource = $list
             }
         } catch {
-            [System.Windows.MessageBox]::Show(("Tenant edit failed: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+            $null = Show-ConfirmDialog -Text ("Tenant edit failed: {0}" -f $_.Exception.Message) -Title "Error" -Buttons OK -Icon Error -Default OK -Owner $dlg
         }
     })
 
@@ -4333,7 +4350,7 @@ function Edit-SettingsDialog {
         try {
             $sel = $dgTenants.SelectedItem
             if ($sel -eq $null) {
-                [System.Windows.MessageBox]::Show("Please select a tenant.", "Hint", "OK", "Information") | Out-Null
+                $null = Show-ConfirmDialog -Text "Please select a tenant." -Title "Hint" -Buttons OK -Icon Information -Default OK -Owner $dlg
                 return
             }
             $initialSecret = ""
@@ -4346,7 +4363,7 @@ function Edit-SettingsDialog {
                 $dgTenants.Items.Refresh()
             }
         } catch {
-            [System.Windows.MessageBox]::Show(("Tenant edit failed: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+            $null = Show-ConfirmDialog -Text ("Tenant edit failed: {0}" -f $_.Exception.Message) -Title "Error" -Buttons OK -Icon Error -Default OK -Owner $dlg
         }
     })
 
@@ -4355,10 +4372,10 @@ function Edit-SettingsDialog {
         try {
             $selected = $dgTenants.SelectedItems
             if ($selected -eq $null -or $selected.Count -eq 0) {
-                [System.Windows.MessageBox]::Show("No tenants selected for deletion.", "Hint", "OK", "Information") | Out-Null
+                $null = Show-ConfirmDialog -Text "No tenants selected for deletion." -Title "Hint" -Buttons OK -Icon Information -Default OK -Owner $dlg
                 return
             }
-            $confirm = [System.Windows.MessageBox]::Show("Delete selected Tenants ?", "Confirm", "YesNo", "Warning")
+            $confirm = Show-ConfirmDialog -Text "Delete selected Tenants ?" -Title "Confirm" -Buttons YesNo -Icon Warning -Default No -Owner $dlg
             if ($confirm -eq "Yes") {
                 $remaining = @()
                 $current = @($dgTenants.ItemsSource)
@@ -4371,7 +4388,7 @@ function Edit-SettingsDialog {
                 $dgTenants.ItemsSource = $remaining
             }
         } catch {
-            [System.Windows.MessageBox]::Show(("Tenant edit failed: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+            $null = Show-ConfirmDialog -Text ("Tenant edit failed: {0}" -f $_.Exception.Message) -Title "Error" -Buttons OK -Icon Error -Default OK -Owner $dlg
         }
     })
 
@@ -4398,7 +4415,7 @@ function Edit-SettingsDialog {
             $dgTenants.ItemsSource = $null
             $dgTenants.ItemsSource = $tenantItems
         } catch {
-            [System.Windows.MessageBox]::Show(("Reloading failed: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+            $null = Show-ConfirmDialog -Text ("Reloading failed: {0}" -f $_.Exception.Message) -Title "Error" -Buttons OK -Icon Error -Default OK -Owner $dlg
         }
     })
 
@@ -4407,7 +4424,7 @@ function Edit-SettingsDialog {
         try {
             $targetPath = $tbPath.Text
             if (-not $targetPath) {
-                [System.Windows.MessageBox]::Show("No path given.", "Hint", "OK", "Warning") | Out-Null
+                $null = Show-ConfirmDialog -Text "No path given." -Title "Hint" -Buttons OK -Icon Warning -Default OK -Owner $dlg
                 return
             }
 
@@ -4419,11 +4436,11 @@ function Edit-SettingsDialog {
                 $s = ""
                 if ($row.PSObject.Properties.Name -contains "clientSecret") { $s = $row.clientSecret }
                 if (-not $n -or $n.Trim().Length -eq 0) {
-                    [System.Windows.MessageBox]::Show("Tenant name must not be empty.", "Validation", "OK", "Warning") | Out-Null
+                    $null = Show-ConfirmDialog -Text "Tenant name must not be empty." -Title "Validation" -Buttons OK -Icon Warning -Default OK -Owner $dlg
                     return
                 }
                 if (-not (Test-GuidString -Text $a)) {
-                    [System.Windows.MessageBox]::Show(("Invalid AppId (GUID) for tenant '{0}'." -f $n), "Validation", "OK", "Warning") | Out-Null
+                    $null = Show-ConfirmDialog -Text ("Invalid AppId (GUID) for tenant '{0}'." -f $n) -Title "Validation" -Buttons OK -Icon Warning -Default OK -Owner $dlg
                     return
                 }
                 $tenantArray += @{ name = $n; appid = $a; clientSecret = $s }
@@ -4440,9 +4457,9 @@ function Edit-SettingsDialog {
             }
 
             $ok = Save-ConfigObject -Data $data -Path $targetPath
-            if ($ok) { [System.Windows.MessageBox]::Show(("Saved: {0}" -f $targetPath), "Success", "OK", "Information") | Out-Null }
+            if ($ok) { $null = Show-ConfirmDialog -Text ("Saved: {0}" -f $targetPath) -Title "Success" -Buttons OK -Icon Information -Default OK -Owner $dlg }
         } catch {
-            [System.Windows.MessageBox]::Show(("Save failed: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+            $null = Show-ConfirmDialog -Text ("Save failed: {0}" -f $_.Exception.Message) -Title "Error" -Buttons OK -Icon Error -Default OK -Owner $dlg
         }
     })
 
@@ -4629,11 +4646,11 @@ function Edit-TenantDialog {
             if ($tbSecretPlain.Visibility -eq 'Visible') { $s = $tbSecretPlain.Text }
 
             if (-not $n -or $n.Trim().Length -eq 0) {
-                [System.Windows.MessageBox]::Show("Name must not be empty.", "Validation", "OK", "Warning") | Out-Null
+                $null = Show-ConfirmDialog -Text "Name must not be empty." -Title "Validation" -Buttons OK -Icon Warning -Default OK -Owner $dlg
                 return
             }
             if (-not (Test-GuidString -Text $a)) {
-                [System.Windows.MessageBox]::Show("AppId is not a valid GUID.", "Validation", "OK", "Warning") | Out-Null
+                $null = Show-ConfirmDialog -Text "AppId is not a valid GUID." -Title "Validation" -Buttons OK -Icon Warning -Default OK -Owner $dlg
                 return
             }
             # clientSecret darf leer sein; keine weitere Validierung erforderlich
@@ -4645,7 +4662,7 @@ function Edit-TenantDialog {
             $dlg.DialogResult = $true
             $dlg.Close()
         } catch {
-            [System.Windows.MessageBox]::Show(("Error: {0}" -f (Format-ErrorDetail $_)), "Error", "OK", "Error") | Out-Null
+            $null = Show-ConfirmDialog -Text ("Error: {0}" -f (Format-ErrorDetail $_)) -Title "Error" -Buttons OK -Icon Error -Default OK -Owner $dlg
         }
     })
 

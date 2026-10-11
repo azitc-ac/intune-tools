@@ -46,6 +46,14 @@ function Wait-UiaWindow {
     while ((Get-Date) -lt $deadline) {
         $window = $root.FindFirst([Windows.Automation.TreeScope]::Children, $condition)
         if ($window) { return $window }
+        # Ein Fenster mit Besitzer (Owner) haengt im UIA-Baum unter dem Besitzer, nicht unter dem Desktop.
+        if ($AutomationId) {
+            $byId = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty, $AutomationId)
+            foreach ($top in $root.FindAll([Windows.Automation.TreeScope]::Children, $byProcess)) {
+                $owned = $top.FindFirst([Windows.Automation.TreeScope]::Descendants, $byId)
+                if ($owned) { return $owned }
+            }
+        }
         Start-Sleep -Milliseconds 400
     }
     return $null
