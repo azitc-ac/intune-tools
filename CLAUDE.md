@@ -35,6 +35,9 @@ Der letzte Stand mit Transcript-Beleg ist der Tag `IntuneWin32Helper-v2.0.0`.
 Was dort belegt ist, was seither dazukam und was noch gegen echte Hardware zu prüfen
 ist, steht in [RELEASES.md](RELEASES.md) — mit der Liste der offenen Feldprüfungen.
 
+Den Überblick (was im Feld gelaufen ist, was offen ist, was entschieden ist) gibt [STATUS.md](STATUS.md); zwei
+Prüfungen zwingen sie, mit `RELEASES.md` Schritt zu halten.
+
 Ein grüner Prüflauf ist **kein** Feldbeleg. Belegt ist, was ein Transcript, ein
 IME-Log oder das Intune-Portal zeigt.
 

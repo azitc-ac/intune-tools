@@ -443,6 +443,22 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## `STATUS.md` und kaputte Umlaute (2026-10-11)
+
+- **`STATUS.md`** (neu, im Repo-Wurzelverzeichnis neben `RELEASES.md`): Überblick zum Wiedereinstieg nach dem Muster der gleichnamigen
+  Datei im SCCMAppHelper, aber kurz – Stand, was im Feld belegt ist, was offen ist (nach Art sortiert), feste Entscheidungen,
+  Umgebungen und Arbeitsregeln. Sie fasst zusammen und verweist (`Quelle: <Überschrift>`), `RELEASES.md` bleibt das Protokoll.
+- **Prüfung 44:** jeder Abschnitt von `RELEASES.md` mit „Nicht belegt“ oder einem offenen Kästchen muss in `STATUS.md` über eine
+  `Quelle:`-Zeile vorkommen, jede `Quelle:`-Zeile muss einen echten Abschnitt nennen, und `Stand:` darf nicht älter sein als der
+  jüngste Abschnitt. Beim ersten Lauf fehlte der Abschnitt „Offene Feldprüfung für `main`“ – genau die Sorte Lücke, die sie fangen soll.
+- **Fund beim Lesen von `RELEASES.md`:** 57 Stellen mit doppelt kodierten Umlauten (das Muster eines UTF-8-Zeichens, das als Windows-1252 gelesen wurde, zum Beispiel bei „ü“ und bei typografischen Anführungszeichen) in den Abschnitten
+  „Fehlermeldungen mit Fundstelle“ und „WinGet-Suche mit lokalem Index“ sowie einer Zeile bei „Stufe 5“; ein Skript ohne BOM wurde von
+  Windows PowerShell als ANSI gelesen. Zeichen für Zeichen zurückgewandelt (CP1252-Bytes → UTF-8; 29 Zeilen, danach keine
+  Restfolge und kein Ersatzzeichen im ganzen Repo). **Prüfung 45** sucht solche Folgen in allen Dokumenten und Skripten.
+- **Belegt:** Gegenproben auf einer Kopie des ganzen Repos – Zeile `Quelle:` entfernt (rot), Quelle auf einen nicht vorhandenen Abschnitt
+  (rot), `Stand:` zurückgesetzt (rot), neuer Abschnitt mit „Nicht belegt“ ohne Eintrag (rot), umbenannter Abschnitt (rot), ein doppelt kodiertes Umlaut-Zeichen
+  im README (rot). **Nicht belegt:** ob die Zuordnung der offenen Punkte zu den Abschnitten vollständig stimmt – das hat die Prüfung nur auf
+  Überschriftsebene gezeigt, nicht je Kästchen; einige alte Kästchen sind vermutlich überholt und in `STATUS.md` so gekennzeichnet.
 ## Editor: „From installer…“ (2026-10-11)
 
 Der Paketbau leitete Install- und Uninstall-Befehl schon aus dem Installer in `Files\` ab (Engine-Erkennung wie im
@@ -541,53 +557,53 @@ Nicht belegt: der Knopf im Hauptfenster von Hand (nur sein Vorhandensein per UI 
 das Recht fehlt (nur mit selbst gebautem Token getestet, kein echter Fall).
 ## Fehlermeldungen mit Fundstelle (2026-10-11)
 
-Aus dem Vergleich mit dem SCCMAppHelper (Befund eines UnterstÃ¼tzer-Agenten, Zahlen von mir nachgeprÃ¼ft): dort steht
-hinter jeder Fehlermeldung `(datei.ps1:zeile)`, weil â€žCannot validate argumentâ€œ ohne Herkunft eine Stunde Suche
+Aus dem Vergleich mit dem SCCMAppHelper (Befund eines Unterstützer-Agenten, Zahlen von mir nachgeprüft): dort steht
+hinter jeder Fehlermeldung `(datei.ps1:zeile)`, weil „Cannot validate argument“ ohne Herkunft eine Stunde Suche
 kostete. Hier gab es 31 Stellen mit nacktem `$_.Exception.Message`; Fehler aus dem Intune-Modul blieben anonym.
-`Format-ErrorDetail` (functions.ps1) hÃ¤ngt die Fundstelle an; 16 Stellen in den AblÃ¤ufen Tenant lesen, bauen,
-verteilen, lÃ¶schen, Hauptschleife, Bearbeiten-, Tenant- und WinGet-Dialog nutzen es. Die Einstellungs-, Logo- und
-Konfigurationsdialoge (15 Stellen) blieben bewusst bei der bloÃŸen Meldung.
+`Format-ErrorDetail` (functions.ps1) hängt die Fundstelle an; 16 Stellen in den Abläufen Tenant lesen, bauen,
+verteilen, löschen, Hauptschleife, Bearbeiten-, Tenant- und WinGet-Dialog nutzen es. Die Einstellungs-, Logo- und
+Konfigurationsdialoge (15 Stellen) blieben bewusst bei der bloßen Meldung.
 
-Belegt: `Tests/Test-ErrorDetail.ps1` (neu; Funktion und der echte Weg â€žLesen des Tenants scheitertâ€œ),
-PrÃ¼fung 39 (kein nacktes `$_.Exception.Message` in diesen Funktionen; 467 PrÃ¼fungen), Gegenproben E1 (Fundstelle
-entfernt â†’ Test rot), E2/E3 (Stelle zurÃ¼ckgebaut â†’ PrÃ¼fung rot).
+Belegt: `Tests/Test-ErrorDetail.ps1` (neu; Funktion und der echte Weg „Lesen des Tenants scheitert“),
+Prüfung 39 (kein nacktes `$_.Exception.Message` in diesen Funktionen; 467 Prüfungen), Gegenproben E1 (Fundstelle
+entfernt → Test rot), E2/E3 (Stelle zurückgebaut → Prüfung rot).
 
 Nicht belegt: ob die Fundstelle bei Fehlern aus Modul-Cmdlets (nicht aus eigenem Code) auf die eigene Aufrufzeile
-zeigt â€“ sie zeigt auf den Aufruf in unserem Skript, nicht ins Modul.
+zeigt – sie zeigt auf den Aufruf in unserem Skript, nicht ins Modul.
 ## WinGet-Suche mit lokalem Index (2026-10-11)
 
-Der Suchdialog hinter â€žFrom WinGet...â€œ fragte bei jeder Suche `Find-WinGetPackage` (Modul `Microsoft.WinGet.Client`,
+Der Suchdialog hinter „From WinGet...“ fragte bei jeder Suche `Find-WinGetPackage` (Modul `Microsoft.WinGet.Client`,
 online, ohne Titelseite). Jetzt arbeitet er wie im SCCMAppHelper: `Functions\wingetindex.ps1` holt einmal am Tag
-den offiziellen Index (`source.msix` vom CDN, 20,5 MB â†’ `Config\winget-index\index.db`, nicht im Git) und liest
-ihn Ã¼ber `winsqlite3.dll`; `Config\catalog.json` ist die kuratierte Titelseite (28 Pakete, *Remember* ergÃ¤nzt
-sie); der Dialog hat Indexzeile, *Update index*, Hinweis bei â€žnichts gefundenâ€œ und AutomationIds. Das Modul
-bleibt als RÃ¼ckfall, wenn der Index nicht zu holen ist.
+den offiziellen Index (`source.msix` vom CDN, 20,5 MB → `Config\winget-index\index.db`, nicht im Git) und liest
+ihn über `winsqlite3.dll`; `Config\catalog.json` ist die kuratierte Titelseite (28 Pakete, *Remember* ergänzt
+sie); der Dialog hat Indexzeile, *Update index*, Hinweis bei „nichts gefunden“ und AutomationIds. Das Modul
+bleibt als Rückfall, wenn der Index nicht zu holen ist.
 
 Belegt:
 
-- **Gegen das echte CDN** (einmal, diese Maschine): Index 15.546 Pakete, Abruf samt Entpacken und PrÃ¼fen 1,5 s,
+- **Gegen das echte CDN** (einmal, diese Maschine): Index 15.546 Pakete, Abruf samt Entpacken und Prüfen 1,5 s,
   danach jede Suche ca. 150 ms (`putty`: 5 Treffer; `PuTTY.PuTTY`: 12 Versionen, neueste 0.85.0.0); alle 28 Ids der
   Titelseite stehen im Index. Die Metadaten des Index sind `majorVersion=1`, `minorVersion=7`.
-- Dabei zwei Fehler gefunden, die im SCCMAppHelper-Original derselbe Code haben dÃ¼rfte (dort nicht geprÃ¼ft):
-  `COUNT(*)` lieferte â€ž49â€œ statt 15546 (ein Ergebnis aus genau einer Zeile zerfiel in der Pipeline in seine
-  Spalten, Ã¼brig blieb das erste Zeichen) und die Schemaversion kam als â€ž7.1â€œ statt â€ž1.7â€œ. Beides behoben und
+- Dabei zwei Fehler gefunden, die im SCCMAppHelper-Original derselbe Code haben dürfte (dort nicht geprüft):
+  `COUNT(*)` lieferte „49“ statt 15546 (ein Ergebnis aus genau einer Zeile zerfiel in der Pipeline in seine
+  Spalten, übrig blieb das erste Zeichen) und die Schemaversion kam als „7.1“ statt „1.7“. Beides behoben und
   vom Test erzwungen.
 - `Tests/Test-WinGetIndex.ps1` (neu, mit echter kleiner SQLite-Datenbank, ohne Netz), `Tests/Test-WinGetDialog.ps1`
-  (neu, 29 PrÃ¼fungen per UI Automation), PrÃ¼fung 38 in `Invoke-RepoChecks.ps1` (447 PrÃ¼fungen); alle 15
-  Testdateien und die PrÃ¼fungen grÃ¼n.
-- 19 Gegenproben (11 am Index, 8 am Dialog), jede schlug an (bei einer brach der Lauf ab, ohne FAIL-Zeile, Exit 1): Zeilen-Komma, Schema-Reihenfolge, kaputter Download rÃ¤umt nicht auf,
-  AltersprÃ¼fung, Apostroph-Maskierung, Reihenfolge kuratiert/Index, Version aus dem Index, Herausgeber-Suche,
-  JSON-Maskierung, Versionssortierung, Warnung beim Modul-RÃ¼ckfall, Remember, Publisher, Return-Suche,
-  AutomationId, Meldungen bei keinem Treffer / Fehler / ohne Auswahl, Titelseite; dazu fÃ¼nf fÃ¼r PrÃ¼fung 38.
+  (neu, 29 Prüfungen per UI Automation), Prüfung 38 in `Invoke-RepoChecks.ps1` (447 Prüfungen); alle 15
+  Testdateien und die Prüfungen grün.
+- 19 Gegenproben (11 am Index, 8 am Dialog), jede schlug an (bei einer brach der Lauf ab, ohne FAIL-Zeile, Exit 1): Zeilen-Komma, Schema-Reihenfolge, kaputter Download räumt nicht auf,
+  Altersprüfung, Apostroph-Maskierung, Reihenfolge kuratiert/Index, Version aus dem Index, Herausgeber-Suche,
+  JSON-Maskierung, Versionssortierung, Warnung beim Modul-Rückfall, Remember, Publisher, Return-Suche,
+  AutomationId, Meldungen bei keinem Treffer / Fehler / ohne Auswahl, Titelseite; dazu fünf für Prüfung 38.
 
 Nicht belegt:
 
 - **Return im Suchfeld:** belegt ist, dass das KeyDown-Ereignis sucht; dass `Handled` die Eingabetaste vom
-  Standardknopf â€žNextâ€œ fernhÃ¤lt, lÃ¤sst sich ohne Vordergrundfenster nicht prÃ¼fen (echte Tastatur).
+  Standardknopf „Next“ fernhält, lässt sich ohne Vordergrundfenster nicht prüfen (echte Tastatur).
 - Der Dialog wurde nicht von Hand bedient, nur per UI Automation; der erste Abruf des Index blockiert das Fenster
-  einen Moment (Meldung â€žSearching ...â€œ ist vorher gezeichnet).
-- Kein Download der Installer (Hash, Signatur): bewusst nicht Ã¼bernommen, das Paket ruft zur Laufzeit
-  `winget install` auf. Als Idee fÃ¼r fixe Versionen vorgemerkt.
+  einen Moment (Meldung „Searching ...“ ist vorher gezeichnet).
+- Kein Download der Installer (Hash, Signatur): bewusst nicht übernommen, das Paket ruft zur Laufzeit
+  `winget install` auf. Als Idee für fixe Versionen vorgemerkt.
 ## Stufe 5: Apps, die nur in Intune liegen (2026-10-11)
 
 Das Inventar kannte nur Definitionen und Pakete. Jetzt hat auch jede App im Tenant, zu der es hier weder
@@ -602,7 +618,7 @@ Belegt:
   nichts gelöscht, App mit Vermerk → gelöscht), `Test-MainWindowUi.ps1` (201 Prüfungen: fremde Zeile in der
   Standardansicht nicht da, in ihrer Ansicht da, Retire dort aus; ToolOnly-Zeile: nur Retire möglich),
   Prüfung 37 (Schutz in `Get-RetirePlan`, Vermerk in der Vorlage).
-- Sieben RÃ¼ckbauten in neun LÃ¤ufen (Schutz entfernt — gegen drei Tests und die Prüfung —, Vermerk-Erkennung auf „immer ja“,
+- Sieben Rückbauten in neun Läufen (Schutz entfernt — gegen drei Tests und die Prüfung —, Vermerk-Erkennung auf „immer ja“,
   Intune-only-Zeile nicht angelegt, doppelte Zeile für definierte App, Standardansicht ungefiltert,
   Retire-Knopf ohne Fremd-Regel, Vermerk in der Vorlage geändert) — jede schlug an.
 - **Gegen den echten Tenant, nur gelesen** (`zarenko.onmicrosoft.com`, 69 Apps): 24 mit dem Vermerk,

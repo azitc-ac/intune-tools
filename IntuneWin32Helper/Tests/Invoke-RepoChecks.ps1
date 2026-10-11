@@ -1757,6 +1757,58 @@ if (Test-Path -LiteralPath $readmePath43) {
     }
 }
 # ---------------------------------------------------------------------------
+# 44) STATUS.md haelt, was RELEASES.md offen laesst: jeder Abschnitt von RELEASES.md mit "Nicht belegt" oder einem
+#     offenen Kaestchen "- [ ]" steht in STATUS.md in einer Zeile "Quelle: <Ueberschrift>"; jede solche Zeile nennt
+#     einen Abschnitt, den es gibt; und "Stand:" ist nicht aelter als der juengste Abschnitt. Sonst veraltet die
+#     Uebersicht still (die Datei im SCCMAppHelper tut das mit ihrem "Last updated").
+# ---------------------------------------------------------------------------
+$checked++
+$gitRoot44 = Split-Path -Parent $RepoRoot
+$releases44 = Join-Path $gitRoot44 'RELEASES.md'
+$status44 = Join-Path $gitRoot44 'STATUS.md'
+if ((Test-Path -LiteralPath $releases44) -and (Test-Path -LiteralPath $status44)) {
+    $sections44 = [ordered]@{}
+    $current44 = $null
+    foreach ($line44 in ([IO.File]::ReadAllText($releases44) -split "`r?`n")) {
+        if ($line44 -match '^## (?<h>.+?)\s*$') { $current44 = $Matches['h']; $sections44[$current44] = New-Object System.Text.StringBuilder; continue }
+        if ($current44) { $null = $sections44[$current44].AppendLine($line44) }
+    }
+    $statusText44 = [IO.File]::ReadAllText($status44)
+    $quoted44 = @{}
+    foreach ($line44 in ($statusText44 -split "`r?`n")) {
+        $parts44 = $line44 -split 'Quelle: '
+        for ($i44 = 1; $i44 -lt $parts44.Count; $i44++) { $quoted44[($parts44[$i44] -replace '[\s,|]+$', '')] = $true }
+    }
+    foreach ($heading44 in $sections44.Keys) {
+        $body44 = $sections44[$heading44].ToString()
+        if (($body44 -match '(?i)nicht belegt' -or $body44 -match '(?m)^\s*- \[ \]') -and -not $quoted44.ContainsKey($heading44)) {
+            Add-Failure "StatusMd" ("RELEASES.md '{0}' nennt Offenes ('Nicht belegt' oder '- [ ]'), STATUS.md hat dafuer keine Zeile 'Quelle: {0}'" -f $heading44)
+        }
+    }
+    foreach ($quote44 in $quoted44.Keys) {
+        if (-not $sections44.Contains($quote44)) { Add-Failure "StatusMd" ("STATUS.md nennt 'Quelle: {0}', einen solchen Abschnitt hat RELEASES.md nicht" -f $quote44) }
+    }
+    $newest44 = ''
+    foreach ($heading44 in $sections44.Keys) {
+        foreach ($m44 in [regex]::Matches($heading44, '\((\d{4}-\d{2}-\d{2})\)')) { if ($m44.Groups[1].Value -gt $newest44) { $newest44 = $m44.Groups[1].Value } }
+    }
+    if ($statusText44 -notmatch '(?m)^Stand: (?<d>\d{4}-\d{2}-\d{2})') { Add-Failure "StatusMd" "STATUS.md hat keine Zeile 'Stand: JJJJ-MM-TT'" }
+    elseif ($Matches['d'] -lt $newest44) { Add-Failure "StatusMd" ("STATUS.md: Stand {0} ist aelter als der juengste Abschnitt von RELEASES.md ({1})" -f $Matches['d'], $newest44) }
+}
+# ---------------------------------------------------------------------------
+# 45) Kein Mojibake in Dokumenten und Skripten: ein UTF-8-Text, der einmal als Windows-1252 gelesen und neu gespeichert
+#     wurde, hat aus "ue" ein "Ã¼" gemacht (so entstanden 57 Stellen in RELEASES.md, unbemerkt, weil das Skript, das
+#     sie schrieb, ohne BOM lag).
+# ---------------------------------------------------------------------------
+$checked++
+$mojibake45 = '\u00E2\u20AC|\u00C3[\u00BC\u00B6\u00A4\u201E\u2013\u0178\u0153\u0178]|\u00C2[\u00A0-\u00BF]'
+foreach ($file45 in @(Get-ChildItem -Path (Split-Path -Parent $RepoRoot) -Recurse -File -Include *.md, *.ps1, *.psm1, *.json, *.csv -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\(\.git|Logs|winget-index)\\' })) {
+    if ($file45.FullName -eq $PSCommandPath) { continue }
+    $hit45 = [regex]::Match([IO.File]::ReadAllText($file45.FullName), $mojibake45)
+    if ($hit45.Success) { Add-Failure "Mojibake" ("{0}: Zeichenfolge '{1}' sieht nach doppelt kodiertem UTF-8 aus (als Windows-1252 gelesen und neu gespeichert)" -f $file45.FullName.Substring((Split-Path -Parent $RepoRoot).Length + 1), $hit45.Value) }
+}
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

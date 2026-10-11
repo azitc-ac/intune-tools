@@ -271,7 +271,7 @@ update result in the template), or an unguarded delete in Intune (`Remove-Intune
 not default to No, Rebuild deleting before building, the loop deleting directly), a fixed wait or a slow module query
 back in the build, or foreign Intune apps no longer protected from Retire (or the note that identifies the tool's
 own apps no longer written), the WinGet search not loaded at start, an unusable `Config\catalog.json`, the local index
-not excluded from git, a `[MessageBox]` anywhere (messages and questions go through `Show-ConfirmDialog`, which UI Automation can operate), a file in `Functions\` that neither the loader nor the start script loads, a function that two files define, or a second place that downloads the index, and a failure in the tenant / build / deploy / delete workflow that prints a bare
+not excluded from git, a `[MessageBox]` anywhere (messages and questions go through `Show-ConfirmDialog`, which UI Automation can operate), a file in `Functions\` that neither the loader nor the start script loads, a function that two files define, a `STATUS.md` that lags behind `RELEASES.md` (every section there with "Nicht belegt" or an open box needs a `Quelle:` line, `Stand:` must not be older than the newest section), text that was read as Windows-1252 and saved again (doubled-up umlauts), or a second place that downloads the index, and a failure in the tenant / build / deploy / delete workflow that prints a bare
 `$_.Exception.Message` instead of going through `Format-ErrorDetail` (file and line of the failing call).
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the
