@@ -168,6 +168,8 @@ foreach ($p in $parsed.Values) {
 # ---------------------------------------------------------------------------
 $funcParams = @{}
 foreach ($p in $parsed.Values) {
+    # Attrappen in Tests\ ueberdecken sonst die echte Signatur (je nach Reihenfolge im Hash gewann die eine oder die andere).
+    if ($p.File.DirectoryName -like '*\Tests') { continue }
     $defs = $p.Ast.FindAll({
         param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]
     }, $true)
@@ -644,7 +646,30 @@ foreach ($p in $parsed.Values) {
 }
 
 $checked++
-$functionsFile = $parsed.Values | Where-Object { $_.File.Name -eq 'functions.ps1' } | Select-Object -First 1
+# functions.ps1 ist nur der Lader; die Funktionen liegen in den Dateien, die er laedt. $functionsFile.Ast verhaelt
+# sich wie EIN Syntaxbaum ueber alle (Find, FindAll, Extent.Text), damit die Pruefungen unten nicht wissen muessen,
+# in welcher Datei eine Funktion steht.
+$functionsLoader = $parsed.Values | Where-Object { $_.File.Name -eq 'functions.ps1' } | Select-Object -First 1
+$functionsFile = $null
+if ($functionsLoader) {
+    $loaderParts = @([regex]::Matches($functionsLoader.Ast.Extent.Text, '(?m)^\.\s+"\$PSScriptRoot\\([\w-]+\.ps1)"') | ForEach-Object { $_.Groups[1].Value })
+    $partAsts = @($parsed.Values | Where-Object { $_.File.DirectoryName -eq $functionsLoader.File.DirectoryName -and $_.File.Name -in $loaderParts } | ForEach-Object { $_.Ast })
+    $combined = [pscustomobject]@{ Extent = [pscustomobject]@{ Text = (($partAsts | ForEach-Object { $_.Extent.Text }) -join "`r`n") } }
+    $combined | Add-Member -MemberType ScriptMethod -Name FindAll -Value {
+        param($predicate, $searchNested)
+        $hits = New-Object 'System.Collections.Generic.List[object]'
+        foreach ($a in $partAsts) { foreach ($hit in $a.FindAll($predicate, $searchNested)) { [void]$hits.Add($hit) } }
+        return , $hits
+    }
+    $combined | Add-Member -MemberType ScriptMethod -Name Find -Value {
+        param($predicate, $searchNested)
+        foreach ($a in $partAsts) { $hit = $a.Find($predicate, $searchNested); if ($hit) { return $hit } }
+        return $null
+    }
+    $functionsFile = [pscustomobject]@{ File = $functionsLoader.File; Ast = $combined }
+}
+# Fundstelle eines Knotens als "datei.ps1:zeile" - die Datei steht im Knoten, nicht mehr fest im Text.
+function Get-NodePlace($node) { return ('{0}:{1}' -f (Split-Path -Leaf $node.Extent.File), $node.Extent.StartLineNumber) }
 if ($functionsFile) {
     $resolve = $functionsFile.Ast.FindAll({
         param($n)
@@ -1112,7 +1137,7 @@ if ($functionsFile) {
     foreach ($r in $detRefs) {
         $owner = & $enclosingFunction $r
         if ($owner -notin @('Write-DetectionScript', 'Get-TemplateFingerprint')) {
-            Add-Failure "DetectionOnePath" ("functions.ps1:{0} Erkennungsvorlage ausserhalb von Write-DetectionScript benutzt (in '{1}')" -f $r.Extent.StartLineNumber, $owner)
+            Add-Failure "DetectionOnePath" ("{0} Erkennungsvorlage ausserhalb von Write-DetectionScript benutzt (in '{1}')" -f (Get-NodePlace $r), $owner)
         }
     }
     $upd = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Update-DeployScript' }, $true)
@@ -1129,7 +1154,7 @@ if ($functionsFile) {
         }, $true)
         foreach ($u in $uninst) {
             if ($u.Value -notmatch "-NameMatch 'Wildcard'" -or $u.Value -notmatch "-Name '[^']*\*'") {
-                Add-Failure "DetectionOnePath" ("functions.ps1:{0} abgeleitete Deinstallation ohne Praefix-Regel (-Name '<Name>*' -NameMatch 'Wildcard') - PSADT vergleicht sonst per 'Contains'" -f $u.Extent.StartLineNumber)
+                Add-Failure "DetectionOnePath" ("{0} abgeleitete Deinstallation ohne Praefix-Regel (-Name '<Name>*' -NameMatch 'Wildcard') - PSADT vergleicht sonst per 'Contains'" -f (Get-NodePlace $u))
             }
         }
     }
@@ -1249,7 +1274,7 @@ if ($functionsFile) {
     foreach ($e in $exports) {
         $owner = & $enclosingFunction $e
         if ($owner -notin @('Save-AppsCsv', 'Get-DeployScripts')) {
-            Add-Failure "AppsCsvOneWriter" ("functions.ps1:{0} Export-Csv in '{1}' - Apps.csv wird nur in Save-AppsCsv geschrieben" -f $e.Extent.StartLineNumber, $owner)
+            Add-Failure "AppsCsvOneWriter" ("{0} Export-Csv in '{1}' - Apps.csv wird nur in Save-AppsCsv geschrieben" -f (Get-NodePlace $e), $owner)
         }
     }
 
@@ -1263,7 +1288,7 @@ if ($functionsFile) {
     foreach ($t in $templateCalls) {
         $owner = & $enclosingFunction $t
         if ($owner -ne 'Build-AppPackage') {
-            Add-Failure "PackageOneBuildPath" ("functions.ps1:{0} New-ADTTemplate in '{1}' - Pakete werden nur in Build-AppPackage gebaut" -f $t.Extent.StartLineNumber, $owner)
+            Add-Failure "PackageOneBuildPath" ("{0} New-ADTTemplate in '{1}' - Pakete werden nur in Build-AppPackage gebaut" -f (Get-NodePlace $t), $owner)
         }
     }
 
@@ -1308,7 +1333,7 @@ if ($functionsFile) {
     foreach ($call in $removeCalls) {
         $owner = & $enclosingFunction $call
         if ($owner -notin @('Build-AppPackage', 'Remove-OrphanPackages')) {
-            Add-Failure "OrphanRemovalGuarded" ("functions.ps1:{0} Remove-PackageFolder in '{1}' - Ordner werden nur in Build-AppPackage und Remove-OrphanPackages entfernt" -f $call.Extent.StartLineNumber, $owner)
+            Add-Failure "OrphanRemovalGuarded" ("{0} Remove-PackageFolder in '{1}' - Ordner werden nur in Build-AppPackage und Remove-OrphanPackages entfernt" -f (Get-NodePlace $call), $owner)
         }
     }
 
@@ -1368,7 +1393,7 @@ if ($functionsFile) {
     if ($loopFn4) {
         $direct = $loopFn4.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Invoke-PackageDeploy' }, $true)
         foreach ($d in $direct) {
-            Add-Failure "DeployDecidedByPlan" ("functions.ps1:{0} Start-InventoryLoop ruft Invoke-PackageDeploy direkt - ein Deploy am Plan vorbei" -f $d.Extent.StartLineNumber)
+            Add-Failure "DeployDecidedByPlan" ("{0} Start-InventoryLoop ruft Invoke-PackageDeploy direkt - ein Deploy am Plan vorbei" -f (Get-NodePlace $d))
         }
         if ($loopFn4.Extent.Text -notmatch 'Invoke-InventoryDeploy') {
             Add-Failure "DeployDecidedByPlan" "Start-InventoryLoop ruft Invoke-InventoryDeploy nicht auf - die Aktion Deploy verteilt nicht ueber den Plan"
@@ -1380,8 +1405,8 @@ if ($functionsFile) {
         $scriptCalls = @($invocations | Where-Object { $_.Extent.Text -match 'FullPath' })
         if ($scriptCalls.Count -eq 0) { Add-Failure "DeployDecidedByPlan" "Invoke-PackageDeploy ruft das deploy.ps1 (& `$app.FullPath) nicht auf" }
         foreach ($c in $scriptCalls) {
-            if ($c.Extent.Text -notmatch '-Mode\b') { Add-Failure "DeployDecidedByPlan" ("functions.ps1:{0} Invoke-PackageDeploy ruft das deploy.ps1 ohne -Mode auf - es entschiede selbst und legte im Bulk-Lauf immer neu an" -f $c.Extent.StartLineNumber) }
-            if ($c.Extent.Text -match '-bulk\b')  { Add-Failure "DeployDecidedByPlan" ("functions.ps1:{0} Invoke-PackageDeploy uebergibt -bulk - das deploy.ps1 legte damit immer neu an" -f $c.Extent.StartLineNumber) }
+            if ($c.Extent.Text -notmatch '-Mode\b') { Add-Failure "DeployDecidedByPlan" ("{0} Invoke-PackageDeploy ruft das deploy.ps1 ohne -Mode auf - es entschiede selbst und legte im Bulk-Lauf immer neu an" -f (Get-NodePlace $c)) }
+            if ($c.Extent.Text -match '-bulk\b')  { Add-Failure "DeployDecidedByPlan" ("{0} Invoke-PackageDeploy uebergibt -bulk - das deploy.ps1 legte damit immer neu an" -f (Get-NodePlace $c)) }
         }
     }
 }
@@ -1426,7 +1451,7 @@ if ($functionsFile) {
     foreach ($c in $removeCalls) {
         $owner = & $enclosingFunction $c
         if ($owner -ne 'Remove-TenantWin32Apps') {
-            Add-Failure "IntuneDeleteVerified" ("functions.ps1:{0} Remove-IntuneWin32App in '{1}' - Apps werden in Intune nur in Remove-TenantWin32Apps geloescht" -f $c.Extent.StartLineNumber, $owner)
+            Add-Failure "IntuneDeleteVerified" ("{0} Remove-IntuneWin32App in '{1}' - Apps werden in Intune nur in Remove-TenantWin32Apps geloescht" -f (Get-NodePlace $c), $owner)
         }
     }
 
@@ -1446,7 +1471,7 @@ if ($functionsFile) {
     foreach ($c in $removeUsers) {
         $owner = & $enclosingFunction $c
         if ($owner -notin @('Invoke-InventoryRetire', 'Invoke-InventoryRebuild')) {
-            Add-Failure "IntuneDeleteVerified" ("functions.ps1:{0} Remove-TenantWin32Apps in '{1}' - geloescht wird nur ueber Retire und Rebuild, beide mit Rueckfrage" -f $c.Extent.StartLineNumber, $owner)
+            Add-Failure "IntuneDeleteVerified" ("{0} Remove-TenantWin32Apps in '{1}' - geloescht wird nur ueber Retire und Rebuild, beide mit Rueckfrage" -f (Get-NodePlace $c), $owner)
         }
     }
 
@@ -1494,7 +1519,7 @@ if ($functionsFile) {
     if ($loop35) {
         foreach ($name in 'Remove-TenantWin32Apps', 'Remove-IntuneWin32App') {
             $direct = & $cmd35 $loop35 $name
-            if ($direct) { Add-Failure "IntuneDeleteVerified" ("functions.ps1:{0} Start-InventoryLoop ruft {1} direkt auf - ohne Rueckfrage und Plan" -f $direct.Extent.StartLineNumber, $name) }
+            if ($direct) { Add-Failure "IntuneDeleteVerified" ("{0} Start-InventoryLoop ruft {1} direkt auf - ohne Rueckfrage und Plan" -f (Get-NodePlace $direct), $name) }
         }
         foreach ($name in 'Invoke-InventoryRetire', 'Invoke-InventoryRebuild') {
             if (-not (& $cmd35 $loop35 $name)) { Add-Failure "IntuneDeleteVerified" ("Start-InventoryLoop ruft {0} nicht auf - der Knopf haette keine Wirkung" -f $name) }
@@ -1524,7 +1549,7 @@ if ($functionsFile) {
                 $parent = $parent.Parent
             }
             if (-not $inLoop) {
-                Add-Failure "NoFixedWaits" ("functions.ps1:{0} Build-AppPackage wartet pauschal (Start-Sleep ausserhalb einer Schleife) - auf die Dateien warten, die gebraucht werden" -f $s.Extent.StartLineNumber)
+                Add-Failure "NoFixedWaits" ("{0} Build-AppPackage wartet pauschal (Start-Sleep ausserhalb einer Schleife) - auf die Dateien warten, die gebraucht werden" -f (Get-NodePlace $s))
             }
         }
     }
@@ -1532,7 +1557,7 @@ if ($functionsFile) {
     foreach ($c in $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Get-InstalledModule' }, $true)) {
         $owner = & $enclosingFunction $c
         if ($owner -ne 'check-prereqs') {
-            Add-Failure "NoFixedWaits" ("functions.ps1:{0} Get-InstalledModule in '{1}' - die Abfrage ist langsam (2,9 s); nur als Rueckfall in check-prereqs" -f $c.Extent.StartLineNumber, $owner)
+            Add-Failure "NoFixedWaits" ("{0} Get-InstalledModule in '{1}' - die Abfrage ist langsam (2,9 s); nur als Rueckfall in check-prereqs" -f (Get-NodePlace $c), $owner)
         }
     }
     $pre36 = & $fn36 'check-prereqs'
@@ -1656,7 +1681,7 @@ if ($functionsFile) {
         $owner = $m.Parent
         while ($owner -and $owner -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $owner = $owner.Parent }
         if ($owner -and $owner.Name -in $flow39) {
-            Add-Failure "ErrorOrigin" ("functions.ps1:{0} `$_.Exception.Message in '{1}' - Fehler dieses Ablaufs gehen ueber Format-ErrorDetail `$_ (mit Datei:Zeile)" -f $m.Extent.StartLineNumber, $owner.Name)
+            Add-Failure "ErrorOrigin" ("{0} `$_.Exception.Message in '{1}' - Fehler dieses Ablaufs gehen ueber Format-ErrorDetail `$_ (mit Datei:Zeile)" -f (Get-NodePlace $m), $owner.Name)
         }
     }
 }
@@ -1673,20 +1698,49 @@ foreach ($entry40 in $parsed.Values) {
     }
 }
 # ---------------------------------------------------------------------------
-# 41) Jede Datei in Functions\ wird vom Startskript geladen - sonst fehlen ihre Funktionen zur Laufzeit,
-#     waehrend Tests, die die Datei einzeln laden, gruen bleiben.
+# 41) Jede Datei in Functions\ wird geladen - vom Lader functions.ps1 oder vom Startskript. Sonst fehlen ihre
+#     Funktionen zur Laufzeit, waehrend Tests, die die Datei einzeln laden, gruen bleiben. Und der Lader nennt
+#     keine Datei, die es nicht gibt.
 # ---------------------------------------------------------------------------
 $checked++
 $start41 = $parsed.Values | Where-Object { $_.File.Name -eq 'start-IntuneWin32Helper.ps1' } | Select-Object -First 1
-if ($start41) {
+if ($start41 -and $functionsLoader) {
+    $loadedBy41 = $start41.Ast.Extent.Text + "`r`n" + $functionsLoader.Ast.Extent.Text
     foreach ($entry41 in $parsed.Values) {
-        if ($entry41.File.DirectoryName -notlike '*\Functions') { continue }
-        if ($start41.Ast.Extent.Text -notmatch ('(?i)functions[\\/]' + [regex]::Escape($entry41.File.Name))) {
-            Add-Failure "FunctionsLoaded" ("Functions\{0} wird von start-IntuneWin32Helper.ps1 nicht geladen" -f $entry41.File.Name)
+        if ($entry41.File.DirectoryName -ne $functionsLoader.File.DirectoryName -or $entry41.File.Name -eq 'functions.ps1') { continue }
+        if ($loadedBy41 -notmatch ('(?i)[\\/]' + [regex]::Escape($entry41.File.Name) + '"')) {
+            Add-Failure "FunctionsLoaded" ("Functions\{0} wird weder von functions.ps1 noch von start-IntuneWin32Helper.ps1 geladen" -f $entry41.File.Name)
+        }
+    }
+    # Der gemeinsame Syntaxbaum muss alle Funktionen der Dateien enthalten - sonst uebersprungen die Pruefungen
+    # oben still (jede steht unter "if ($functionsFile)") und blieben gruen, ohne etwas geprueft zu haben.
+    $declared41 = [regex]::Matches($functionsFile.Ast.Extent.Text, '(?m)^function\s+[\w-]+').Count
+    $found41 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false).Count
+    if ($declared41 -eq 0 -or $found41 -ne $declared41) {
+        Add-Failure "FunctionsLoaded" ("der gemeinsame Syntaxbaum der Funktionsdateien findet {0} Funktionen, im Text stehen {1} - die Pruefungen darauf liefen ins Leere" -f $found41, $declared41)
+    }
+    foreach ($part41 in $loaderParts) {
+        if (-not (Test-Path -LiteralPath (Join-Path $functionsLoader.File.DirectoryName $part41))) {
+            Add-Failure "FunctionsLoaded" ("functions.ps1 laedt {0}, die Datei gibt es nicht" -f $part41)
         }
     }
 }
 
+# ---------------------------------------------------------------------------
+# 42) Keine Funktion steht in zwei Dateien: die zuletzt geladene gewinnt still, und ein Test, der die andere
+#     Datei einzeln laedt, prueft etwas, das zur Laufzeit gar nicht gilt.
+# ---------------------------------------------------------------------------
+$checked++
+$seen42 = @{}
+foreach ($entry42 in $parsed.Values) {
+    if ($entry42.File.DirectoryName -notlike '*\Functions') { continue }
+    foreach ($def42 in $entry42.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+        if ($seen42.ContainsKey($def42.Name.ToLowerInvariant())) {
+            Add-Failure "FunctionOnce" ("{0} steht in {1} und {2}" -f $def42.Name, $seen42[$def42.Name.ToLowerInvariant()], $entry42.File.Name)
+        }
+        else { $seen42[$def42.Name.ToLowerInvariant()] = $entry42.File.Name }
+    }
+}
 # ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------

@@ -38,7 +38,8 @@ $rootDir = Split-Path -Parent $PSScriptRoot
 # Kindprozess: zeigt das Fenster mit Beispielzeilen und schreibt das Ergebnis.
 # ---------------------------------------------------------------------------
 if ($Child) {
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $rootDir 'Functions\functions.ps1'), [ref]$null, [ref]$null)
+    . (Join-Path $PSScriptRoot 'Get-ToolFunctionsAst.ps1')
+    $ast = Get-ToolFunctionsAst (Join-Path $rootDir 'Functions')
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
         . ([scriptblock]::Create($fn.Extent.Text))
     }

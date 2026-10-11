@@ -19,8 +19,8 @@
 $ErrorActionPreference = 'Stop'
 
 $rootDir = Split-Path -Parent $PSScriptRoot
-foreach ($file in 'Functions\functions.ps1', 'Functions\tenantcheck.ps1') {
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $rootDir $file), [ref]$null, [ref]$null)
+. (Join-Path $PSScriptRoot 'Get-ToolFunctionsAst.ps1')
+foreach ($ast in (Get-ToolFunctionsAst (Join-Path $rootDir 'Functions')), [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $rootDir 'Functions\tenantcheck.ps1'), [ref]$null, [ref]$null)) {
     foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
         . ([scriptblock]::Create($fn.Extent.Text))
     }

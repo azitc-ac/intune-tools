@@ -154,6 +154,31 @@ App logos are resolved locally from `Logos\` and normalised to 256x256; nothing 
 anywhere. A format this machine cannot read (webp without a codec, svg) falls back to
 `Logos\defaultlogo.png` rather than failing the build.
 
+## Code layout
+
+`Functions\functions.ps1` is only the **loader**: the start script, `deploy_template.ps1` and every package built
+by an earlier version load it, so the name stays. It dot-sources the files that hold the functions, one per task:
+
+| File | Holds |
+| --- | --- |
+| `core.ps1` | dialog results, `Invoke-IntuneModuleCall`, config and transcript, `Format-ErrorDetail`, `Initialize-IntuneConnection`, `check-prereqs` |
+| `dialogs.ps1` | `Show-ConfirmDialog` - every message and question (there is no `MessageBox`) |
+| `logo.ps1` | resolving and resizing logos |
+| `installer.ps1` | path length, installer engine, install commands, MSI properties |
+| `deployscripts.ps1` | template fingerprint, writing and renewing `detection.ps1` / `deploy.ps1`, reading package folders |
+| `package.ps1` | building packages, removing package folders and orphans |
+| `appscsv.ps1` | `Apps.csv` - `Save-AppsCsv` is its only writer |
+| `inventory.ps1` | one row per app from definition, package and tenant |
+| `intune.ps1` | reading the tenant, the deploy plan, deploying |
+| `retire.ps1` | Retire and Rebuild |
+| `mainwindow.ps1` | the main window and its loop |
+| `editdialog.ps1`, `searchdialogs.ps1`, `settingsdialogs.ps1` | the other dialogs |
+| `wingetindex.ps1`, `tenantcheck.ps1` | the winget index and the tenant check; loaded by the start script |
+
+A new file goes into the loader (or the start script), and a function lives in exactly one file - both are checks.
+The tests get single functions out of these files through `Tests\Get-ToolFunctionsAst.ps1`, which reads the
+list from the loader.
+
 ## Apps.csv
 
 Two columns beyond the obvious ones:
@@ -223,7 +248,7 @@ update result in the template), or an unguarded delete in Intune (`Remove-Intune
 not default to No, Rebuild deleting before building, the loop deleting directly), a fixed wait or a slow module query
 back in the build, or foreign Intune apps no longer protected from Retire (or the note that identifies the tool's
 own apps no longer written), the WinGet search not loaded at start, an unusable `Config\catalog.json`, the local index
-not excluded from git, a `[MessageBox]` anywhere (messages and questions go through `Show-ConfirmDialog`, which UI Automation can operate), a file in `Functions\` that the start script does not load, or a second place that downloads the index, and a failure in the tenant / build / deploy / delete workflow that prints a bare
+not excluded from git, a `[MessageBox]` anywhere (messages and questions go through `Show-ConfirmDialog`, which UI Automation can operate), a file in `Functions\` that neither the loader nor the start script loads, a function that two files define, or a second place that downloads the index, and a failure in the tenant / build / deploy / delete workflow that prints a bare
 `$_.Exception.Message` instead of going through `Format-ErrorDetail` (file and line of the failing call).
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the

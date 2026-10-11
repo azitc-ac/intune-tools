@@ -19,7 +19,8 @@
 $ErrorActionPreference = 'Stop'
 
 $functionsPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'Functions\functions.ps1'
-$ast = [System.Management.Automation.Language.Parser]::ParseFile($functionsPath, [ref]$null, [ref]$null)
+. (Join-Path $PSScriptRoot 'Get-ToolFunctionsAst.ps1')
+$ast = Get-ToolFunctionsAst (Split-Path -Parent $functionsPath)
 $def = $ast.Find({
     param($n)
     $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-IntuneModuleCall'

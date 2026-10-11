@@ -443,6 +443,35 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## `functions.ps1` aufgeteilt (2026-10-11)
+
+`functions.ps1` hatte 4851 Zeilen und 73 Funktionen. Jetzt ist sie ein **Lader**, der 14 Dateien nach
+Aufgabe lädt (`core`, `dialogs`, `logo`, `installer`, `deployscripts`, `package`, `appscsv`, `inventory`, `intune`,
+`retire`, `mainwindow`, `editdialog`, `searchdialogs`, `settingsdialogs`; Tabelle im README). Der Dateiname bleibt:
+`deploy_template.ps1` und jedes frühere Paket laden `functions\functions.ps1`.
+
+Verschoben, nicht geändert: ein Skript hat die Funktionen per Syntaxbaum verteilt (jede genau einmal), und ein
+zweites hat gegen den Stand vor der Teilung verglichen – **alle 78 Funktionstexte (73 oberste, 5 verschachtelte)
+sind Zeichen für Zeichen gleich** (Name und Hash des Texts, Zeilenenden normalisiert).
+
+Was sich dafür ändern musste:
+- 15 Tests holen Funktionen jetzt über `Tests\Get-ToolFunctionsAst.ps1` (liest die Liste aus dem Lader).
+- `Invoke-RepoChecks.ps1`: `$functionsFile.Ast` ist die Summe aller geladenen Dateien (`Find`, `FindAll`,
+  `Extent.Text`); Meldungen nennen die Datei des Knotens statt fest `functions.ps1`. Neu: Prüfung 41 (jede Datei
+  wird geladen, der Lader nennt keine fehlende, der gemeinsame Baum findet alle Funktionen – sonst liefen die
+  Prüfungen darauf still ins Leere) und Prüfung 42 (keine Funktion in zwei Dateien: die zuletzt geladene gewänne still).
+- Fund beim Umbau: die Signaturprüfung (Prüfung 5) las auch die Attrappen in `Tests\`, und je nach Reihenfolge
+  im Hash überdeckte eine Attrappe die echte Signatur. Das hat schon vor der Teilung zufällig gehalten; jetzt
+  zählen nur noch Dateien außerhalb von `Tests\`.
+
+Belegt: alle 17 Testdateien und die Repo-Prüfungen grün; Gegenproben S1 (nacktes `$_.Exception.Message` in
+`intune.ps1` → Prüfung 39 rot, also arbeitet der gemeinsame Baum), S2 (Frage vor dem Löschen entfernt → Prüfung 33),
+S3 (Funktion doppelt → 42), S4 (Datei nicht im Lader → 41), S7 (Baum liefert nichts → 41 und die „fehlt“-Prüfungen).
+Ein frischer Prozess, der `functions.ps1`, `wingetindex.ps1` und `tenantcheck.ps1` lädt, kennt die Funktionen.
+
+Nicht belegt: ein echter Deploy und ein Paketbau über den Lader im Feld (die Tests laden die Funktionen per
+Syntaxbaum; dass `deploy.ps1` den Lader von seinem Ort aus findet, ist nur durch gleichen Pfad wie vorher
+begründet, nicht durch einen Lauf geprüft).
 ## Keine MessageBox mehr, Knopf „Check tenant“ (2026-10-11)
 
 **MessageBox.** 30 Aufrufe von `[System.Windows.MessageBox]::Show` in `functions.ps1` (Hinweise, Validierung,

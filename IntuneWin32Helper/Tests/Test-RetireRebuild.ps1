@@ -26,7 +26,8 @@ $ErrorActionPreference = 'Stop'
 $rootDir = Split-Path -Parent $PSScriptRoot
 $functionsPath = Join-Path $rootDir 'Functions\functions.ps1'
 
-$ast = [System.Management.Automation.Language.Parser]::ParseFile($functionsPath, [ref]$null, [ref]$null)
+. (Join-Path $PSScriptRoot 'Get-ToolFunctionsAst.ps1')
+$ast = Get-ToolFunctionsAst (Split-Path -Parent $functionsPath)
 foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     . ([scriptblock]::Create($fn.Extent.Text))
 }
