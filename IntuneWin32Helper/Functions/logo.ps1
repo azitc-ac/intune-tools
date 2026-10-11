@@ -110,6 +110,49 @@ function Resize-IconFile {
     }
 }
 
+function Find-LogoFile {
+    <#
+        Sucht ein Logo in Logos\, nach fallender Sicherheit (Muster aus SCCMAppHelper, Find-AppLogo):
+          1. <AppName>.png                      genau
+          2. <AppName ohne "(x64)" / Endversion>.png
+          3. der laengste Logo-Name, mit dem der App-Name beginnt   ("7-Zip" fuer "7-Zip 26.02 (x64 edition)")
+          4. der laengste Logo-Name, der mit dem App-Namen beginnt  ("Oracle_Database_Client" fuer "Oracle")
+        3 und 4 verlangen eine Wortgrenze (Leerzeichen oder Unterstrich) hinter dem Treffer - "PDF" greift nie
+        "PDF24 Creator". Ein Bindestrich zaehlt nicht als Grenze ("PDF-XChange", "7-Zip" gehoeren zum Namen).
+        Eine Datei, die genau so heisst wie die App, gewinnt immer. Gibt den Pfad oder $null zurueck.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$AppName,
+        [Parameter(Mandatory = $true)][string]$LogoDir
+    )
+
+    if (-not (Test-Path -LiteralPath $LogoDir)) { return $null }
+    $safeName = $AppName -replace '[\\/:*?"<>|]', '_'
+
+    $exact = Join-Path $LogoDir "$safeName.png"
+    if (Test-Path -LiteralPath $exact) { return $exact }
+
+    $trimmed = ($safeName -replace '\s*\([^)]*\)\s*$', '')
+    $trimmed = ($trimmed -replace '\s+v?\d+[\d.]*$', '').Trim()
+    if ($trimmed -and $trimmed -ne $safeName) {
+        $candidate = Join-Path $LogoDir "$trimmed.png"
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+
+    $best = $null
+    foreach ($logo in (Get-ChildItem -LiteralPath $LogoDir -Filter '*.png' -File -ErrorAction SilentlyContinue)) {
+        $base = $logo.BaseName
+        if ($base -eq 'defaultlogo' -or $base.Length -lt 3) { continue }
+        $logoIsPrefix = ($safeName.Length -gt $base.Length) -and
+            $safeName.StartsWith($base, [System.StringComparison]::OrdinalIgnoreCase) -and ($safeName[$base.Length] -match '[\s_]')
+        $appIsPrefix = ($base.Length -gt $safeName.Length) -and
+            $base.StartsWith($safeName, [System.StringComparison]::OrdinalIgnoreCase) -and ($base[$safeName.Length] -match '[\s_]')
+        if (($logoIsPrefix -or $appIsPrefix) -and (-not $best -or $base.Length -gt $best.BaseName.Length)) { $best = $logo }
+    }
+    if ($best) { return $best.FullName }
+    return $null
+}
+
 function Resolve-PackageLogo {
     <#
         .SYNOPSIS
@@ -173,6 +216,13 @@ function Resolve-PackageLogo {
         }
 
         if ([string]::IsNullOrWhiteSpace($LogoUrl)) {
+            # Ohne URL: ein Logo mit verwandtem Namen (ohne Version/Architektur, Wortanfang) vor dem Standardlogo.
+            # Eine ausdrueckliche URL geht vor - eine Vermutung darf sie nicht uebersteuern.
+            $similar = Find-LogoFile -AppName $AppName -LogoDir $logoDir
+            if ($similar) {
+                Write-Host ("No logo URL specified. Using the logo with the related name [{0}]" -f (Split-Path -Leaf $similar))
+                return (& $copyThenResize $similar)
+            }
             Write-Host "No logo URL specified. Taking default logo."
             return (& $useDefault)
         }

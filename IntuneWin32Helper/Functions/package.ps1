@@ -46,6 +46,27 @@ function Remove-PackageFolder {
     return $true
 }
 
+function Set-PsadtLogPath {
+    <#
+        Legt das PSADT-Log in den Ordner der Intune Management Extension (neben deren eigene Logs), statt
+        nach %windir%\Logs\Software. Das Muster steht so im Template von PSAppDeployToolkit 4.1.8
+        (Config\config.psd1, Toolkit.LogPath). Findet es sich nicht (neues Template), bleibt die Datei
+        unveraendert und die Funktion gibt $false zurueck - still im falschen Ordner zu loggen waere schlechter.
+    #>
+    param([Parameter(Mandatory = $true)][string]$ConfigFile)
+
+    $text = [IO.File]::ReadAllText($ConfigFile)
+    $old = 'envWinDir\Logs\Software'
+    if (-not $text.Contains($old)) { return $false }
+    $text = $text.Replace($old, 'envProgramData\Microsoft\IntuneManagementExtension\Logs')
+    $file = Get-Item -LiteralPath $ConfigFile
+    $file.Attributes = ($file.Attributes -band -bnot [System.IO.FileAttributes]::ReadOnly)
+    $folder = $file.Directory
+    $folder.Attributes = ($folder.Attributes -band -bnot [System.IO.FileAttributes]::ReadOnly)
+    [IO.File]::WriteAllText($ConfigFile, $text, (New-Object System.Text.UTF8Encoding $true))
+    return $true
+}
+
 function Build-AppPackage {
     <#
         .SYNOPSIS
@@ -97,13 +118,10 @@ function Build-AppPackage {
     $null = New-Item -ItemType Directory -Path "$SourcePath\out"
     $psadtdirs | ForEach-Object { Move-Item -LiteralPath $_.FullName -Destination "$SourcePath\in" }
 
-    # log path ändern
-    $psadtconfigfilepath = "$SourcePath\in\Config\config.psd1"
-    $psadtconfig= Get-Content $psadtconfigfilepath
-    $psadtconfig= $psadtconfig.Replace("envWinDir\Logs\Software", "envProgramData\Microsoft\IntuneManagementExtension\Logs")
-    $psadtconfigfolderPath = Get-Item "$SourcePath\in\Config"
-    (Get-Item $psadtconfigfolderPath).Attributes = ((Get-Item $psadtconfigfolderPath).Attributes -band -bnot [System.IO.FileAttributes]::ReadOnly)
-    $psadtconfig | Out-File $psadtconfigfilepath -Encoding utf8 -Force
+    # PSADT soll in die IME-Logs schreiben
+    if (-not (Set-PsadtLogPath -ConfigFile "$SourcePath\in\Config\config.psd1")) {
+        Write-Warning "PSADT log path not changed in '$SourcePath\in\Config\config.psd1' (the template looks different than expected) - the PSADT log lands in the default folder, not in the IME logs."
+    }
 
     # für normale Pakete
     # kopieren von detect.ps1 und anpassen

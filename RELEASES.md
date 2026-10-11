@@ -443,6 +443,22 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Logo mit Namenskürzung, mitlaufende Hinweise, PSADT-Log (2026-10-11)
+
+- **Logo-Suche:** `Find-LogoFile` (aus SCCMAppHelper): genau → ohne `(x64)`/Endversion → Logo ist Wortanfang des App-Namens →
+  App-Name ist Wortanfang des Logo-Namens; Wortgrenze Leerzeichen/Unterstrich, längster Treffer gewinnt, `defaultlogo`
+  zählt nicht. Nur ohne `logoURL` – eine ausdrückliche URL übersteuert keine Vermutung. Vorher gab es nur „genau gleicher Name“.
+- **Hinweise, die dem Wert folgen:** `Get-EditHint` (ohne Fenster, testbar) für `Version` (WinGet-App oder Paket mit
+  Ordnername), `MsiProductCode` (leer / GUID / kein GUID), `logoURL` (welches Logo es wird), `ArpName` (war schon so,
+  jetzt über denselben Weg). Der Editor baut sie bei jeder Änderung eines beteiligten Feldes neu.
+- **PSADT-Log im IME-Ordner:** war schon umgesetzt (Ersetzen in `config.psd1`), aber ungeprüft und still: passte das
+  Muster nach einem PSADT-Update nicht mehr, ging das Log in den falschen Ordner, ohne Meldung. Jetzt `Set-PsadtLogPath`
+  (gibt `$false` zurück → Warnung beim Bau) und ein Test gegen das echte Template des installierten Moduls
+  (4.1.8: Muster vorhanden).
+- **Belegt:** `Test-LogoAndHints.ps1` (neu) und die UI-Prüfung (jetzt mit den neuen Hinweisen); Gegenproben: 13 eingebaute
+  Fehler in der Logo-Suche, den Hinweisen, `Set-PsadtLogPath` und der Verdrahtung – zunächst überlebten vier, dafür kamen
+  Testfälle dazu, danach wurden alle erkannt. **Nicht belegt:** ein Paketbau im Feld mit dem neuen Log-Pfad-Aufruf
+  (der Test ruft die Funktion direkt auf, nicht den ganzen Bau).
 ## Bilder im README (2026-10-11)
 
 Das README zeigt das alte Bild vom 2025-12 (Startkacheln) nicht mehr. Drei neue Bilder kommen aus den **echten**

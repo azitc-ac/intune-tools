@@ -430,6 +430,24 @@ try {
         $hint = (Find-UiaElement -Root $dlg -AutomationId 'ArpNameHint').Current.Name
         Test-That 'editdialog: the ArpName hint follows the field' ($hint -match "STARTS WITH 'Foo Bar'") "hint: $hint"
 
+        # Die anderen mitlaufenden Hinweise: Version (WinGet oder Paket), MsiProductCode (Format), logoURL.
+        $hint = (Find-UiaElement -Root $dlg -AutomationId 'VersionHint').Current.Name
+        Test-That 'editdialog: the Version hint describes a WinGet app for LatestAvailable' ($hint -match 'WinGet app') "hint: $hint"
+        & $setText 'Version' '9.9'
+        Start-Sleep -Milliseconds 400
+        $hint = (Find-UiaElement -Root $dlg -AutomationId 'VersionHint').Current.Name
+        Test-That 'editdialog: the Version hint follows the field and names the package folder' ($hint -match "package folder is named 'Sample - 9\.9'") "hint: $hint"
+        & $setText 'Version' 'LatestAvailable'
+        $hint = (Find-UiaElement -Root $dlg -AutomationId 'MsiProductCodeHint').Current.Name
+        Test-That 'editdialog: the product code hint says detection.ps1 decides while the field is empty' ($hint -match 'detection\.ps1 decides') "hint: $hint"
+        & $setText 'MsiProductCode' 'abc'
+        Start-Sleep -Milliseconds 400
+        $hint = (Find-UiaElement -Root $dlg -AutomationId 'MsiProductCodeHint').Current.Name
+        Test-That 'editdialog: the product code hint follows the field and flags a value that is no GUID' ($hint -match "'abc' is not a product code") "hint: $hint"
+        & $setText 'MsiProductCode' ''
+        $hint = (Find-UiaElement -Root $dlg -AutomationId 'logoURLHint').Current.Name
+        Test-That 'editdialog: the logo hint says what an empty logoURL leads to' ($hint -match '^Empty: ') "hint: $hint"
+
         # OK prueft und bleibt offen.
         $okButton = Find-UiaElement -Root $dlg -AutomationId 'OK'
         & $setText 'DisplayName' ''

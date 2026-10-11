@@ -27,6 +27,55 @@ function Get-RequirementRuleChoices {
     return [pscustomobject]@{ Architecture = $architecture; MinimumOS = $minimumOs }
 }
 
+function Get-EditHint {
+    <#
+        Der Hinweis unter einem Feld, der dem aktuellen Wert FOLGT (Muster aus SCCMAppHelper): er sagt, was mit
+        genau diesem Wert passieren wird, nicht nur, wofuer das Feld da ist. Eine Funktion ohne Fenster, damit
+        sie testbar ist. $Values: aktuelle Feldwerte (DisplayName, Version, ArpName, MsiProductCode, logoURL).
+        Gibt $null fuer ein Feld ohne lebenden Hinweis zurueck.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Values,
+        [string]$LogoDir = ''
+    )
+
+    $get = { param([string]$k) if ($Values.Contains($k)) { ([string]$Values[$k]).Trim() } else { '' } }
+    $name = & $get 'DisplayName'
+    $version = & $get 'Version'
+
+    switch ($Key) {
+        'Version' {
+            if ($version -eq 'LatestAvailable') {
+                return 'WinGet app: a thin wrapper that installs through winget on the device - no installer is packed. The newest version is installed at deploy time.'
+            }
+            $folder = $(if ($name -and $version) { "'$name - $version'" } else { 'DisplayName - Version' })
+            return "Package: the installer goes into Files\ and the package folder is named $folder. Use LatestAvailable for a WinGet app."
+        }
+        'MsiProductCode' {
+            [string]$code = & $get 'MsiProductCode'
+            if (-not $code) { return 'Empty: detection.ps1 decides (program list, see ArpName). With a product code Intune detects natively, version included.' }
+            if ($code -notmatch '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
+                return "'$code' is not a product code - expected a GUID in braces, e.g. {23170F69-40C1-2702-2409-000001000000}."
+            }
+            return "Detection by the MSI product code $code - native in Intune, version included."
+        }
+        'logoURL' {
+            $url = & $get 'logoURL'
+            if ($url) { return "Downloaded once and kept in Logos\ - unless Logos\$name.png already exists, which wins. Nothing is uploaded anywhere." }
+            if (-not $name) { return 'Empty: Logos\<DisplayName>.png if it exists, a logo with a related name, otherwise the default logo.' }
+            $found = $(if ($LogoDir) { Find-LogoFile -AppName $name -LogoDir $LogoDir } else { $null })
+            if ($found) { return "Empty: the package gets the logo [$(Split-Path -Leaf $found)] from Logos\." }
+            return "Empty: no logo in Logos\ fits '$name' - the default logo is used."
+        }
+        'ArpName' {
+            $search = Get-ArpSearchName -DisplayName $name -ArpName (& $get 'ArpName')
+            return ("Detection and uninstall look for programs whose name STARTS WITH '{0}'. Empty ArpName = DisplayName. Set it when the entry in Apps & features is named differently, or to be more precise - the uninstall removes every match." -f $search)
+        }
+    }
+    return $null
+}
+
 function Open-EditDialog {
     <#
         .SYNOPSIS
@@ -303,17 +352,28 @@ function Open-EditDialog {
     if ($controls.Contains('Version')) { $controls['Version'].Add_TextChanged($syncWinGet) }
     & $syncWinGet
 
-    # Der Suchname der Programmliste - wie ihn Erkennung und Deinstallation benutzen.
-    $syncArp = {
-        if (-not $hintBlocks.ContainsKey('ArpName')) { return }
-        $name = ''; $arp = ''
-        if ($controls.Contains('DisplayName')) { $name = [string]$controls['DisplayName'].Text }
-        if ($controls.Contains('ArpName'))     { $arp  = [string]$controls['ArpName'].Text }
-        $search = Get-ArpSearchName -DisplayName $name -ArpName $arp
-        $hintBlocks['ArpName'].Text = ("Detection and uninstall look for programs whose name STARTS WITH '{0}'. Empty ArpName = DisplayName. Set it when the entry in Apps & features is named differently, or to be more precise - the uninstall removes every match." -f $search)
+    # Hinweise, die dem Wert folgen (Get-EditHint): ArpName, MsiProductCode, logoURL, Version. Jedes Feld, das
+    # in eine dieser Aussagen eingeht, baut sie neu.
+    $logoDir = $(if ($rootDir) { Join-Path $rootDir 'Logos' } else { '' })
+    $liveHints = @{
+        ArpName        = @('DisplayName', 'ArpName')
+        MsiProductCode = @('MsiProductCode')
+        logoURL        = @('DisplayName', 'logoURL')
+        Version        = @('DisplayName', 'Version')
     }
-    foreach ($k in 'DisplayName', 'ArpName') { if ($controls.Contains($k)) { $controls[$k].Add_TextChanged($syncArp) } }
-    & $syncArp
+    $syncHints = {
+        $values = @{}
+        foreach ($k in $controls.Keys) { $values[$k] = [string](& $getValue $k) }
+        foreach ($k in $liveHints.Keys) {
+            if (-not $hintBlocks.ContainsKey($k)) { continue }
+            $text = Get-EditHint -Key $k -Values $values -LogoDir $logoDir
+            if ($text) { $hintBlocks[$k].Text = $text }
+        }
+    }
+    foreach ($k in @($liveHints.Values | ForEach-Object { $_ } | Select-Object -Unique)) {
+        if ($controls.Contains($k)) { $controls[$k].Add_TextChanged($syncHints) }
+    }
+    & $syncHints
 
     # --- Vorbelegung aus WinGet / MSI (verhalten wie bisher) ---
     $wingetButton.Add_Click({

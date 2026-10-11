@@ -158,6 +158,18 @@ App logos are resolved locally from `Logos\` and normalised to 256x256; nothing 
 anywhere. A format this machine cannot read (webp without a codec, svg) falls back to
 `Logos\defaultlogo.png` rather than failing the build.
 
+Which logo a package gets, in this order: a file named exactly like the app (`Logos\<DisplayName>.png`); the
+`logoURL` of the row (downloaded once and kept in `Logos\`); a logo with a **related name** - the app name without
+a trailing version or `(x64)`, or a logo whose name is a word-prefix of it (`7-Zip.png` for "7-Zip 26.02 (x64
+edition)"), the longest wins, a space or underscore is the word boundary so "PDF" never takes "PDF24 Creator"; then
+the default logo. An explicit `logoURL` is never replaced by such a guess. The editor says under `logoURL` which logo
+an empty field leads to.
+
+The PSADT log of every package goes to `%ProgramData%\Microsoft\IntuneManagementExtension\Logs`, next to the logs
+of the Intune Management Extension (`Set-PsadtLogPath` rewrites `Toolkit.LogPath` in the package's `config.psd1`).
+If a PSAppDeployToolkit update changes that line, the build warns instead of logging into the wrong folder, and
+`Test-LogoAndHints.ps1` fails against the installed template.
+
 ## Code layout
 
 `Functions\functions.ps1` is only the **loader**: the start script, `deploy_template.ps1` and every package built
@@ -264,6 +276,7 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 | --- | --- |
 | `Test-ErrorDetail.ps1` | an error message carries `(file:line)` of the failing call - also on the real path (the tenant read failing), without a location the message stays as it is |
 | `Test-TenantCheck.ps1` | "Check tenant" step by step with sign-in and Graph replaced: all OK; an incomplete entry never tries to sign in; a failing sign-in, a token that only reads, a failing read and a token of another tenant each fail their own step and skip what builds on it; a token without permission claims or no JWT is a remark, not a crash; a failed check restores the previous token |
+| `Test-LogoAndHints.ps1` | logo search by related name (exact, trimmed, word-prefix both ways, longest wins, `PDF` never takes `PDF24 Creator`, `defaultlogo` never a candidate), an explicit URL beats a guess, the live hints of the editor (Version, MsiProductCode, logoURL, ArpName), `Set-PsadtLogPath` (read-only file and folder, BOM kept, pattern missing = `$false`, and the pattern is still in the installed PSAppDeployToolkit template) |
 | `Test-WinGetIndex.ps1` | the local winget index with a real (small) SQLite database: update takes `index.db` out of the msix and counts the packages right (a one-row result must not fall apart into its columns), reads the schema as major.minor, a broken download keeps the working index, fetched only when missing or older than a day, search by id / name / moniker / publisher (also one hit, an apostrophe, newest version first, `0.10` before `0.9`), curated hits on top with the version from the index, fallback to the module, writing `catalog.json` |
 | `Test-WinGetDialog.ps1` | the search dialog through UI Automation: every control has an AutomationId, the curated list is the front page, Search / Return search, no hits and a failing search are reported, Remember writes the package into `catalog.json` (and says "already there"), Next returns name / id / version / publisher, Cancel nothing |
 | `Test-Prereqs.ps1` | `check-prereqs` finds the modules in the module path without the slow `Get-InstalledModule` query, checks once per process (every `deploy.ps1` ran it again), installs only what is missing |
