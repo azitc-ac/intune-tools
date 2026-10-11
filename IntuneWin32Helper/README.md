@@ -1,7 +1,7 @@
 # IntuneWin32Helper
 Quickly create and deploy Intune Win32 apps using PSADT. Supports WinGet and mutiple tenants.<br><br>
 See https://blog.zarenko.net/intune-apps-verteilen-leicht-gemacht/<br><br>
-<img width="726" height="443" alt="Screenshot 2025-12-09 12-42-03" src="https://github.com/user-attachments/assets/6537dcc9-3a4a-4c34-a831-f73432481e03" />
+![The inventory: one row per app, definition and package left, the app in the tenant right](Docs/main-window.png)
 
 
 ## The main window
@@ -45,6 +45,8 @@ instead of in the middle of it as a 403: it signs in again and reports step by s
 in the token, whether the app list can really be read, and whether the token belongs to the tenant that is
 configured. A failed step skips the ones that build on it. Writing is not tried (that would create an app in the
 tenant); the permission is read from the token. After a failed check the previous sign-in stays in effect.
+
+![Check tenant: five steps, each with its result](Docs/check-tenant.png)
 
 The buttons follow the selected rows: a row without a definition can be deployed, but not edited,
 deleted or built. **Deploy** builds a row that has no package first. **Delete definition** removes the
@@ -116,6 +118,8 @@ how many packages it holds and when it was fetched, *Update index* fetches it ag
 local query - about 150 ms - and independent of the `Microsoft.WinGet.Client` module; the module is only asked
 when the index cannot be fetched or read. *Remember* adds the selected package to `catalog.json`. The index is
 read through `winsqlite3.dll`, which ships with Windows 10 / Server 2016 and later; nothing is installed.
+
+![WinGet search: the curated list first, then the winget index](Docs/winget-search.png)
 
 **Add, New version and Edit** open one editor. The facts about the row (package folder, template,
 Intune state, next step) are read-only at the top; the fields below are grouped (Application, Source,

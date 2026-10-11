@@ -443,25 +443,16 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
-## Bilder für das README (2026-10-11) — Erzeuger fertig, Bilder fehlen noch
+## Bilder im README (2026-10-11)
 
-Das README zeigt als einziges Bild noch den Stand vom 2025-12 (Startkacheln), den es nicht mehr gibt.
-`Docs\Make-Screenshots.ps1` erzeugt drei neue Bilder aus den **echten** Fenstern mit erfundenen Beispieldaten
-(Hauptfenster, WinGet-Suche mit echter Indexabfrage, „Check tenant“): `Docs\main-window.png`,
-`winget-search.png`, `check-tenant.png`. Kein echter Tenant, keine Konfiguration im Bild.
-
-**Offen:** die Bilder sind nicht erzeugt. Die Sitzung dieser Maschine war getrennt und gesperrt (`query user`:
-„Getr.“, LogonUI läuft); WPF malt dann nichts – belegt mit einem Fenster aus einem TextBlock und einem Knopf: 0
-deckende Pixel, auch ohne Fenster (`Measure`/`Arrange` ohne Besitzer). Der Erzeuger erkennt das (zu wenige Farben
-im Bild) und schreibt dann **kein** Bild, sondern endet mit Exit 3. Zu tun, bei offener Sitzung:
-
-```powershell
-.\Docs\Make-Screenshots.ps1
-```
-
-Danach die Bilder im README einbinden (oben statt des alten, unter „The main window“, bei „WinGet search“ und bei
-„Check tenant“) und committen. Prüfung 43 sorgt dafür, dass jedes eingebundene relative Bild auch existiert
-(Gegenprobe: ein Verweis auf eine fehlende Datei → rot).
+Das README zeigt das alte Bild vom 2025-12 (Startkacheln) nicht mehr. Drei neue Bilder kommen aus den **echten**
+Fenstern mit erfundenen Beispieldaten (contoso, kein echter Tenant, keine Konfiguration): `Docs\main-window.png`
+(oben und unter „The main window“), `Docs\check-tenant.png` (bei „Check tenant“), `Docs\winget-search.png` (bei
+„WinGet search“, mit echter Abfrage des Index nach „vlc“). Erzeugt von `Docs\Make-Screenshots.ps1`; bei
+geänderten Fenstern neu laufen lassen. Der erste Lauf in der getrennten Sitzung gab nichts aus (der Erzeuger hat
+das erkannt, Exit 3); in der aktiven Sitzung kamen Bilder, aber zwei Fehler im Erzeuger fielen beim Ansehen auf:
+der Rand (`Margin`) des Inhalts fehlte rechts und unten, und die WinGet-Suche war nie ausgelöst. Beides behoben
+(Rand mitgerendert, „Search“ per UI Automation gedrückt). Prüfung 43 hält die Verweise heil.
 ## `functions.ps1` aufgeteilt (2026-10-11)
 
 `functions.ps1` hatte 4851 Zeilen und 73 Funktionen. Jetzt ist sie ein **Lader**, der 14 Dateien nach

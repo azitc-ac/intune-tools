@@ -52,11 +52,15 @@ if ($Child) {
             if ($win -isnot [System.Windows.Window]) { continue }
             $content = $win.Content
             $scale = 1.5
-            $bitmap = New-Object System.Windows.Media.Imaging.RenderTargetBitmap ([int]($content.ActualWidth * $scale)), ([int]($content.ActualHeight * $scale)), (96 * $scale), (96 * $scale), ([System.Windows.Media.PixelFormats]::Pbgra32)
+            # Der Rand des Inhalts (Margin) gehoert zum Bild: Render() setzt den Inhalt um ihn versetzt, ohne ihn
+            # in der Groesse zu zaehlen - sonst fehlt rechts und unten ein Stueck.
+            $width = $content.ActualWidth + $content.Margin.Left + $content.Margin.Right
+            $height = $content.ActualHeight + $content.Margin.Top + $content.Margin.Bottom
+            $bitmap = New-Object System.Windows.Media.Imaging.RenderTargetBitmap ([int]($width * $scale)), ([int]($height * $scale)), (96 * $scale), (96 * $scale), ([System.Windows.Media.PixelFormats]::Pbgra32)
             # Hintergrund des Fensters mitnehmen, dann der Inhalt
             $visual = New-Object System.Windows.Media.DrawingVisual
             $context = $visual.RenderOpen()
-            $context.DrawRectangle($win.Background, $null, (New-Object System.Windows.Rect 0, 0, $content.ActualWidth, $content.ActualHeight))
+            $context.DrawRectangle($win.Background, $null, (New-Object System.Windows.Rect 0, 0, $width, $height))
             $context.Close()
             $bitmap.Render($visual)
             $bitmap.Render($content)
@@ -82,6 +86,33 @@ if ($Child) {
         }
     })
     $timer.Start()
+
+    # Die WinGet-Suche zeigt erst nach "Search" ein Ergebnis: den Knopf wie ein Benutzer ausloesen (UI Automation).
+    if ($Scenario -eq 'winget') {
+        $press = New-Object System.Windows.Threading.DispatcherTimer
+        $press.Interval = [TimeSpan]::FromMilliseconds(1500)
+        $press.Add_Tick({
+            $press.Stop()
+            foreach ($source in [System.Windows.PresentationSource]::CurrentSources) {
+                $win = $source.RootVisual
+                if ($win -isnot [System.Windows.Window]) { continue }
+                $stack = New-Object System.Collections.Stack
+                $stack.Push($win)
+                while ($stack.Count) {
+                    $node = $stack.Pop()
+                    if ($node -is [System.Windows.Controls.Button] -and [System.Windows.Automation.AutomationProperties]::GetAutomationId($node) -eq 'Search') {
+                        $peer = [System.Windows.Automation.Peers.UIElementAutomationPeer]::CreatePeerForElement($node)
+                        $peer.GetPattern([System.Windows.Automation.Peers.PatternInterface]::Invoke).Invoke()
+                        break
+                    }
+                    if ($node -is [System.Windows.DependencyObject]) {
+                        for ($k = 0; $k -lt [System.Windows.Media.VisualTreeHelper]::GetChildrenCount($node); $k++) { $stack.Push([System.Windows.Media.VisualTreeHelper]::GetChild($node, $k)) }
+                    }
+                }
+            }
+        })
+        $press.Start()
+    }
 
     switch ($Scenario) {
         'main' {
