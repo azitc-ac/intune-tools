@@ -140,6 +140,11 @@ Write-Host ("Install command: {0}" -f $commandLines.Install)
 $InstallCommandLine = $commandLines.Install
 $UninstallCommandLine = $commandLines.Uninstall
 
+# Vermerk in der App: "Created by IntuneWin32Helper <Version>; definition <Stempel>". Der Stempel ist der Stand der
+# Definition, aus der dieses Paket gebaut wurde; das Inventar liest ihn aus Intune zurueck und kann so sagen, ob die
+# App dort der Definition von heute entspricht (Format-IntuneAppNotes / Get-IntuneAppDefinitionFingerprint).
+$AppNotes = Format-IntuneAppNotes -ToolVersion "#TOOLVER#" -DefinitionFingerprint "#DEFFP#"
+
 # Ergebnis des Uploads. Add-IntuneWin32App wirft bei einem fehlgeschlagenen Upload
 # oder Commit KEINE Exception, sondern schreibt nur eine Warnung und gibt $null zurueck
 # (siehe Modulquelle). Ohne diese Pruefung meldet das Skript "Finished." obwohl die App
@@ -149,7 +154,7 @@ $uploadResult = $null
 # Der Upload einer neuen App - an EINER Stelle, drei Wege fuehren hierher.
 $addNewApp = {
     Invoke-IntuneModuleCall -Label 'Add-IntuneWin32App' -Operation {
-        Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes "Created by IntuneWin32Helper #TOOLVER#" -Verbose
+        Add-IntuneWin32App -FilePath $IntuneWinFile -DisplayName $DisplayName -Description $Description -Publisher $Publisher -AppVersion $AppVersion -InstallExperience "system" -RestartBehavior "suppress" -DetectionRule $DetectionRule -RequirementRule $RequirementRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes $AppNotes -Verbose
     }
 }
 
@@ -174,7 +179,7 @@ elseif ($Mode -eq 'Update') {
         # bleiben: danach wird die App gefunden.
         Write-Host "Updating detection rule, requirement rule, commands, icon, publisher and description of app $UpdateAppId"
         $null = Invoke-IntuneModuleCall -Label 'Set-IntuneWin32App' -Operation {
-            Set-IntuneWin32App -ID $UpdateAppId -Publisher $Publisher -Description $Description -DetectionRule $DetectionRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Verbose
+            Set-IntuneWin32App -ID $UpdateAppId -Publisher $Publisher -Description $Description -DetectionRule $DetectionRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Notes $AppNotes -Verbose
         }
         # Die Anforderung nimmt Set-IntuneWin32App nicht an (siehe Set-TenantAppRequirement).
         Set-TenantAppRequirement -Id $UpdateAppId -RequirementRule $RequirementRule

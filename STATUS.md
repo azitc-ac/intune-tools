@@ -33,6 +33,7 @@ Alles gegen `zarenko.onmicrosoft.com` (Test-Tenant, Testapps „ZZ IW32H …“,
 | --- | --- |
 | Installer-Engines NSIS und Burn auf einem Client, Inno mit Fund (`/ALLUSERS`) | Quelle: IntuneWin32Helper 2.0.0 — im Feld gelaufener Stand |
 | Hauptfenster → Build → Deploy, eine App | Quelle: Offene Feldprüfung: Hauptfenster (Stufe 1, 2026-10-09) |
+| „up to date“ nur mit Stempel im Vermerk der Intune-App (Anlegen, Update, App ohne Stempel → `publish (updates the app in Intune)`) | Quelle: Ein Weg: „Publish to Intune“, Knöpfe nach Zustand (2026-10-11) |
 | Create, Skip, Update (Zuweisung bleibt), Erneuern, Retire, Rebuild, Dubletten | Quelle: Feldprüfung Stufe 3 und 4 gegen den Test-Tenant (2026-10-10) — Ergebnis |
 | Mehrere Apps in einem Deploy, Zuweisungsarten, Tenant-Wechsel, Geschwindigkeit | Quelle: Feldprüfung, zweiter Teil: Mehrfach-Deploy, Zuweisungsarten, Tenant-Wechsel, Geschwindigkeit (2026-10-11) |
 | Tenant-Apps und Zuweisungen direkt über Graph (statt Modul-Cmdlets) | Quelle: Feldprüfung Stufe 3 und 4 gegen den Test-Tenant (2026-10-10) — Ergebnis |

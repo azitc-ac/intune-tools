@@ -102,7 +102,10 @@ function Get-AppInventory {
                 # Stand der Definition im Paket: current | changed | unknown (Paket ohne Stempel) | n/a (keine
                 # Definition zum Vergleichen) | - (kein Paket)
                 PackageDefinition = '-'
-                Status      = ''
+                # Stand der Definition in der App in Intune (Stempel im Vermerk): current | changed | unknown (App ohne
+                # Stempel, z. B. vom alten Werkzeug) | - (keine einzelne App mit Inhalt, oder nicht abgefragt)
+                IntuneDefinition  = '-'
+                Status     = ''
                 Intune      = $(if ($intuneChecked) { '-' } else { 'not checked' })
                 Next        = ''
                 FullPath    = ''
@@ -195,6 +198,16 @@ function Get-AppInventory {
             elseif ($count -eq 1)                        { $row.Intune = 'yes' }
             elseif ($emptyCount -gt 0)                   { $row.Intune = ('yes ({0}x, {1} without content)' -f $count, $emptyCount) }
             else                                         { $row.Intune = ('yes ({0}x)' -f $count) }
+
+            # Spiegelt die App in Intune die Definition von heute? Das sagt nur der Stempel im Vermerk der App;
+            # ohne ihn ist es unbekannt - und "up to date" gibt es dann nicht (die App kann vom alten Werkzeug
+            # stammen, mit alter Erkennung und alten Befehlen).
+            if ($row.HasDefinition -and $count -eq 1 -and $emptyCount -eq 0) {
+                $appStamp = Get-IntuneAppDefinitionFingerprint -App $same[0]
+                if (-not $appStamp)                                                            { $row.IntuneDefinition = 'unknown' }
+                elseif ($appStamp -eq (Get-DefinitionFingerprint -Record $row.DefinitionRecord)) { $row.IntuneDefinition = 'current' }
+                else                                                                           { $row.IntuneDefinition = 'changed' }
+            }
         }
         # Der naechste sinnvolle Schritt folgt aus dem Zustand der Zeile.
         if ($row.IntuneOnly -and $row.Origin -eq 'foreign') {
@@ -232,8 +245,16 @@ function Get-AppInventory {
         elseif ($row.Template -eq 'outdated' -or $row.Template -eq 'unstamped') {
             $row.Next = 'publish (renews the package from the template)'
         }
-        elseif ($intuneChecked) {
+        elseif ($row.IntuneDefinition -eq 'changed' -or $row.IntuneDefinition -eq 'unknown') {
+            # Paket und Definition passen, die App in Intune nicht (oder es ist nicht zu sagen): Publish aktualisiert sie.
+            $row.Next = 'publish (updates the app in Intune)'
+        }
+        elseif ($row.IntuneDefinition -eq 'current') {
             $row.Next = 'up to date'
+        }
+        elseif ($intuneChecked) {
+            # Eine App in Intune, aber keine Aussage moeglich (z. B. keine Definition): nie "up to date".
+            $row.Next = 'publish'
         }
         else {
             # Ohne Tenant-Abfrage ist "up to date" eine Behauptung ueber etwas,
@@ -259,6 +280,7 @@ function Get-AppInventory {
             ('Template: {0}' -f $row.Template),
             ('Package built from this definition: {0}' -f $row.PackageDefinition),
             ('Intune: {0}' -f $row.Intune),
+            ('App in Intune built from this definition: {0}' -f $row.IntuneDefinition),
             ('Next: {0}' -f $row.Next)
         ) -join "`n")
     }

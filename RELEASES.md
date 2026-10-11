@@ -465,6 +465,13 @@ hat drei Stufen – Definition, Paket, Intune – und die Knöpfe heißen jetzt 
 - **Ausgegraut nach Zustand:** `Get-InventoryActionState` (reine Funktion) liefert für die markierten Zeilen, welcher Knopf geht; ein
   ausgegrauter *Publish*/*Remove* nennt im Tooltip den Grund. Prüfung 46: das Fenster hat keine eigene Regel daneben.
 - **Neue Texte in „Next step“:** `publish`, `publish (builds the package first)`, `publish (new version)`, `build package, then publish`.
+- **„up to date“ nur mit Beleg (Nachtrag, gleicher Tag):** „up to date“ stand bei einem neu gebauten 7-Zip, dessen App in Intune noch vom alten
+  Werkzeug stammte – das Inventar prüfte Paket gegen Definition und ob die App da ist, aber nie, ob die App in Intune der Definition entspricht
+  (der Vermerk war nur „Created by IntuneWin32Helper“), und *Publish* war trotzdem frei. Jetzt schreibt `deploy.ps1` beim Anlegen **und** beim Update
+  den Vermerk `Created by IntuneWin32Helper <Version>; definition <Stempel>` (`Format-IntuneAppNotes`, `-Notes $AppNotes` an `Add-IntuneWin32App` und
+  `Set-IntuneWin32App`), und das Inventar liest ihn zurück (`Get-IntuneAppDefinitionFingerprint`, Spalte `IntuneDefinition`: current / changed /
+  unknown). Nur `current` ist „up to date“; `changed` und `unknown` (App ohne Stempel, vom alten Werkzeug oder von Hand) zeigen
+  `publish (updates the app in Intune)`. Prüfung 37 verlangt den Vermerk über `Format-IntuneAppNotes` an beiden Aufrufen.
 - `VERSION` 2.0.12 → 2.1.0 (bewusster Sprung).
 
 **Belegt:** im Feld im Test-Tenant (`zarenko.onmicrosoft.com`, Test-App „ZZ IW32H Feldtest“, am Ende gelöscht, 44 Apps wie vorher):
@@ -482,6 +489,14 @@ das Entfernen des Anforderungs-Aufrufs, weil die Prüfung auch einen Kommentar z
 Erkennungsregel wird mitgepatcht, im Feld geprüft ist nur die Skript-Erkennung einer WinGet-App; der Inhalt des Erkennungsskripts wurde nicht
 verglichen); das Update einer App mit **Gruppen**-Zuweisung; der neue Hauptfenster-Aufbau von Hand (Tooltips ausgegrauter Knöpfe, Abstände der Gruppen)
 und die README-Bilder (`main-window.png` zeigt noch die alten Knöpfe – der Erzeuger lief in einer getrennten Sitzung ins Leere und lässt das alte Bild jetzt stehen).
+
+**Belegt (Nachtrag „up to date“):** im Test-Tenant mit einer Test-App „ZZ IW32H Feldtest“ (am Ende gelöscht, 0 Apps dieses Namens): frisch angelegt →
+Vermerk in Intune `Created by IntuneWin32Helper field-test; definition b3093d7cb710`, Zeile `up to date`; Vermerk per Graph auf die alte Form
+`Created by IntuneWin32Helper 2.0.9` gesetzt → Zeile `IntuneDefinition=unknown`, `publish (updates the app in Intune)`; ein *Publish* mit Ja
+(„Update the app in Intune (1)“) → der Update-Zweig schrieb den Stempel (gleicher Wert wie beim Anlegen), Zeile wieder `up to date`.
+Gegenproben: ohne den `unknown`-Zweig und ohne `-Notes` im Update-Zweig schlugen `Test-InventoryAndRenewal.ps1` und Prüfung 37 fehl.
+**Nicht belegt:** `changed` gegen eine echte Intune-App (nur im Test mit einem Vermerk anderer Definition); die Anzeige im Fenster von Hand.
+
 ## `STATUS.md` und kaputte Umlaute (2026-10-11)
 
 - **`STATUS.md`** (neu, im Repo-Wurzelverzeichnis neben `RELEASES.md`): Überblick zum Wiedereinstieg nach dem Muster der gleichnamigen

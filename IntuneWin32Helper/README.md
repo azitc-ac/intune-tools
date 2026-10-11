@@ -119,6 +119,11 @@ A dialog shows the plan - what is created, what is updated, what is skipped and 
 (nothing happens). A row without a package is built first, also when only an update is planned. Rows that are skipped are
 not built. If the tenant cannot be read, nothing is published. Running `deploy.ps1` by hand still asks (`-Mode Ask`), as before.
 
+**Does the app in Intune match the definition?** `deploy.ps1` writes the note `Created by IntuneWin32Helper <version>; definition <stamp>`
+into the app, when it creates it and when it updates it; the inventory reads it back. Only a matching stamp is `up to date`. An app
+without a stamp (made by the old tool or by hand) or with another one shows `publish (updates the app in Intune)`: nobody has
+checked that it is what the definition says, and one publish makes it so (assignments stay).
+
 **Is the package older than the definition?** `Build-AppPackage` stamps `deploy.ps1` with a short hash over the definition
 fields that go into the package and the app (`# ToolDefinitionFingerprint:`); the inventory compares it with the row of
 today. `Package, definition changed` means the row was edited after the build. A package built before the stamp existed

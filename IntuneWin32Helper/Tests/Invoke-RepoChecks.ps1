@@ -1581,8 +1581,16 @@ if ($functionsFile) {
     }
 }
 if (Test-Path -LiteralPath $templatePath) {
-    if ((Get-Content -LiteralPath $templatePath -Raw) -notmatch '-Notes "Created by IntuneWin32Helper') {
-        Add-Failure "ForeignAppsProtected" "deploy_template.ps1 schreibt den Vermerk 'Created by IntuneWin32Helper' nicht mehr (Add-IntuneWin32App -Notes) - das Inventar hielte alle neuen Apps fuer fremd"
+    # Der Vermerk entsteht in Format-IntuneAppNotes (beginnt mit dem Kennzeichen) und geht an Anlegen UND Update.
+    $tpl37 = Get-Content -LiteralPath $templatePath -Raw
+    if ($tpl37 -notmatch 'Format-IntuneAppNotes\s+-ToolVersion\s+"#TOOLVER#"\s+-DefinitionFingerprint\s+"#DEFFP#"' -or ([regex]::Matches($tpl37, '-Notes \$AppNotes')).Count -ne 2) {
+        Add-Failure "ForeignAppsProtected" "deploy_template.ps1 schreibt den Vermerk nicht mehr ueber Format-IntuneAppNotes mit -Notes `$AppNotes an Add-IntuneWin32App UND Set-IntuneWin32App - das Inventar hielte neue Apps fuer fremd, und ohne den Stempel der Definition stuende 'up to date' ohne Beleg"
+    }
+    if ($functionsFile) {
+        $fmt37 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Format-IntuneAppNotes' }, $true) | Select-Object -First 1
+        if (-not $fmt37 -or $fmt37.Extent.Text -notmatch "Created by IntuneWin32Helper") {
+            Add-Failure "ForeignAppsProtected" "Format-IntuneAppNotes fehlt oder beginnt den Vermerk nicht mit 'Created by IntuneWin32Helper'"
+        }
     }
 }
 # ---------------------------------------------------------------------------

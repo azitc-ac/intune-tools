@@ -174,6 +174,7 @@ function Show-InventoryDialog {
     )
     $nextColors = @(
         @('up to date',                                       'DarkGreen'),
+        @('publish (updates the app in Intune)',              'DarkOrange'),
         @('deploy',                                           'DodgerBlue'),
         @('renew from template, then deploy',                 'DarkOrange'),
         @('check duplicates in Intune',                       'DarkOrange'),

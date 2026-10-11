@@ -119,6 +119,30 @@ function Get-PackageDefinitionFingerprint {
     return $value
 }
 
+function Format-IntuneAppNotes {
+    <#
+        Der Vermerk, den deploy.ps1 beim Anlegen UND beim Update in die App schreibt:
+        "Created by IntuneWin32Helper <Version>; definition <Stempel>". Der Anfang zeigt, dass die App von diesem
+        Werkzeug stammt (Test-IntuneAppCreatedByTool); der Stempel ist der Stand der Definition, aus der das Paket
+        gebaut wurde (Get-DefinitionFingerprint). Ohne Stempel (Paket aus der Zeit davor) bleibt nur der Anfang.
+    #>
+    param(
+        [AllowEmptyString()][string]$ToolVersion = '',
+        [AllowEmptyString()][string]$DefinitionFingerprint = ''
+    )
+    $text = ('Created by IntuneWin32Helper {0}' -f $ToolVersion).TrimEnd()
+    if ($DefinitionFingerprint -match '^[0-9a-f]{12}$') { $text += ('; definition {0}' -f $DefinitionFingerprint) }
+    return $text
+}
+
+function Get-IntuneAppDefinitionFingerprint {
+    <# Liest den Definitions-Stempel aus dem Vermerk einer Intune-App. Leer: die App hat keinen (angelegt vor dem Stempel, von Hand oder fremd). #>
+    param([Parameter(Mandatory = $true)]$App)
+    $match = [regex]::Match([string]$App.notes, '^Created by IntuneWin32Helper[^;]*;\s*definition\s+([0-9a-f]{12})\s*$')
+    if ($match.Success) { return $match.Groups[1].Value }
+    return ''
+}
+
 function Get-ArpSearchName {
     <#
         Der Name, unter dem die App in der Programmliste (Uninstall-Schluessel)
