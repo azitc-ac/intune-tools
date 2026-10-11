@@ -1,6 +1,6 @@
 ﻿<#
     .SYNOPSIS
-    Verhaltenstest: Retire und Rebuild loeschen in Intune nur, was sie sollen - und merken,
+    Verhaltenstest: "Remove from Intune" (intern Retire) loescht in Intune nur, was es soll - und merken,
     wenn das Loeschen nicht gewirkt hat.
 
     .DESCRIPTION
@@ -14,8 +14,8 @@
       3. Das Modul warnt bei einem fehlgeschlagenen Loeschen nur (kein throw). Das Ergebnis
          unterscheidet darum Removed / StillListed / Failed / Unverified - "Kommando lief durch"
          wird nicht als "App ist weg" gemeldet.
-      4. Rebuild: erst bauen, dann loeschen, dann anlegen. Scheitert der Bau, bleibt Intune
-         unangetastet; bleibt die alte App stehen, wird keine neue angelegt (Dublette).
+      Ein "Rebuild" (bauen, loeschen, neu anlegen) gibt es nicht mehr: "Publish to Intune" aktualisiert eine
+      vorhandene App an Ort und Stelle und laesst die Zuweisungen stehen (Test-DeployPlan.ps1).
 
     Das Modul wird nachgebaut (Remove-IntuneWin32App, Get-IntuneWin32AppAssignment, mit dem
     echten Verhalten "warnt statt zu werfen"); Invoke-IntuneModuleCall, Inventar, Plan, Loeschen
@@ -212,44 +212,6 @@ try {
     $null = Invoke-InventoryRetire -Selection (@(& $rowOf 'Foreign - 3.0') + @(& $rowOf 'ToolOnly - 4.0') + @(& $rowOf 'Have - 1.0')) -RootDir $rootDir -PacketRoot $packets -Ask $ask 6>$null
     Test-That (((Get-RemovedIds) -join ',') -eq 'id-Have-1.0,id-ToolOnly-4.0') "retire (foreign + tool-only + defined): removed [$((Get-RemovedIds) -join ',')], expected only id-Have-1.0 and id-ToolOnly-4.0"
     Test-That ($script:asked[0].Text -notmatch 'Foreign') 'retire (foreign app selected): the question names the foreign app'
-    # ------------------------------------------------------------------ Rebuild
-    Reset-Run; & $resetTenant; $script:failBuild = @('BuildFail - 1.0'); $script:stuck = @('stuck-1')
-    $orphanPkg = $null
-    $selection = & $pick 'Have', 'Fresh', 'BuildFail', 'Stuck', 'Ghost'
-    $res = Invoke-InventoryRebuild -Selection $selection -Tenant $tenant -RootDir $rootDir -PacketRoot $packets -ToolVersion '0.0.1' -Ask $ask 6>$null
-    $evt = $script:events
-    $iBuild = [array]::IndexOf($evt, 'build')
-    $firstRemove = @($evt | Where-Object { $_ -like 'remove:*' } | Select-Object -First 1)
-    $iRemove = $(if ($firstRemove) { [array]::IndexOf($evt, $firstRemove[0]) } else { -1 })
-    $iDeploy = [array]::IndexOf($evt, 'deploy')
-    Test-That ($iBuild -ge 0 -and $iRemove -gt $iBuild -and $iDeploy -gt $iRemove) "rebuild: order must be build -> remove -> deploy, events: $($evt -join ' > ')"
-    Test-That ($script:buildRemoveExisting -eq $true) "rebuild: the package was not rebuilt from scratch (RemoveExisting=$($script:buildRemoveExisting))"
-    Test-That (((Get-RemovedIds) -join ',') -eq 'ghost-1,id-Have-1.0,stuck-1') "rebuild: removal attempted for [$((Get-RemovedIds) -join ',')], expected [ghost-1,id-Have-1.0,stuck-1] (BuildFail must not be touched)"
-    Test-That (@($script:tenantApps | Where-Object { $_.displayName -eq 'BuildFail' }).Count -eq 1) "rebuild: the app of a row whose build failed was deleted from Intune"
-    $deployedKeys = @($script:deployed | ForEach-Object { '{0} - {1}:{2}' -f $_.AppName, $_.AppVersion, $_.Mode } | Sort-Object)
-    Test-That (($deployedKeys -join ',') -eq 'Fresh - 1.0:New,Ghost - 1.0:New,Have - 1.0:New') "rebuild: created [$($deployedKeys -join ', ')], expected [Fresh, Ghost, Have as New]"
-    $skipText = $script:deploySkipped -join ' | '
-    Test-That ($skipText -match 'BuildFail - 1\.0: the build failed - Intune was not touched') "rebuild: skipped list lacks the build failure ($skipText)"
-    Test-That ($skipText -match 'Stuck - 1\.0: the old app could not be removed' -and $skipText -match 'duplicate') "rebuild: skipped list lacks the stuck app ($skipText)"
-    Test-That ($script:asked.Count -eq 1 -and $script:asked[0].Buttons -eq 'YesNo' -and $script:asked[0].Text -match 'assignments: 2' -and $script:asked[0].Text -match 'only after the build worked') "rebuild: the question is missing the plan or the assignment count"
-
-    Reset-Run; & $resetTenant; $script:answer = 'No'
-    $res = Invoke-InventoryRebuild -Selection (& $pick 'Have') -Tenant $tenant -RootDir $rootDir -PacketRoot $packets -ToolVersion '0.0.1' -Ask $ask 6>$null
-    Test-That (($script:events -contains 'build') -eq $false -and (Get-RemovedIds).Count -eq 0 -and $script:deployCalls -eq 0) "rebuild (No): something happened: $($script:events -join ' > ')"
-
-    Reset-Run; & $resetTenant; $script:tenantReadable = $false
-    $res = Invoke-InventoryRebuild -Selection (& $pick 'Have') -Tenant $tenant -RootDir $rootDir -PacketRoot $packets -ToolVersion '0.0.1' -Ask $ask 6>$null
-    Test-That (($script:events -contains 'build') -eq $false -and $script:asked.Count -eq 0 -and $script:deployCalls -eq 0) "rebuild (tenant unreadable): something happened: $($script:events -join ' > ')"
-
-    Reset-Run; & $resetTenant
-    $orphanRow = [pscustomobject]@{ Key = 'Nobody - 1.0'; AppName = 'Nobody'; AppVersion = '1.0'; HasDefinition = $false; HasPackage = $true; Intune = 'yes' }
-    $res = Invoke-InventoryRebuild -Selection @($orphanRow) -Tenant $tenant -RootDir $rootDir -PacketRoot $packets -ToolVersion '0.0.1' -Ask $ask 6>$null
-    Test-That (($script:events -contains 'build') -eq $false -and (Get-RemovedIds).Count -eq 0) "rebuild (no definition): something happened: $($script:events -join ' > ')"
-
-    # Alle Bauten scheitern: Intune bleibt vollstaendig unangetastet.
-    Reset-Run; & $resetTenant; $script:failBuild = @('Have - 1.0', 'Dup - 1.0')
-    $res = Invoke-InventoryRebuild -Selection (& $pick 'Have', 'Dup') -Tenant $tenant -RootDir $rootDir -PacketRoot $packets -ToolVersion '0.0.1' -Ask $ask 6>$null
-    Test-That ((Get-RemovedIds).Count -eq 0 -and $script:deployCalls -eq 0) "rebuild (all builds fail): removed $((Get-RemovedIds).Count), deploy calls $($script:deployCalls) - expected nothing in Intune"
 }
 finally {
     foreach ($pkg in @(Get-ChildItem -LiteralPath $packets -Directory -ErrorAction SilentlyContinue)) {
@@ -264,5 +226,5 @@ if ($problems.Count -gt 0) {
     foreach ($pr in $problems) { [Console]::WriteLine("FAIL: $pr") }
     exit 1
 }
-[Console]::WriteLine("Retire/Rebuild: only name+version apps from the fresh tenant are deleted, the question names each one, a delete that only warns is not reported as removed, rebuild goes build -> delete -> create and never leaves a duplicate. PASS")
+[Console]::WriteLine("Remove from Intune: only name+version apps from the fresh tenant are deleted, the question names each one, a delete that only warns is not reported as removed. PASS")
 exit 0

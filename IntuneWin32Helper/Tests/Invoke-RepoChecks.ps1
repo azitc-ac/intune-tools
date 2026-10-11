@@ -1436,11 +1436,11 @@ if (Test-Path -LiteralPath $templatePath) {
 #       - Remove-IntuneWin32App wird NUR in Remove-TenantWin32Apps aufgerufen, und die Funktion
 #         liest den Tenant danach neu (das Modul warnt bei einem Fehler nur, es wirft nicht -
 #         "Kommando lief durch" hiesse sonst "App ist weg");
-#       - Remove-TenantWin32Apps haben nur Retire und Rebuild als Aufrufer, die Schleife nie direkt;
+#       - Remove-TenantWin32Apps hat nur Retire ("Remove from Intune") als Aufrufer, die Schleife nie direkt;
 #       - Retire: Tenant frisch lesen -> Rueckfrage -> loeschen, und die Rueckfrage hat die
-#         Standardantwort Nein;
-#       - Rebuild: Tenant lesen -> Rueckfrage -> BAUEN -> loeschen -> anlegen. Scheitert der Bau,
-#         darf Intune nicht angefasst sein; angelegt wird erst nach dem Loeschen.
+#         Standardantwort Nein.
+#     (Ein Rebuild - bauen, loeschen, neu anlegen - gibt es nicht mehr: Publish aktualisiert eine App an Ort und
+#     Stelle. Dass nirgends eine zweite Loeschstelle entsteht, sichert die erste Regel.)
 # ---------------------------------------------------------------------------
 $checked++
 if ($functionsFile) {
@@ -1470,8 +1470,8 @@ if ($functionsFile) {
     $removeUsers = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Remove-TenantWin32Apps' }, $true)
     foreach ($c in $removeUsers) {
         $owner = & $enclosingFunction $c
-        if ($owner -notin @('Invoke-InventoryRetire', 'Invoke-InventoryRebuild')) {
-            Add-Failure "IntuneDeleteVerified" ("{0} Remove-TenantWin32Apps in '{1}' - geloescht wird nur ueber Retire und Rebuild, beide mit Rueckfrage" -f (Get-NodePlace $c), $owner)
+        if ($owner -notin @('Invoke-InventoryRetire')) {
+            Add-Failure "IntuneDeleteVerified" ("{0} Remove-TenantWin32Apps in '{1}' - geloescht wird nur ueber Retire (Remove from Intune), mit Rueckfrage" -f (Get-NodePlace $c), $owner)
         }
     }
 
@@ -1491,19 +1491,11 @@ if ($functionsFile) {
         }
     }
     $retireFn  = & $fn35 'Invoke-InventoryRetire'
-    $rebuildFn = & $fn35 'Invoke-InventoryRebuild'
     if (-not $retireFn)  { Add-Failure "IntuneDeleteVerified" "Invoke-InventoryRetire fehlt" }
     else {
         & $order $retireFn  @('Read-TenantWin32Apps', '$Ask', 'Remove-TenantWin32Apps') 'Invoke-InventoryRetire'
         if ($retireFn.Extent.Text -notmatch $askDefaultNo) {
             Add-Failure "IntuneDeleteVerified" "Invoke-InventoryRetire: die Rueckfrage hat nicht die Standardantwort Nein"
-        }
-    }
-    if (-not $rebuildFn) { Add-Failure "IntuneDeleteVerified" "Invoke-InventoryRebuild fehlt" }
-    else {
-        & $order $rebuildFn @('Read-TenantWin32Apps', '$Ask', 'Invoke-PackageBuild', 'Remove-TenantWin32Apps', 'Invoke-PackageDeploy') 'Invoke-InventoryRebuild'
-        if ($rebuildFn.Extent.Text -notmatch $askDefaultNo) {
-            Add-Failure "IntuneDeleteVerified" "Invoke-InventoryRebuild: die Rueckfrage hat nicht die Standardantwort Nein"
         }
     }
 
@@ -1521,7 +1513,7 @@ if ($functionsFile) {
             $direct = & $cmd35 $loop35 $name
             if ($direct) { Add-Failure "IntuneDeleteVerified" ("{0} Start-InventoryLoop ruft {1} direkt auf - ohne Rueckfrage und Plan" -f (Get-NodePlace $direct), $name) }
         }
-        foreach ($name in 'Invoke-InventoryRetire', 'Invoke-InventoryRebuild') {
+        foreach ($name in 'Invoke-InventoryRetire') {
             if (-not (& $cmd35 $loop35 $name)) { Add-Failure "IntuneDeleteVerified" ("Start-InventoryLoop ruft {0} nicht auf - der Knopf haette keine Wirkung" -f $name) }
         }
     }
@@ -1807,6 +1799,78 @@ foreach ($file45 in @(Get-ChildItem -Path (Split-Path -Parent $RepoRoot) -Recurs
     if ($file45.FullName -eq $PSCommandPath) { continue }
     $hit45 = [regex]::Match([IO.File]::ReadAllText($file45.FullName), $mojibake45)
     if ($hit45.Success) { Add-Failure "Mojibake" ("{0}: Zeichenfolge '{1}' sieht nach doppelt kodiertem UTF-8 aus (als Windows-1252 gelesen und neu gespeichert)" -f $file45.FullName.Substring((Split-Path -Parent $RepoRoot).Length + 1), $hit45.Value) }
+}
+# ---------------------------------------------------------------------------
+# 46) Welcher Knopf wann moeglich ist, entscheidet EINE Funktion (Get-InventoryActionState), und die ist getestet
+#     (Test-InventoryActionState.ps1): jede Zuweisung an .IsEnabled in Show-InventoryDialog bekommt ihren Wert aus
+#     $state. Sonst entsteht neben der Tabelle eine zweite, ungetestete Regel im Fenster.
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $dialog46 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Show-InventoryDialog' }, $true) | Select-Object -First 1
+    if (-not $dialog46) { Add-Failure "ButtonStateSingleSource" "Show-InventoryDialog fehlt" }
+    else {
+        if (-not $dialog46.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Get-InventoryActionState' }, $true)) {
+            Add-Failure "ButtonStateSingleSource" "Show-InventoryDialog ruft Get-InventoryActionState nicht auf - die Knopfzustaende haetten keine getestete Quelle"
+        }
+        foreach ($assign46 in $dialog46.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -match '\.IsEnabled$' }, $true)) {
+            if ($assign46.Right.Extent.Text -notmatch '^\$state\.\w+$') {
+                Add-Failure "ButtonStateSingleSource" ("{0} {1} - der Zustand eines Knopfes muss aus `$state kommen (Get-InventoryActionState), nicht aus einer eigenen Regel im Fenster" -f (Get-NodePlace $assign46), $assign46.Extent.Text)
+            }
+        }
+    }
+}
+# ---------------------------------------------------------------------------
+# 47) "Publish to Intune" ist EIN Weg ohne Rueckfrage "wie genau": Get-DeployPlan hat keinen Schalter, der zwischen
+#     "Inhalt ersetzen" und "ueberspringen" waehlen laesst, und der Update-Zweig von deploy_template.ps1 bringt die
+#     App auf den Stand der Definition (Inhalt, Erkennung, Befehle, Anforderung) statt nur den Inhalt zu tauschen -
+#     sonst ginge eine geaenderte Definition nie nach Intune (so war es bis 2026-10-11).
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $plan47 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-DeployPlan' }, $true) | Select-Object -First 1
+    if (-not $plan47) { Add-Failure "PublishOnePath" "Get-DeployPlan fehlt" }
+    elseif (@($plan47.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -match 'Replace' }).Count -gt 0) {
+        Add-Failure "PublishOnePath" "Get-DeployPlan hat wieder einen Schalter fuer 'vorhandene Apps ersetzen' - Publish entscheidet nach Zustand, ohne zweite Frage"
+    }
+    # Jedes Schreiben eines deploy.ps1 gibt den Stempel der Definition mit (Bau: neu aus der Definition; Erneuern: der
+    # alte bleibt) - sonst sieht ein Paket nach dem Schreiben "unbekannt" aus und muesste ohne Grund neu gebaut werden.
+    foreach ($write47 in $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Write-DeployScript' }, $true)) {
+        $names47 = @($write47.CommandElements | Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] } | ForEach-Object { $_.ParameterName })
+        if ($names47 -notcontains 'DefinitionFingerprint') {
+            Add-Failure "PublishOnePath" ("{0} Write-DeployScript ohne -DefinitionFingerprint - das Paket verlore den Stempel der Definition" -f (Get-NodePlace $write47))
+            continue
+        }
+        # ... und den richtigen: beim Bau der Stempel der Definition von heute, beim Erneuern der des alten Skripts
+        $elements47 = @($write47.CommandElements)
+        $argText47 = ''
+        for ($j47 = 0; $j47 -lt $elements47.Count; $j47++) {
+            if ($elements47[$j47] -is [System.Management.Automation.Language.CommandParameterAst] -and $elements47[$j47].ParameterName -eq 'DefinitionFingerprint' -and $j47 + 1 -lt $elements47.Count) { $argText47 = $elements47[$j47 + 1].Extent.Text }
+        }
+        $owner47 = & $enclosingFunction $write47
+        $expected47 = $(if ($owner47 -eq 'Build-AppPackage') { 'Get-DefinitionFingerprint' } elseif ($owner47 -eq 'Update-DeployScript') { 'Get-PackageDefinitionFingerprint' } else { '' })
+        if ($expected47 -and $argText47 -notmatch [regex]::Escape($expected47)) {
+            Add-Failure "PublishOnePath" ("{0} {1}: -DefinitionFingerprint ist '{2}', erwartet ein {3}(...) - sonst traegt das Paket nicht den Stempel, der zu ihm gehoert" -f (Get-NodePlace $write47), $owner47, $argText47, $expected47)
+        }
+    }
+}
+$template47 = Join-Path (Join-Path $RepoRoot 'Templates') 'deploy_template.ps1'
+if (Test-Path -LiteralPath $template47) {
+    $tAst47 = [System.Management.Automation.Language.Parser]::ParseFile($template47, [ref]$null, [ref]$null)
+    $ifs47 = @($tAst47.FindAll({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] }, $true))
+    $updateBody47 = $null
+    foreach ($if47 in $ifs47) {
+        for ($i47 = 0; $i47 -lt $if47.Clauses.Count; $i47++) {
+            if ($if47.Clauses[$i47].Item1.Extent.Text -match "^\`$Mode\s+-eq\s+'Update'$") { $updateBody47 = $if47.Clauses[$i47].Item2 }
+        }
+    }
+    if (-not $updateBody47) { Add-Failure "PublishOnePath" "deploy_template.ps1: der Zweig fuer -Mode Update fehlt" }
+    else {
+        foreach ($needed47 in 'Update-IntuneWin32AppPackageFile', 'Set-IntuneWin32App', 'Set-TenantAppRequirement') {
+            $found47 = $updateBody47.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq $needed47 }, $true)
+            if (-not $found47) { Add-Failure "PublishOnePath" ("deploy_template.ps1: der Update-Zweig ruft {0} nicht auf - ein Update liesse die Definition der App in Intune unveraendert" -f $needed47) }
+        }
+    }
 }
 # ---------------------------------------------------------------------------
 # Ergebnis

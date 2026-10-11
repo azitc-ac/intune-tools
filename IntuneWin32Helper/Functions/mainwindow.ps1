@@ -18,8 +18,10 @@ function Show-InventoryDialog {
         Das Hauptfenster. Gibt { Action, Selection, TenantName } zurueck.
 
         .DESCRIPTION
-        Action: Add | NewVersion | Edit | Delete | Build | Deploy | Rebuild | Retire |
-                OpenFolder | RemoveFolder | Refresh | SwitchTenant | Cancel | Closed
+        Action: Add | NewVersion | Edit | Delete | Build | Publish | Remove |
+                OpenFolder | RemoveFolder | Refresh | SwitchTenant | CheckTenant | Cancel | Closed
+        Die Knoepfe folgen den drei Dingen einer App (Definition, Paket, Intune); welcher gerade moeglich
+        ist, entscheidet Get-InventoryActionState aus den markierten Zeilen - der Rest ist ausgegraut.
         Jede Aktion hier hat in Start-InventoryLoop einen Zweig - das prueft
         Tests\Invoke-RepoChecks.ps1 (kein Knopf ohne Gegenstueck).
     #>
@@ -299,7 +301,7 @@ function Show-InventoryDialog {
     $choose = {
         param([string]$action)
         $selected = @($dataGrid.SelectedItems | Where-Object { $_ -isnot [int] })
-        if ($action -in 'NewVersion', 'Edit', 'Delete', 'Build', 'Deploy', 'Rebuild', 'Retire', 'RemoveFolder' -and $selected.Count -eq 0) {
+        if ($action -in 'NewVersion', 'Edit', 'Delete', 'Build', 'Publish', 'Remove', 'RemoveFolder' -and $selected.Count -eq 0) {
             $null = Show-ConfirmDialog -Text 'Select one or more rows first.' -Title 'IntuneWin32Helper' -Buttons OK -Icon Information -Default OK -Owner $window
             return
         }
@@ -316,6 +318,8 @@ function Show-InventoryDialog {
         $button.Padding = '14,6'
         $button.Margin = '0,0,8,0'
         $button.ToolTip = $tip
+        # Ein ausgegrauter Knopf soll im Tooltip sagen, warum (WPF zeigt ihn sonst nur bei aktiven Knoepfen).
+        [Windows.Controls.ToolTipService]::SetShowOnDisabled($button, $true)
         [Windows.Automation.AutomationProperties]::SetAutomationId($button, $id)
         $null = $panel.Children.Add($button)
         return $button
@@ -338,18 +342,24 @@ function Show-InventoryDialog {
     $folderButton  = & $newButton 'Open folder'      'OpenFolder' 'The package folder of the selected row, or the package root' $left
     $orphanButton  = & $newButton 'Remove orphan folder' 'RemoveFolder' 'Delete the package folder of selected rows that have no definition in Apps.csv - the app in Intune stays' $left
 
-    $retireButton = & $newButton 'Retire from Intune' 'Retire' 'Delete the app of the selected row in Intune (name AND version) - with its assignments. The definition and the package folder stay' $left
+    # Links: aufraeumen (loescht etwas). Rechts: der Weg einer App in drei Schritten, von links nach rechts -
+    # Definition, Paket, Intune. Zwischen den Gruppen eine Luecke, damit man die Schritte sieht.
+    $removeButton = & $newButton 'Remove from Intune' 'Remove' 'Delete the app of the selected row in Intune (name AND version) - with its assignments. The definition and the package folder stay' $left
 
+    $baseTips = @{}
     $addButton     = & $newButton 'Add...'            'Add'        'Add an application definition (the editor offers WinGet and MSI to prefill)' $right
-    $versionButton = & $newButton 'New version...'    'NewVersion' 'Copy the selected definition as a new version' $right
-    $editButton    = & $newButton 'Edit'              'Edit'       'Edit the definition of the selected row' $right
+    $versionButton = & $newButton 'New version...'    'NewVersion' 'Copy the selected definition as a new version (another version number = another app in Intune)' $right
+    $editButton    = & $newButton 'Edit...'           'Edit'       'Edit the definition of the selected row. Afterwards: Build package, then Publish to Intune' $right
     $deleteButton  = & $newButton 'Delete definition' 'Delete'     'Remove the row from Apps.csv - the package folder and the app in Intune stay' $right
-    $buildButton   = & $newButton 'Build package'     'Build'      'Create the package on disk from the definition' $right
-    $rebuildButton = & $newButton 'Rebuild' 'Rebuild' 'Build the package again, then replace the app in Intune: delete it (with its assignments) and create it new. Intune is touched only after the build worked' $right
-    $deployButton  = & $newButton 'Deploy'            'Deploy'     'Upload to the tenant - a row without a package is built first' $right
+    $deleteButton.Margin = '0,0,24,0'
+    $buildButton   = & $newButton 'Build package'     'Build'      'Create the package folder on disk from the definition (replaces the one that is there)' $right
+    $buildButton.Margin = '0,0,24,0'
+    $publishButton = & $newButton 'Publish to Intune' 'Publish'    'Put the app into Intune: create it, or - if it is already there - bring it up to date (package, detection, commands, requirement, icon; the assignments stay). A row without a package is built first' $right
+    $publishButton.Margin = '0,0,24,0'
     $closeButton   = & $newButton 'Close'             'Cancel'     'Close the tool' $right
     $closeButton.Margin = '0'
     $closeButton.IsCancel = $true
+    foreach ($b in $removeButton, $addButton, $versionButton, $editButton, $deleteButton, $buildButton, $publishButton) { $baseTips[$b] = [string]$b.ToolTip }
 
     $settingsButton.Add_Click({
         try {
@@ -368,9 +378,8 @@ function Show-InventoryDialog {
     $editButton.Add_Click({    & $choose 'Edit' })
     $deleteButton.Add_Click({  & $choose 'Delete' })
     $buildButton.Add_Click({   & $choose 'Build' })
-    $deployButton.Add_Click({  & $choose 'Deploy' })
-    $rebuildButton.Add_Click({ & $choose 'Rebuild' })
-    $retireButton.Add_Click({  & $choose 'Retire' })
+    $publishButton.Add_Click({ & $choose 'Publish' })
+    $removeButton.Add_Click({  & $choose 'Remove' })
     $refreshButton.Add_Click({ & $choose 'Refresh' })
     $checkTenantButton.Add_Click({ & $choose 'CheckTenant' })
     $closeButton.Add_Click({   & $choose 'Cancel' })
@@ -387,20 +396,20 @@ function Show-InventoryDialog {
     # Was moeglich ist, folgt aus dem, was markiert ist.
     $syncButtons = {
         $selected = @($dataGrid.SelectedItems | Where-Object { $_ -isnot [int] })
-        $one = ($selected.Count -eq 1)
-        $withDefinition = @($selected | Where-Object { $_.HasDefinition })
-        $editButton.IsEnabled    = $one -and ($withDefinition.Count -eq 1)
-        $versionButton.IsEnabled = $one -and ($withDefinition.Count -eq 1)
-        $deleteButton.IsEnabled  = ($withDefinition.Count -gt 0)
-        $buildButton.IsEnabled   = ($withDefinition.Count -gt 0)
-        $deployButton.IsEnabled  = (@($selected | Where-Object { $_.HasDefinition -or $_.HasPackage }).Count -gt 0)
-        # Retire loescht in Intune, was zu Name UND Version der Zeile gehoert - ohne eine solche App gibt es nichts zu tun.
-        # Fremde Apps (nur in Intune, nicht von diesem Werkzeug) werden von hier nie geloescht.
-        $retireButton.IsEnabled  = (@($selected | Where-Object { ($_.Intune -like 'yes*' -or $_.Intune -eq 'no content') -and $_.Origin -ne 'foreign' }).Count -gt 0)
-        # Rebuild baut aus der Definition.
-        $rebuildButton.IsEnabled = ($withDefinition.Count -gt 0)
+        # Die Entscheidung trifft Get-InventoryActionState (eine Funktion, getestet); hier wird sie nur angezeigt.
+        # Ein ausgegrauter Knopf sagt im Tooltip, warum.
+        $state = Get-InventoryActionState -Rows $selected
+        $editButton.IsEnabled    = $state.Edit
+        $versionButton.IsEnabled = $state.NewVersion
+        $deleteButton.IsEnabled  = $state.Delete
+        $buildButton.IsEnabled   = $state.Build
+        $publishButton.IsEnabled = $state.Publish
+        $publishButton.ToolTip   = $(if ($state.Publish) { $baseTips[$publishButton] } else { 'Not possible now: ' + $state.PublishWhy })
+        # Remove loescht in Intune, was zu Name UND Version der Zeile gehoert; fremde Apps nie.
+        $removeButton.IsEnabled  = $state.Remove
+        $removeButton.ToolTip    = $(if ($state.Remove) { $baseTips[$removeButton] } else { 'Not possible now: ' + $state.RemoveWhy })
         # Nur ein Ordner ohne Definition ist verwaist - alles andere loescht dieser Weg nie.
-        $orphanButton.IsEnabled  = (@($selected | Where-Object { $_.HasPackage -and -not $_.HasDefinition }).Count -gt 0)
+        $orphanButton.IsEnabled  = $state.RemoveFolder
     }
     & $syncButtons
     $dataGrid.Add_SelectionChanged($syncButtons)
@@ -601,13 +610,13 @@ function Start-InventoryLoop {
                     }
                 }
 
-                'Deploy' {
+                'Publish' {
                     # Zuerst der Tenant: scheitert das, soll nicht vorher gebaut werden. Auch mit
                     # bekanntem Tenant: ein abgelaufener Token wuerde das frische Lesen vereiteln.
                     $tenant = Connect-InventoryTenant -Tenants $tenants -Tenant $tenant
                     $reloadIntune = ($null -ne $tenant)
                     if (-not $tenant) {
-                        Write-Host "No tenant - nothing was deployed." -ForegroundColor Yellow
+                        Write-Host "No tenant - nothing was published." -ForegroundColor Yellow
                     }
                     else {
                         # Lesen, planen, fragen, bauen, verteilen: ein Pfad in Invoke-InventoryDeploy.
@@ -616,23 +625,11 @@ function Start-InventoryLoop {
                     }
                 }
 
-                'Rebuild' {
+                'Remove' {
                     $tenant = Connect-InventoryTenant -Tenants $tenants -Tenant $tenant
                     $reloadIntune = ($null -ne $tenant)
                     if (-not $tenant) {
-                        Write-Host "No tenant - nothing was rebuilt." -ForegroundColor Yellow
-                    }
-                    else {
-                        $null = Invoke-InventoryRebuild -Selection $selection -Tenant $tenant -RootDir $RootDir -PacketRoot $packetRoot -ToolVersion $ToolVersion
-                        $reloadIntune = $true
-                    }
-                }
-
-                'Retire' {
-                    $tenant = Connect-InventoryTenant -Tenants $tenants -Tenant $tenant
-                    $reloadIntune = ($null -ne $tenant)
-                    if (-not $tenant) {
-                        Write-Host "No tenant - nothing was retired." -ForegroundColor Yellow
+                        Write-Host "No tenant - nothing was removed." -ForegroundColor Yellow
                     }
                     else {
                         $null = Invoke-InventoryRetire -Selection $selection -RootDir $RootDir -PacketRoot $packetRoot

@@ -443,6 +443,45 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Ein Weg: „Publish to Intune“, Knöpfe nach Zustand (2026-10-11)
+
+Auslöser: „zu viele Knöpfe, zu viele mögliche Aktionen – Deploy für dies und jenes und danach Ja oder Nein“. Der Weg einer App
+hat drei Stufen – Definition, Paket, Intune – und die Knöpfe heißen jetzt wie diese Stufen (links nach rechts):
+*Add… / New version… / Edit… / Delete definition* – *Build package* – *Publish to Intune*; links *Remove from Intune*.
+
+- **Ein Knopf, ein Weg:** *Publish to Intune* (früher „Deploy“) legt an oder bringt eine vorhandene App auf den Stand der Definition –
+  der Zustand entscheidet (`Get-DeployPlan`: Create / Update / Skip), die Rückfrage ist eine Zusammenfassung mit **einem** Ja/Nein.
+  Das „Nein = Inhalt ersetzen“ ist weg. **Rebuild** (bauen, löschen, neu anlegen, Zuweisungen weg) ist entfernt, samt `Invoke-InventoryRebuild`
+  und seiner Prüfungen; *Retire from Intune* heißt *Remove from Intune* (Funktionen behalten ihre Namen).
+- **Update ersetzt jetzt die Definition, nicht nur den Inhalt:** bisher änderte ein Update nur Inhalt und Icon (Erkennung, Befehle, Anforderung
+  der alten App blieben – eine mit dem alten Tool gemachte App blieb also alt). Neu im Update-Zweig von `deploy_template.ps1`:
+  `Set-IntuneWin32App` (Herausgeber, Beschreibung, Erkennungsregel, Befehle, Icon) und `Set-TenantAppRequirement` (Anforderung per Graph-PATCH –
+  das Modul 1.5.0 nimmt die Regel, die es selbst mit `New-IntuneWin32AppRequirementRule` baut, in `Set-IntuneWin32App` nicht an: „missing '@odata.type'“,
+  und kennt `applicableArchitectures` / `minimumSupportedWindowsRelease` nicht). Danach liest das Skript die Befehlszeile zurück.
+- **Stempel der Definition:** `Build-AppPackage` schreibt `# ToolDefinitionFingerprint:` in `deploy.ps1` (Hash über die Felder, die in Paket und App
+  eingehen). Das Inventar zeigt `Package, definition changed` (Zeile nach dem Bau geändert) und `Package, built before the definition stamp` (älteres
+  Paket); beides → `Next: build package, then publish`, und Publish überspringt die Zeile mit Grund – sonst ginge der alte Stand nach Intune.
+  Erneuern aus der Vorlage (`Update-DeployScript`) behält den alten Stempel.
+- **Ausgegraut nach Zustand:** `Get-InventoryActionState` (reine Funktion) liefert für die markierten Zeilen, welcher Knopf geht; ein
+  ausgegrauter *Publish*/*Remove* nennt im Tooltip den Grund. Prüfung 46: das Fenster hat keine eigene Regel daneben.
+- **Neue Texte in „Next step“:** `publish`, `publish (builds the package first)`, `publish (new version)`, `build package, then publish`.
+- `VERSION` 2.0.12 → 2.1.0 (bewusster Sprung).
+
+**Belegt:** im Feld im Test-Tenant (`zarenko.onmicrosoft.com`, Test-App „ZZ IW32H Feldtest“, am Ende gelöscht, 44 Apps wie vorher):
+App angelegt, „alle Benutzer / available“ zugewiesen; Definition geändert (Herausgeber, Mindest-OS W11_22H2, Interactive) → Paket gebaut → ein
+Update: Herausgeber, Install-/Uninstall-Befehl (mit ServiceUI), Anforderung (`minimumSupportedWindowsRelease=Windows11_22H2`) und Icon waren neu,
+`committedContentVersion` stieg, **die Zuweisung blieb (1 vor und nach)**. Danach der echte Weg über `Invoke-InventoryDeploy` mit einem Ja:
+die App war wieder auf dem Stand der Definition (Herausgeber, Befehle, Anforderung zurück), Zuweisung weiterhin 1, eine Frage, kein Rückfrage-Zweig.
+Zwei Fehler dabei gefunden und behoben: `New-IntuneWin32AppIcon` liefert einen String (`-Icon $Icon.value` war leer), und die Anforderungsregel
+ging nicht durch das Modul (siehe oben). Tests: `Test-InventoryActionState.ps1` (16 Zustände), `Test-DefinitionFingerprint.ps1`, `Test-DeployPlan.ps1`
+neu gefasst, `Test-RemoveFromIntune.ps1` (früher `Test-RetireRebuild.ps1`), UI-Prüfung 202, Repo-Prüfungen 893 (neu: 46, 47). Gegenproben: 28
+eingebaute Fehler (Zustandstabelle, Stempel, Plan, Erneuern, Template, Fenster) – zunächst überlebten zwei (ein gebautes Nicht-Paket im Plan und
+das Entfernen des Anforderungs-Aufrufs, weil die Prüfung auch einen Kommentar zählte), dafür kamen ein Testfall und die AST-Prüfung ohne Textvergleich dazu, danach wurden alle erkannt.
+
+**Nicht belegt:** ein Update einer **Nicht-WinGet-App** (Installer in `Files\`) und einer **MSI-App mit nativer Erkennung** im Feld (die
+Erkennungsregel wird mitgepatcht, im Feld geprüft ist nur die Skript-Erkennung einer WinGet-App; der Inhalt des Erkennungsskripts wurde nicht
+verglichen); das Update einer App mit **Gruppen**-Zuweisung; der neue Hauptfenster-Aufbau von Hand (Tooltips ausgegrauter Knöpfe, Abstände der Gruppen)
+und die README-Bilder (`main-window.png` zeigt noch die alten Knöpfe – der Erzeuger lief in einer getrennten Sitzung ins Leere und lässt das alte Bild jetzt stehen).
 ## `STATUS.md` und kaputte Umlaute (2026-10-11)
 
 - **`STATUS.md`** (neu, im Repo-Wurzelverzeichnis neben `RELEASES.md`): Überblick zum Wiedereinstieg nach dem Muster der gleichnamigen

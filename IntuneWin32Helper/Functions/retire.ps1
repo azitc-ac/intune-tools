@@ -1,5 +1,5 @@
 ﻿# ============================================================================
-#  Retire und Rebuild: Apps in Intune loeschen (Plan, Zuweisungen, Loeschen mit Nachlesen, Neuaufbau).
+#  Remove from Intune (intern Retire): Apps in Intune loeschen (Plan, Zuweisungen, Loeschen mit Nachlesen).
 # ============================================================================
 
 function Get-RetirePlan {
@@ -167,7 +167,7 @@ function Write-RetireSummary {
 function Invoke-InventoryRetire {
     <#
         .SYNOPSIS
-        Retire aus dem Hauptfenster: die Apps der gewaehlten Zeilen in Intune loeschen.
+        Remove from Intune aus dem Hauptfenster: die Apps der gewaehlten Zeilen in Intune loeschen.
 
         .DESCRIPTION
         Loescht in Intune, nichts sonst: Definition (Apps.csv) und Paketordner bleiben. Die Ids
@@ -183,7 +183,7 @@ function Invoke-InventoryRetire {
         [Parameter(Mandatory = $true)]$Selection,
         [Parameter(Mandatory = $true)][string]$RootDir,
         [Parameter(Mandatory = $true)][string]$PacketRoot,
-        [scriptblock]$Ask = { param($Text, $Buttons) Show-ConfirmDialog -Text $Text -Title 'Retire from Intune' -Buttons $Buttons -Icon Warning -Default $(if ($Buttons -eq 'YesNo') { 'No' } else { 'OK' }) }
+        [scriptblock]$Ask = { param($Text, $Buttons) Show-ConfirmDialog -Text $Text -Title 'Remove from Intune' -Buttons $Buttons -Icon Warning -Default $(if ($Buttons -eq 'YesNo') { 'No' } else { 'OK' }) }
     )
 
     $keys = @(@($Selection) | ForEach-Object { [string]$_.Key })
@@ -203,7 +203,7 @@ function Invoke-InventoryRetire {
     }
 
     $count = (@($targets | ForEach-Object { $_.Apps.Count }) | Measure-Object -Sum).Sum
-    $text = ("Delete {0} app(s) in Intune?`n`n{1}`n`nThe apps AND their assignments are deleted in Intune. This cannot be undone.`nThe definition in Apps.csv and the package folder stay, so the app can be deployed again - without its assignments." -f $count, (Format-RetireTargets -Targets $targets))
+    $text = ("Delete {0} app(s) in Intune?`n`n{1}`n`nThe apps AND their assignments are deleted in Intune. This cannot be undone.`nThe definition in Apps.csv and the package folder stay, so the app can be published again - without its assignments." -f $count, (Format-RetireTargets -Targets $targets))
     if ([string](& $Ask $text 'YesNo') -ne 'Yes') {
         Write-Host "Retire cancelled - nothing was changed." -ForegroundColor Yellow
         return $null
@@ -213,107 +213,4 @@ function Invoke-InventoryRetire {
     $results = @(Remove-TenantWin32Apps -Apps $apps)
     Write-RetireSummary -Results $results
     return $results
-}
-
-function Invoke-InventoryRebuild {
-    <#
-        .SYNOPSIS
-        Rebuild aus dem Hauptfenster: Paket neu bauen, die App in Intune ersetzen.
-
-        .DESCRIPTION
-        Fuer Zeilen mit Definition. Die Reihenfolge ist Absicht, jeder Schritt sichert den naechsten:
-          1. Intune frisch lesen, Rueckfrage mit dem Plan (Standardantwort Nein).
-          2. Paket neu bauen. Scheitert der Bau, bleibt Intune unangetastet - die App laeuft weiter.
-          3. Erst dann die Apps der Zeile in Intune loeschen (Remove-TenantWin32Apps prueft nach).
-          4. Nur wo alles geloescht ist, eine neue App anlegen (-Mode New). Ein Rest in Intune
-             haette sonst eine Dublette zur Folge.
-        Die Zuweisungen der alten App gehen verloren (beschlossen) und werden nicht wiederhergestellt;
-        die Rueckfrage nennt ihre Zahl. Wer sie behalten will, nimmt Deploy mit "Nein" (Update).
-        Gibt $null zurueck, wenn nichts getan wurde.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]$Selection,
-        [Parameter(Mandatory = $true)]$Tenant,
-        [Parameter(Mandatory = $true)][string]$RootDir,
-        [Parameter(Mandatory = $true)][string]$PacketRoot,
-        [Parameter(Mandatory = $true)][string]$ToolVersion,
-        [scriptblock]$Ask = { param($Text, $Buttons) Show-ConfirmDialog -Text $Text -Title 'Rebuild in Intune' -Buttons $Buttons -Icon Warning -Default $(if ($Buttons -eq 'YesNo') { 'No' } else { 'OK' }) }
-    )
-
-    $keys = @(@($Selection) | ForEach-Object { [string]$_.Key })
-
-    $fresh = Read-TenantWin32Apps
-    if ($null -eq $fresh) {
-        Write-Host "The apps in the tenant could not be read - nothing was rebuilt." -ForegroundColor Yellow
-        return $null
-    }
-    $definitions = @(Read-AppsCsv -RootDir $RootDir)
-    $inventory   = @(Get-AppInventory -Definitions $definitions -PacketRoot $PacketRoot -RootDir $RootDir -IntuneApps $fresh)
-    $rows = @($inventory | Where-Object { $keys -contains $_.Key -and $_.HasDefinition })
-    if ($rows.Count -eq 0) {
-        $null = & $Ask 'None of the selected rows has a definition in Apps.csv - a package is rebuilt from the definition.' 'OK'
-        return $null
-    }
-    $plan    = @(Get-RetirePlan -Rows $rows)
-    $targets = @($plan | Where-Object { $_.Apps.Count -gt 0 })
-    $fresh1  = @($plan | Where-Object { $_.Apps.Count -eq 0 })
-
-    $parts = @("Rebuild {0} row(s):" -f $rows.Count)
-    $parts += "1. Each package is built again from its definition; changes made by hand inside the package folder are lost."
-    $parts += "2. Only after the build worked, the app(s) in Intune are deleted - with their assignments (not restored)."
-    $parts += "3. Only after the deletion was verified, a new app is created."
-    if ($targets.Count -gt 0) { $parts += ("In Intune now:`n{0}" -f (Format-RetireTargets -Targets $targets)) }
-    if ($fresh1.Count -gt 0)  { $parts += ("Not in Intune yet (built and created):`n{0}" -f (($fresh1 | ForEach-Object { '    ' + $_.Key }) -join "`n")) }
-    $parts += "Continue?"
-    if ([string](& $Ask ($parts -join "`n`n") 'YesNo') -ne 'Yes') {
-        Write-Host "Rebuild cancelled - nothing was changed." -ForegroundColor Yellow
-        return $null
-    }
-
-    # 2. bauen - Intune bleibt unangetastet
-    $built = Invoke-PackageBuild -Rows $rows -PacketRoot $PacketRoot -RootDir $RootDir -ToolVersion $ToolVersion -RemoveExisting $true
-    $builtByKey = @{}
-    foreach ($b in @($built.Built)) { $builtByKey[('{0} - {1}' -f $b.AppName, $b.AppVersion)] = $b }
-    $skipped = @()
-    $ready   = @()
-    foreach ($item in $plan) {
-        if ($builtByKey.ContainsKey($item.Key)) { $ready += $item }
-        else { $skipped += ('{0}: the build failed - Intune was not touched' -f $item.Key) }
-    }
-
-    # 3. loeschen - nur fuer gebaute Zeilen
-    $toRemove = @($ready | Where-Object { $_.Apps.Count -gt 0 })
-    $removeResults = @()
-    if ($toRemove.Count -gt 0) {
-        $apps = @($toRemove | ForEach-Object { $key = $_.Key; $_.Apps | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Key = $key } } })
-        $removeResults = @(Remove-TenantWin32Apps -Apps $apps)
-        Write-RetireSummary -Results $removeResults
-    }
-
-    # 4. neu anlegen - nur wo nichts mehr uebrig ist
-    $packages = @()
-    foreach ($item in $ready) {
-        $left = @($removeResults | Where-Object { $_.Key -eq $item.Key -and $_.State -ne 'Removed' })
-        if ($left.Count -gt 0) {
-            $skipped += ('{0}: the old app could not be removed ({1}) - not created, that would make a duplicate' -f $item.Key, $left[0].State)
-            continue
-        }
-        $package = $builtByKey[$item.Key]
-        $packages += [pscustomobject]@{
-            AppName     = $package.AppName
-            AppVersion  = $package.AppVersion
-            FullPath    = $package.FullPath
-            Mode        = 'New'
-            UpdateAppId = ''
-        }
-    }
-
-    if ($packages.Count -gt 0) {
-        Invoke-PackageDeploy -Packages $packages -Tenant $Tenant -RootDir $RootDir -ToolVersion $ToolVersion -Skipped $skipped
-    }
-    else {
-        Write-DeploymentSummary -Succeeded @() -Failed @() -Skipped $skipped
-    }
-    return [pscustomobject]@{ Created = @($packages | ForEach-Object { '{0} - {1}' -f $_.AppName, $_.AppVersion }); Skipped = @($skipped); Removed = @($removeResults) }
 }

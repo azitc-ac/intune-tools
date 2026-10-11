@@ -176,7 +176,8 @@ function Build-AppPackage {
     $null = Write-DeployScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion `
         -Publisher $AppPublisher -Description $desc -RootDir $RootDir -ToolVersion $ToolVersion `
         -Architecture ([string]$App.Architecture) -MinimumOS ([string]$App.MinimumOS) `
-        -MsiProductCode ([string]$App.MsiProductCode) -Interactive ([string]$App.Interactive)
+        -MsiProductCode ([string]$App.MsiProductCode) -Interactive ([string]$App.Interactive) `
+        -DefinitionFingerprint (Get-DefinitionFingerprint -Record $App)
 
     # Dateien muss weiterhin ein Mensch bereitstellen - fuer eine
     # Nicht-WinGet-App gibt es keine Quelle, aus der das Tool sie holen

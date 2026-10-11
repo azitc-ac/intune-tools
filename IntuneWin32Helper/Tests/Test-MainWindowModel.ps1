@@ -44,18 +44,20 @@ try {
     $packets = Join-Path $work 'packets'
     $null = New-Item -ItemType Directory -Force -Path $packets
 
-    function New-TestPackage([string]$name, [string]$stampLine) {
+    function New-TestPackage([string]$name, [string]$stampLine, [string]$publisher = '') {
         $folder = Join-Path $packets "$name - 1.0"
         $null = New-Item -ItemType Directory -Force -Path $folder
+        # Das Paket spiegelt die Definition (Name, Version, Herausgeber) - wie nach einem Bau von heute
         Write-DeployScript -AppFolder $folder -AppName $name -AppVersion '1.0' -Publisher 'Test' -Description 'Installed using PSADT' `
-            -RootDir $rootDir -ToolVersion '0.0.1' -Architecture 'x64' -MinimumOS 'W10_20H2' -MsiProductCode '' 6>$null
+            -RootDir $rootDir -ToolVersion '0.0.1' -Architecture 'x64' -MinimumOS 'W10_20H2' -MsiProductCode '' `
+            -DefinitionFingerprint (Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = '1.0'; Publisher = $publisher })) 6>$null
         $path = Join-Path $folder 'deploy.ps1'
         $text = [IO.File]::ReadAllText($path)
         $text = [regex]::Replace($text, '(?m)^#\s*ToolTemplateFingerprint:.*$', $stampLine)
         [IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding $true))
     }
-    New-TestPackage 'WithPkg' ("# ToolTemplateFingerprint: $current")
-    New-TestPackage 'Old'     '# ToolTemplateFingerprint: 000000000000'
+    New-TestPackage 'WithPkg' ("# ToolTemplateFingerprint: $current") 'P2'
+    New-TestPackage 'Old'     '# ToolTemplateFingerprint: 000000000000' 'P3'
     New-TestPackage 'Orphan'  ("# ToolTemplateFingerprint: $current")
 
     $defs = @(
@@ -77,7 +79,7 @@ try {
         if ($d.Status -ne 'Definition only')       { $problems += "DefOnly: Status '$($d.Status)'" }
         if (-not $d.HasDefinition -or $d.HasPackage) { $problems += "DefOnly: HasDefinition=$($d.HasDefinition) HasPackage=$($d.HasPackage)" }
         if ($d.Publisher -ne 'P1')                 { $problems += "DefOnly: Publisher '$($d.Publisher)'" }
-        if ($d.Next -ne 'create package')          { $problems += "DefOnly: Next '$($d.Next)'" }
+        if ($d.Next -ne 'publish (builds the package first)') { $problems += "DefOnly: Next '$($d.Next)'" }
         if (-not [object]::ReferenceEquals($d.DefinitionRecord, $defs[0])) { $problems += "DefOnly: DefinitionRecord is not the input record (edit/delete could not find the row again)" }
 
         $w = $row['WithPkg']

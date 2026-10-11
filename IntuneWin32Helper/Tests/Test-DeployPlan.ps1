@@ -47,11 +47,13 @@ $null = New-Item -ItemType Directory -Force -Path $fakes
 function New-App([string]$name, [string]$version, [string]$id = '', [string]$content = '1', [string]$state = 'published') {
     [pscustomobject]@{ id = $(if ($id) { $id } else { "id-$name-$version" }); displayName = $name; displayVersion = $version; publishingState = $state; committedContentVersion = $content }
 }
-function New-TestPackage([string]$name, [string]$version) {
+function New-TestPackage([string]$name, [string]$version, [string]$definitionStamp = '') {
     $folder = Join-Path $packets "$name - $version"
     $null = New-Item -ItemType Directory -Force -Path $folder
+    # Ohne Angabe traegt das Paket den Stempel der Definition (Name, Version) - es spiegelt sie also
+    if (-not $definitionStamp) { $definitionStamp = Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = $version }) }
     Write-DeployScript -AppFolder $folder -AppName $name -AppVersion $version -Publisher 'Test' -Description 'Installed using PSADT' `
-        -RootDir $rootDir -ToolVersion '0.0.1' -Architecture 'x64' -MinimumOS 'W10_20H2' -MsiProductCode '' 6>$null
+        -RootDir $rootDir -ToolVersion '0.0.1' -Architecture 'x64' -MinimumOS 'W10_20H2' -MsiProductCode '' -DefinitionFingerprint $definitionStamp 6>$null
 }
 
 try {
@@ -78,7 +80,7 @@ try {
     Test-That ($byKey['Exact - 1.0'].Intune -eq 'yes')                      "inventory: Name+Version match is not 'yes' ('$($byKey['Exact - 1.0'].Intune)')"
     Test-That ($byKey['Exact - 1.0'].IntuneSame.Count -eq 1)                "inventory: Exact has $($byKey['Exact - 1.0'].IntuneSame.Count) same-version apps, expected 1"
     Test-That ($byKey['Newer - 2.0'].Intune -eq 'other version: 1.0')       "inventory: other version only: '$($byKey['Newer - 2.0'].Intune)'"
-    Test-That ($byKey['Newer - 2.0'].Next -eq 'deploy (new version)' -or $byKey['Newer - 2.0'].Next -eq 'create package') "inventory: Newer next step '$($byKey['Newer - 2.0'].Next)'"
+    Test-That ($byKey['Newer - 2.0'].Next -eq 'publish (new version)' -or $byKey['Newer - 2.0'].Next -eq 'publish (builds the package first)') "inventory: Newer next step '$($byKey['Newer - 2.0'].Next)'"
     # Zwei Versionen derselben App sind KEINE Dubletten (frueher: "yes (2x)" und "check duplicates").
     Test-That ($byKey['Multi - 1.0'].Intune -eq 'yes' -and $byKey['Multi - 2.0'].Intune -eq 'yes') "inventory: two versions of one app flagged: '$($byKey['Multi - 1.0'].Intune)' / '$($byKey['Multi - 2.0'].Intune)'"
     Test-That ($byKey['Twin - 1.0'].Intune -eq 'yes (2x)')                  "inventory: same name+version twice: '$($byKey['Twin - 1.0'].Intune)'"
@@ -93,20 +95,32 @@ try {
     Test-That ($plan['Absent - 1.0'].Action -eq 'Create')                   "plan: absent app is '$($plan['Absent - 1.0'].Action)', expected Create"
     Test-That ($plan['Newer - 2.0'].Action -eq 'Create' -and $plan['Newer - 2.0'].Reason -match '1\.0') "plan: new version of an app in Intune: '$($plan['Newer - 2.0'].Action)' / '$($plan['Newer - 2.0'].Reason)'"
     Test-That ($plan['NoVer - 1.0'].Action -eq 'Create')                    "plan: app without a version in Intune is '$($plan['NoVer - 1.0'].Action)', expected Create (different version)"
-    Test-That ($plan['Exact - 1.0'].Action -eq 'Skip' -and $plan['Exact - 1.0'].Replaceable) "plan: existing app is '$($plan['Exact - 1.0'].Action)', expected Skip and replaceable"
-    Test-That ($plan['Multi - 1.0'].Action -eq 'Skip' -and $plan['Multi - 2.0'].Action -eq 'Skip') "plan: both versions exist, expected two Skips"
-    Test-That ($plan['Twin - 1.0'].Action -eq 'Skip' -and -not $plan['Twin - 1.0'].Replaceable -and $plan['Twin - 1.0'].Reason -match 'duplicate') "plan: duplicates: '$($plan['Twin - 1.0'].Action)' / '$($plan['Twin - 1.0'].Reason)'"
-
-    $replace = @{}
-    foreach ($p in @(Get-DeployPlan -Rows $inv -ReplaceExisting)) { $replace[$p.Key] = $p }
-    Test-That ($replace['Exact - 1.0'].Action -eq 'Update' -and $replace['Exact - 1.0'].UpdateAppId -eq 'id-Exact-1.0') "plan -ReplaceExisting: Exact is '$($replace['Exact - 1.0'].Action)' id '$($replace['Exact - 1.0'].UpdateAppId)'"
-    Test-That ($replace['Twin - 1.0'].Action -eq 'Skip')                    "plan -ReplaceExisting: duplicates must stay skipped, got '$($replace['Twin - 1.0'].Action)'"
-    Test-That ($replace['Absent - 1.0'].Action -eq 'Create')                "plan -ReplaceExisting: absent app is '$($replace['Absent - 1.0'].Action)'"
+    # Genau eine App mit Inhalt: Update (kein "wie genau?" mehr) - mit der Id der App.
+    Test-That ($plan['Exact - 1.0'].Action -eq 'Update' -and $plan['Exact - 1.0'].UpdateAppId -eq 'id-Exact-1.0') "plan: existing app is '$($plan['Exact - 1.0'].Action)' id '$($plan['Exact - 1.0'].UpdateAppId)', expected Update with its id"
+    Test-That ($plan['Multi - 1.0'].Action -eq 'Update' -and $plan['Multi - 2.0'].Action -eq 'Update') "plan: both versions exist, expected two Updates"
+    Test-That ($plan['Twin - 1.0'].Action -eq 'Skip' -and $plan['Twin - 1.0'].Reason -match 'duplicate' -and -not $plan['Twin - 1.0'].UpdateAppId) "plan: duplicates: '$($plan['Twin - 1.0'].Action)' / '$($plan['Twin - 1.0'].Reason)'"
+    Test-That ($null -eq $plan['Exact - 1.0'].PSObject.Properties['Replaceable']) "plan: the old 'Replaceable' choice is still there"
 
     $ghostInv = @(Get-AppInventory -Definitions @([pscustomobject]@{ DisplayName = 'Ghost'; Version = '1.0' }) -PacketRoot $packets -RootDir $rootDir `
         -IntuneApps @((New-App 'Ghost' '1.0' 'g1' '' 'notPublished')) 6>$null)
-    $ghostPlan = @(Get-DeployPlan -Rows $ghostInv -ReplaceExisting)[0]
-    Test-That ($ghostPlan.Action -eq 'Skip' -and $ghostPlan.Reason -match 'no content') "plan: entry without content: '$($ghostPlan.Action)' / '$($ghostPlan.Reason)' (even with -ReplaceExisting)"
+    $ghostPlan = @(Get-DeployPlan -Rows $ghostInv)[0]
+    Test-That ($ghostPlan.Action -eq 'Skip' -and $ghostPlan.Reason -match 'no content') "plan: entry without content: '$($ghostPlan.Action)' / '$($ghostPlan.Reason)'"
+
+    # Ein Paket, das vor einer Aenderung der Definition gebaut wurde (changed) oder keinen Stempel hat (unknown),
+    # wird nicht veroeffentlicht - sonst ginge der alte Stand nach Intune. Egal ob die App schon in Intune liegt.
+    New-TestPackage 'StalePkg' '1.0' 'aaaaaaaaaaaa'
+    New-TestPackage 'NoStamp' '1.0'
+    $noStampScript = Join-Path (Join-Path $packets 'NoStamp - 1.0') 'deploy.ps1'
+    [IO.File]::WriteAllText($noStampScript, ([IO.File]::ReadAllText($noStampScript) -replace '(?m)^# ToolDefinitionFingerprint:.*\r?\n', ''), (New-Object System.Text.UTF8Encoding $true))
+    $staleInv = @(Get-AppInventory -Definitions @([pscustomobject]@{ DisplayName = 'StalePkg'; Version = '1.0' }, [pscustomobject]@{ DisplayName = 'NoStamp'; Version = '1.0' }) -PacketRoot $packets -RootDir $rootDir `
+        -IntuneApps @((New-App 'StalePkg' '1.0')) 6>$null)
+    Test-That ($staleInv[0].PackageDefinition -eq 'changed' -and $staleInv[0].Status -eq 'Package, definition changed' -and $staleInv[0].Next -eq 'build package, then publish') "inventory: package built from another definition: '$($staleInv[0].PackageDefinition)' / '$($staleInv[0].Status)' / '$($staleInv[0].Next)'"
+    Test-That ($staleInv[1].PackageDefinition -eq 'unknown' -and $staleInv[1].Next -eq 'build package, then publish') "inventory: package without a definition stamp: '$($staleInv[1].PackageDefinition)' / '$($staleInv[1].Next)'"
+    $stalePlan = @(Get-DeployPlan -Rows $staleInv)
+    Test-That ($stalePlan[0].Action -eq 'Skip' -and $stalePlan[0].Reason -match 'older than the definition') "plan: changed package is '$($stalePlan[0].Action)' / '$($stalePlan[0].Reason)', expected Skip (also for an app that is in Intune)"
+    Test-That ($stalePlan[1].Action -eq 'Skip' -and $stalePlan[1].Reason -match 'stamped') "plan: unstamped package is '$($stalePlan[1].Action)' / '$($stalePlan[1].Reason)', expected Skip"
+    # Diese beiden Pakete gehoeren nur zu diesem Abschnitt - sie sollen im Inventar von Abschnitt 4 nicht auftauchen.
+    foreach ($leftover in 'StalePkg - 1.0', 'NoStamp - 1.0') { $null = Remove-PackageFolder -Path (Join-Path $packets $leftover) -PacketRoot $packets }
 
     $threw = $false
     try { $null = @(Get-DeployPlan -Rows $unchecked) } catch { $threw = $true }
@@ -179,14 +193,17 @@ try {
 
     # Zustand: zwei Pakete im Ordner (Have, MultiOld), eines mit Dublette, eines ohne Inhalt, Neue ohne Paket.
     foreach ($spec in @(@('Have', '1.0'), @('MultiNew', '2.0'), @('MultiOld', '1.0'), @('Dup', '1.0'), @('Ghost', '1.0'))) { New-TestPackage $spec[0] $spec[1] }
+    New-TestPackage 'StaleDef' '1.0' 'cccccccccccc'    # vor einer Aenderung der Definition gebaut
     $script:defs = @(
+        [pscustomobject]@{ DisplayName = 'StaleDef'; Version = '1.0' },
         [pscustomobject]@{ DisplayName = 'Have';     Version = '1.0' },
         [pscustomobject]@{ DisplayName = 'MultiNew'; Version = '2.0' },
         [pscustomobject]@{ DisplayName = 'MultiOld'; Version = '1.0' },
         [pscustomobject]@{ DisplayName = 'Dup';      Version = '1.0' },
         [pscustomobject]@{ DisplayName = 'Ghost';    Version = '1.0' },
         [pscustomobject]@{ DisplayName = 'Fresh';    Version = '1.0' },    # nicht in Intune, kein Paket -> bauen und anlegen
-        [pscustomobject]@{ DisplayName = 'ExistsNoPkg'; Version = '1.0' }  # in Intune, kein Paket -> NICHT bauen
+        [pscustomobject]@{ DisplayName = 'ExistsNoPkg'; Version = '1.0' },  # in Intune, kein Paket -> bauen, dann aktualisieren
+        [pscustomobject]@{ DisplayName = 'DupNoPkg'; Version = '1.0' }       # zweimal in Intune, kein Paket -> uebersprungen UND nicht gebaut
     )
     $script:tenantApps = @(
         (New-App 'Have' '1.0'),
@@ -194,42 +211,37 @@ try {
         (New-App 'MultiOld' '1.0'),
         (New-App 'Dup' '1.0' 'dup-a'), (New-App 'Dup' '1.0' 'dup-b'),
         (New-App 'Ghost' '1.0' 'ghost-1' '' 'notPublished'),
-        (New-App 'ExistsNoPkg' '1.0')
+        (New-App 'ExistsNoPkg' '1.0'),
+        (New-App 'DupNoPkg' '1.0' 'dnp-a'), (New-App 'DupNoPkg' '1.0' 'dnp-b')
     )
     # Die Auswahl stammt aus einem VERALTETEN Fenster: dort war Intune leer.
     $staleInventory = @(Get-AppInventory -Definitions $script:defs -PacketRoot $packets -RootDir $rootDir -IntuneApps @() 6>$null)
-    Test-That ($staleInventory.Count -eq 7) "setup: stale inventory has $($staleInventory.Count) rows, expected 7"
+    Test-That ($staleInventory.Count -eq 9) "setup: stale inventory has $($staleInventory.Count) rows, expected 9"
     $run = { param($answerValue)
         $script:built = @(); $script:deployed = @(); $script:deploySkipped = @(); $script:deployCalls = 0; $script:asked = @(); $script:reads = 0
         $script:answer = $answerValue
         Invoke-InventoryDeploy -Selection $staleInventory -Tenant $tenant -RootDir $rootDir -PacketRoot $packets -ToolVersion '0.0.1' -Ask $ask 6>$null
     }
 
-    # 'Yes': wie geplant.
+    # 'Yes': der Plan wird ausgefuehrt - es gibt nur diese eine Frage, keine zweite Antwort "wie genau".
     $null = & $run 'Yes'
-    Test-That ($script:reads -ge 1) "inventory deploy: Intune was not read again before planning (stale window state would be trusted)"
-    $deployedKeys = @($script:deployed | ForEach-Object { '{0} - {1}:{2}' -f $_.AppName, $_.AppVersion, $_.Mode } | Sort-Object)
-    Test-That (($deployedKeys -join ',') -eq 'Fresh - 1.0:New,MultiNew - 2.0:New') "inventory deploy (Yes): deployed [$($deployedKeys -join ', ')], expected [Fresh - 1.0:New, MultiNew - 2.0:New]"
-    Test-That (($script:built -join ',') -eq 'Fresh - 1.0') "inventory deploy (Yes): built [$($script:built -join ', ')], expected only [Fresh - 1.0] (a skipped app without package must not be built)"
-    $skippedText = $script:deploySkipped -join ' | '
-    foreach ($k in 'Have - 1.0', 'MultiOld - 1.0', 'Dup - 1.0', 'Ghost - 1.0', 'ExistsNoPkg - 1.0') {
-        Test-That ($skippedText -match [regex]::Escape($k)) "inventory deploy (Yes): $k is missing from the skipped list ($skippedText)"
-    }
-    Test-That ($script:asked.Count -eq 1 -and $script:asked[0].Buttons -eq 'YesNoCancel') "inventory deploy: expected one YesNoCancel question, got $($script:asked.Count) ($($script:asked[0].Buttons))"
-    Test-That ($script:asked[0].Text -match 'already in Intune' -and $script:asked[0].Text -match 'Have - 1\.0') "inventory deploy: the question does not show the plan"
-
-    # 'No': zusaetzlich Inhalt vorhandener Apps ersetzen - nur die eindeutigen.
-    $null = & $run 'No'
+    Test-That ($script:reads -ge 1) "inventory publish: Intune was not read again before planning (stale window state would be trusted)"
     $deployedKeys = @($script:deployed | ForEach-Object { '{0} - {1}:{2}:{3}' -f $_.AppName, $_.AppVersion, $_.Mode, $_.UpdateAppId } | Sort-Object)
     $expected = @('ExistsNoPkg - 1.0:Update:id-ExistsNoPkg-1.0', 'Fresh - 1.0:New:', 'Have - 1.0:Update:id-Have-1.0', 'MultiNew - 2.0:New:', 'MultiOld - 1.0:Update:id-MultiOld-1.0')
-    Test-That (($deployedKeys -join ',') -eq ($expected -join ',')) "inventory deploy (No): deployed [$($deployedKeys -join ', ')], expected [$($expected -join ', ')]"
-    Test-That ((($script:deploySkipped -join '|') -match 'Dup - 1\.0') -and (($script:deploySkipped -join '|') -match 'Ghost - 1\.0')) "inventory deploy (No): duplicates or the empty entry were not skipped"
-    # Ein Update braucht ein Paket: ExistsNoPkg hat keins und wird erst jetzt gebaut.
-    Test-That ((($script:built | Sort-Object) -join ',') -eq 'ExistsNoPkg - 1.0,Fresh - 1.0') "inventory deploy (No): built [$($script:built -join ', ')]"
+    Test-That (($deployedKeys -join ',') -eq ($expected -join ',')) "inventory publish (Yes): deployed [$($deployedKeys -join ', ')], expected [$($expected -join ', ')]"
+    # Gebaut wird, was verteilt wird und noch kein Paket hat - auch ein Update braucht ein Paket.
+    Test-That ((($script:built | Sort-Object) -join ',') -eq 'ExistsNoPkg - 1.0,Fresh - 1.0') "inventory publish (Yes): built [$($script:built -join ', ')], expected [ExistsNoPkg - 1.0, Fresh - 1.0]"
+    $skippedText = $script:deploySkipped -join ' | '
+    foreach ($k in 'Dup - 1.0', 'Ghost - 1.0', 'StaleDef - 1.0', 'DupNoPkg - 1.0') {
+        Test-That ($skippedText -match [regex]::Escape($k)) "inventory publish (Yes): $k is missing from the skipped list ($skippedText)"
+    }
+    Test-That ($skippedText -match 'StaleDef - 1\.0: the package is older than the definition') "inventory publish: the package built before a definition change was not skipped with its reason ($skippedText)"
+    Test-That ($script:asked.Count -eq 1 -and $script:asked[0].Buttons -eq 'YesNo') "inventory publish: expected exactly one Yes/No question, got $($script:asked.Count) ($($script:asked[0].Buttons))"
+    Test-That ($script:asked[0].Text -match 'Update the app in Intune \(3\)' -and $script:asked[0].Text -match 'assignments stay' -and $script:asked[0].Text -match 'Create in Intune \(2\)' -and $script:asked[0].Text -match 'Have - 1\.0') "inventory publish: the question does not show what is created and what is updated ($($script:asked[0].Text))"
 
-    # 'Cancel': nichts.
-    $null = & $run 'Cancel'
-    Test-That ($script:deployCalls -eq 0 -and $script:built.Count -eq 0) "inventory deploy (Cancel): built $($script:built.Count), deploy calls $($script:deployCalls) - expected nothing"
+    # 'No': nichts - weder bauen noch verteilen.
+    $null = & $run 'No'
+    Test-That ($script:deployCalls -eq 0 -and $script:built.Count -eq 0) "inventory publish (No): built $($script:built.Count), deploy calls $($script:deployCalls) - expected nothing"
 
     # Tenant nicht lesbar: nichts, und es wird nicht einmal gefragt.
     $script:tenantReadable = $false

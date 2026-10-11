@@ -171,11 +171,14 @@ $shots = @(
     @{ Scenario = 'check';  File = 'check-tenant.png' }
 )
 foreach ($shot in $shots) {
+    # Erst in eine Nebendatei: ein misslungener Lauf (getrennte Sitzung) darf das vorhandene Bild nicht loeschen.
     $target = Join-Path $OutDir $shot.File
-    if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }
+    $fresh = $target + '.new'
+    if (Test-Path -LiteralPath $fresh) { Remove-Item -LiteralPath $fresh -Force }
     $process = Start-Process -FilePath powershell.exe -PassThru -ArgumentList @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', ('"{0}"' -f $PSCommandPath), '-Child', '-Scenario', $shot.Scenario, '-OutFile', ('"{0}"' -f $target))
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', ('"{0}"' -f $PSCommandPath), '-Child', '-Scenario', $shot.Scenario, '-OutFile', ('"{0}"' -f $fresh))
     if (-not $process.WaitForExit(120000)) { Stop-Process -Id $process.Id -Force; throw "$($shot.Scenario): das Fenster schloss sich nicht" }
-    if (-not (Test-Path -LiteralPath $target)) { throw "$($shot.Scenario): kein Bild entstanden (Exit $($process.ExitCode); 3 = das Fenster malte nichts, die Sitzung ist getrennt oder gesperrt)" }
+    if (-not (Test-Path -LiteralPath $fresh)) { throw "$($shot.Scenario): kein Bild entstanden, das alte bleibt (Exit $($process.ExitCode); 3 = das Fenster malte nichts, die Sitzung ist getrennt oder gesperrt)" }
+    Move-Item -LiteralPath $fresh -Destination $target -Force
     '{0}: {1:N0} KB' -f $shot.File, ((Get-Item -LiteralPath $target).Length / 1KB)
 }

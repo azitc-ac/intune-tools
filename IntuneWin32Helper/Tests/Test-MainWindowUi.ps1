@@ -238,7 +238,7 @@ try {
         $grid = Find-UiaElement -Root $window -AutomationId 'InventoryGrid' -TimeoutSeconds 10
         Test-That 'the inventory grid exists' ($null -ne $grid)
 
-        foreach ($id in 'Add', 'NewVersion', 'Edit', 'Delete', 'Build', 'Deploy', 'Rebuild', 'Retire', 'OpenFolder', 'RemoveFolder', 'Settings', 'Refresh', 'CheckTenant', 'Cancel', 'Filter', 'View', 'Tenant', 'Status') {
+        foreach ($id in 'Add', 'NewVersion', 'Edit', 'Delete', 'Build', 'Publish', 'Remove', 'OpenFolder', 'RemoveFolder', 'Settings', 'Refresh', 'CheckTenant', 'Cancel', 'Filter', 'View', 'Tenant', 'Status') {
             Test-That "control $id exists" ($null -ne (Find-UiaElement -Root $window -AutomationId $id -TimeoutSeconds 5))
         }
 
@@ -247,21 +247,21 @@ try {
 
             # Die mitgegebene Auswahl ist beim Oeffnen markiert: DefOnly -> alles moeglich.
             Start-Sleep -Milliseconds 800
-            Test-ButtonStates $window @{ Edit = $true; NewVersion = $true; Delete = $true; Build = $true; Deploy = $true; RemoveFolder = $false; Rebuild = $true; Retire = $false } 'DefOnly restored as selection'
+            Test-ButtonStates $window @{ Edit = $true; NewVersion = $true; Delete = $true; Build = $true; Publish = $true; RemoveFolder = $false; Remove = $false } 'DefOnly restored as selection'
 
             # Zeile ohne Definition: nicht bearbeiten, nicht loeschen, nicht bauen - verteilen schon.
             $null = Select-GridRowByCell $grid 'Orphan'
             Start-Sleep -Milliseconds 300
-            Test-ButtonStates $window @{ Edit = $false; NewVersion = $false; Delete = $false; Build = $false; Deploy = $true; RemoveFolder = $true; Rebuild = $false; Retire = $false } 'Orphan (package, no definition)'
+            Test-ButtonStates $window @{ Edit = $false; NewVersion = $false; Delete = $false; Build = $false; Publish = $true; RemoveFolder = $true; Remove = $false } 'Orphan (package, no definition)'
 
             # Eine Zeile MIT Definition und Paket ist nicht verwaist: der Knopf bleibt aus.
             $null = Select-GridRowByCell $grid 'Both'
             Start-Sleep -Milliseconds 300
-            Test-ButtonStates $window @{ RemoveFolder = $false; Rebuild = $true; Retire = $true } 'Both (definition, package, app in Intune)'
+            Test-ButtonStates $window @{ RemoveFolder = $false; Remove = $true } 'Both (definition, package, app in Intune)'
             # Eine App nur in Intune, vom Tool angelegt: loeschen ja, alles andere nein.
             $null = Select-GridRowByCell $grid 'ToolOnly'
             Start-Sleep -Milliseconds 300
-            Test-ButtonStates $window @{ Edit = $false; NewVersion = $false; Delete = $false; Build = $false; Deploy = $false; RemoveFolder = $false; Rebuild = $false; Retire = $true } 'ToolOnly (only in Intune, created by the tool)'
+            Test-ButtonStates $window @{ Edit = $false; NewVersion = $false; Delete = $false; Build = $false; Publish = $false; RemoveFolder = $false; Remove = $true } 'ToolOnly (only in Intune, created by the tool)'
 
             # Fremde Apps sind standardmaessig ausgeblendet, in ihrer Ansicht zu sehen - und nie zu loeschen.
             Test-That 'the foreign Intune app is hidden in the default view' ($null -eq (Select-GridRowByCell $grid 'Foreign'))
@@ -276,7 +276,7 @@ try {
                 Test-That 'the foreign view lists exactly the foreign app' ((Get-UiaElement -Root $grid -ControlType DataItem).Count -eq 1) "rows: $((Get-UiaElement -Root $grid -ControlType DataItem).Count)"
                 $null = Select-GridRowByCell $grid 'Foreign'
                 Start-Sleep -Milliseconds 300
-                Test-ButtonStates $window @{ Edit = $false; Deploy = $false; Rebuild = $false; Retire = $false } 'Foreign app (only in Intune, not created by the tool)'
+                Test-ButtonStates $window @{ Edit = $false; Publish = $false; Remove = $false } 'Foreign app (only in Intune, not created by the tool)'
                 $viewBox.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
                 Start-Sleep -Milliseconds 400
                 $back = @(Get-UiaElement -Root $viewBox -ControlType ListItem | Where-Object { $_.Current.Name -like 'All (foreign*' })
@@ -371,8 +371,8 @@ try {
         Test-That 'orphan: the orphan row came back' (@($r.Keys) -contains 'Orphan - 1.0' -and @($r.Keys).Count -eq 1) "keys: $(@($r.Keys) -join ',')"
     }
 
-    # ---- Szenario 5b: Retire und Rebuild geben ihre Aktion und die Zeile zurueck ----
-    foreach ($case in @(@('retire', 'Retire', 'Both'), @('rebuild', 'Rebuild', 'DefOnly'))) {
+    # ---- Szenario 5b: Remove gibt seine Aktion und die Zeile zurueck ----
+    foreach ($case in @(,@('remove', 'Remove', 'Both'))) {
         $c = Start-Child $case[0]
         $window = Wait-UiaWindow -ProcessId $c.Process.Id -AutomationId 'MainDialog' -TimeoutSeconds 60
         Test-That "$($case[0]): the main window appears" ($null -ne $window)

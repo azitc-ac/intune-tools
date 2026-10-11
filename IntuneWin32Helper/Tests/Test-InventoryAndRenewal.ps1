@@ -37,7 +37,8 @@ try {
         $folder = Join-Path $work "$name - 1.0"
         $null = New-Item -ItemType Directory -Force -Path $folder
         Write-DeployScript -AppFolder $folder -AppName $name -AppVersion '1.0' -Publisher 'Test' -Description 'Installed using PSADT' `
-            -RootDir $rootDir -ToolVersion '0.0.1' -Architecture 'arm64' -MinimumOS 'W11_22H2' -MsiProductCode '{11111111-2222-3333-4444-555555555555}'
+            -RootDir $rootDir -ToolVersion '0.0.1' -Architecture 'arm64' -MinimumOS 'W11_22H2' -MsiProductCode '{11111111-2222-3333-4444-555555555555}' `
+            -DefinitionFingerprint (Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = '1.0' }))
         $path = Join-Path $folder 'deploy.ps1'
         # Stempel wie bei einem Paket aus einer anderen Vorlage setzen/entfernen.
         # Das Skript kennt -Tenant (wie jede Vorlage seit 2.0.0).
@@ -59,6 +60,11 @@ try {
     foreach ($kept in '$Architecture = "arm64"', '"W11_22H2"', '{11111111-2222-3333-4444-555555555555}', '$PackageName = "Outdated"') {
         if (-not $t.Contains($kept)) { $problems += "outdated: value lost on renewal: $kept" }
     }
+    # Erneuert wird aus den Werten des alten Skripts, nicht aus Apps.csv: der Stempel der Definition bleibt, wie er war.
+    # (Sonst sah ein Paket, das vor einer Aenderung der Definition gebaut wurde, nach dem Erneuern wieder "aktuell" aus.)
+    $expectedStamp = Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = 'Outdated'; Version = '1.0' })
+    if ((Get-PackageDefinitionFingerprint -DeployScriptPath $old) -ne $expectedStamp) { $problems += "outdated: the definition stamp changed on renewal" }
+    if ($t.Contains('#DEFFP#')) { $problems += "outdated: placeholder #DEFFP# left in the script" }
 
     # 2) Ohne Stempel -> wird erneuert
     $unst = New-Package 'Unstamped' ''

@@ -7,8 +7,8 @@
 
     # Entscheidung des aufrufenden Laufs (Invoke-InventoryDeploy -> Get-DeployPlan):
     #   New    - eine neue App anlegen
-    #   Update - den Paketinhalt der App -UpdateAppId ersetzen. Erkennungsregel, Befehlszeilen,
-    #            Anforderungen und Zuweisungen der App bleiben, wie sie in Intune sind.
+    #   Update - die App -UpdateAppId auf den Stand dieses Pakets bringen: Paketinhalt, Icon, Erkennungsregel,
+    #            Befehlszeilen, Anforderung, Herausgeber und Beschreibung. Name, Version und Zuweisungen bleiben.
     #   Ask    - nur beim direkten Aufruf dieses Skripts: nach einer gleichnamigen App suchen
     #            und fragen (mit -bulk: immer neu anlegen).
     # Das Tool uebergibt immer New oder Update: so legt ein Lauf keine Dublette an, nur weil das
@@ -20,6 +20,9 @@
 # Vorlagen-Stempel, gesetzt beim Erzeugen. Das Inventar vergleicht ihn gegen den
 # aktuellen Vorlagenstand und zeigt so, welches Paket nachgezogen werden sollte.
 # ToolTemplateFingerprint: #TPLFP#
+# Stand der Definition (Apps.csv-Zeile), aus der das Paket gebaut wurde. Das Inventar vergleicht ihn mit der
+# Zeile von heute und zeigt so, dass das Paket vor einer Aenderung der Definition gebaut wurde.
+# ToolDefinitionFingerprint: #DEFFP#
 
 $rootDir = "#ROOT#"
 
@@ -158,11 +161,29 @@ if ($Mode -eq 'New') {
 }
 elseif ($Mode -eq 'Update') {
     if ([string]::IsNullOrWhiteSpace($UpdateAppId)) { throw "Mode Update needs -UpdateAppId." }
-    Write-Host "Decision of the calling run: replace the package content of app $UpdateAppId"
+    Write-Host "Decision of the calling run: update app $UpdateAppId (package content and definition; assignments stay)"
     # Das Ergebnis wird geprueft: bei einem Fehler schreibt das Modul nur eine Warnung und
     # gibt nichts zurueck (siehe Modulquelle) - ohne die Pruefung meldete das Skript "Finished.".
     $uploadResult = Invoke-IntuneModuleCall -Label 'Update-IntuneWin32AppPackageFile' -Operation {
         Update-IntuneWin32AppPackageFile -ID $UpdateAppId -FilePath $IntuneWinFile
+    }
+    if ($uploadResult) {
+        # Update-IntuneWin32AppPackageFile aendert nur den Inhalt und das Icon. Erkennungsregel, Befehlszeilen,
+        # Anforderung, Herausgeber und Beschreibung kommen aus der Definition und werden jetzt nachgezogen
+        # (Set-IntuneWin32App aendert nur, was uebergeben wird - die Zuweisungen bleiben). Name und Version
+        # bleiben: danach wird die App gefunden.
+        Write-Host "Updating detection rule, requirement rule, commands, icon, publisher and description of app $UpdateAppId"
+        $null = Invoke-IntuneModuleCall -Label 'Set-IntuneWin32App' -Operation {
+            Set-IntuneWin32App -ID $UpdateAppId -Publisher $Publisher -Description $Description -DetectionRule $DetectionRule -InstallCommandLine $InstallCommandLine -UninstallCommandLine $UninstallCommandLine -Icon $Icon -Verbose
+        }
+        # Die Anforderung nimmt Set-IntuneWin32App nicht an (siehe Set-TenantAppRequirement).
+        Set-TenantAppRequirement -Id $UpdateAppId -RequirementRule $RequirementRule
+        # Das Modul meldet einen Fehler mitunter nur als Warnung: nachlesen, ob die Befehlszeile angekommen ist.
+        $readBack = Invoke-IntuneModuleCall -Label 'Get-IntuneWin32App' -Operation { Get-IntuneWin32App -ID $UpdateAppId }
+        if (-not $readBack -or [string]$readBack.installCommandLine -ne [string]$InstallCommandLine) {
+            throw ("The package content of '{0}' was replaced, but its definition (detection rule, commands) could not be updated in Intune - see the warnings above." -f $Displayname)
+        }
+        Write-Host "Definition of the app is up to date in Intune."
     }
 }
 else {

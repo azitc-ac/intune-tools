@@ -78,6 +78,47 @@ function Get-PackageTemplateFingerprint {
     return $value
 }
 
+function Get-DefinitionFingerprint {
+    <#
+        Kurz-Hash ueber die Felder einer Definition (Apps.csv-Zeile), die in ein Paket und in die App in Intune
+        eingehen. Wird beim Bauen in deploy.ps1 gestempelt (# ToolDefinitionFingerprint:). Das Inventar vergleicht
+        ihn mit der Zeile von heute: weicht er ab, wurde die Definition nach dem Bau geaendert und das Paket
+        spiegelt sie nicht mehr. Eigene Spalten und die Reihenfolge der Spalten zaehlen nicht.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Record)
+
+    $fields = @('DisplayName', 'Version', 'Publisher', 'ProgramID', 'WinGetParams', 'SingleMSI', 'MsiProductCode', 'logoURL',
+                'InstallCmd', 'UninstallCmd', 'Interactive', 'Architecture', 'MinimumOS', 'ArpName')
+    $builder = New-Object System.Text.StringBuilder
+    foreach ($field in $fields) {
+        $value = ([string]$Record.$field).Trim()
+        # Wahrheitswerte: "true", "TRUE" und "True" sind dieselbe Aussage
+        if ($field -in 'SingleMSI', 'Interactive') { $value = $value.ToLowerInvariant() }
+        $null = $builder.Append($field).Append('=').Append($value).Append("`n")
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($builder.ToString()))
+        return ([BitConverter]::ToString($hash).Replace('-', '').Substring(0, 12).ToLowerInvariant())
+    }
+    finally { $sha.Dispose() }
+}
+
+function Get-PackageDefinitionFingerprint {
+    <# Liest den Definitions-Stempel aus einem deploy.ps1. Leer: das Paket wurde ohne ihn gebaut (aelter als der Stempel). #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$DeployScriptPath)
+
+    if ([string]::IsNullOrWhiteSpace($DeployScriptPath)) { return '' }
+    if (-not (Test-Path -LiteralPath $DeployScriptPath)) { return '' }
+    $match = [regex]::Match((Get-Content -LiteralPath $DeployScriptPath -Raw), '(?m)^#\s*ToolDefinitionFingerprint:[ \t]*(\S*)')
+    if (-not $match.Success) { return '' }
+    $value = $match.Groups[1].Value
+    if ($value -eq '#DEFFP#') { return '' }
+    return $value
+}
+
 function Get-ArpSearchName {
     <#
         Der Name, unter dem die App in der Programmliste (Uninstall-Schluessel)
@@ -218,7 +259,11 @@ function Write-DeployScript {
 
         # Apps.csv-Spalte "Interactive": 'true' = PSADT-Dialoge ueber ServiceUI,
         # leer = still und ohne ServiceUI (siehe Get-DeployCommandLine).
-        [AllowEmptyString()][string]$Interactive = ''
+        [AllowEmptyString()][string]$Interactive = '',
+
+        # Stand der Definition, aus der gebaut wird (Get-DefinitionFingerprint). Leer = unbekannt: beim Erneuern
+        # aus der Vorlage gibt Update-DeployScript den Stempel des alten Skripts weiter.
+        [AllowEmptyString()][string]$DefinitionFingerprint = ''
     )
 
     $templatePath = Join-Path (Join-Path $RootDir "Templates") "deploy_template.ps1"
@@ -233,7 +278,8 @@ function Write-DeployScript {
         -replace "#ARCH#", $Architecture -replace "#MINOS#", $MinimumOS `
         -replace "#MSIPRODUCTCODE#", $MsiProductCode `
         -replace "#INTERACTIVE#", (ConvertTo-InteractiveFlag -Value $Interactive) `
-        -replace "#TPLFP#", (Get-TemplateFingerprint -RootDir $RootDir) |
+        -replace "#TPLFP#", (Get-TemplateFingerprint -RootDir $RootDir) `
+        -replace "#DEFFP#", $DefinitionFingerprint |
         Out-File (Join-Path $AppFolder "deploy.ps1") -Encoding utf8 -Force
 }
 
@@ -308,10 +354,12 @@ function Update-DeployScript {
     Copy-Item -LiteralPath $DeployScriptPath -Destination ($DeployScriptPath + ".bak") -Force
     Write-Host ("Updating outdated deploy.ps1 from template: {0} (backup: deploy.ps1.bak)" -f $DeployScriptPath) -ForegroundColor Yellow
 
+    # Erneuert wird aus den Werten des alten Skripts, nicht aus Apps.csv: der Definitions-Stempel bleibt, wie er war
+    # (zeigte er "Definition geaendert", bleibt er es - das Erneuern aus der Vorlage holt keine Aenderung der Definition nach).
     Write-DeployScript -AppFolder $appFolder -AppName $appName -AppVersion $appVersion `
         -Publisher $publisher -Description $description -RootDir $RootDir -ToolVersion $ToolVersion `
         -Architecture $architecture -MinimumOS $minimumOS -MsiProductCode $msiProductCode `
-        -Interactive $interactive
+        -Interactive $interactive -DefinitionFingerprint (Get-PackageDefinitionFingerprint -DeployScriptPath $DeployScriptPath)
 
     # detection.ps1 gehoert zum selben Stempel - mit erneuern. Suchname und
     # WinGet-ID kommen aus dem alten Skript: $ArpName, sonst $PackageID (dort

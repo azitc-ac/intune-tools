@@ -14,10 +14,12 @@ die Überschrift des Abschnitts), und jede Quellenzeile nennt einen Abschnitt, d
 
 ## Wo es steht
 
-IntuneWin32Helper **2.0.12** (`IntuneWin32Helper/VERSION`). Der letzte Rückkehrpunkt mit Transcript-Beleg ist der Tag
+IntuneWin32Helper **2.1.0** (`IntuneWin32Helper/VERSION`). Der letzte Rückkehrpunkt mit Transcript-Beleg ist der Tag
 `IntuneWin32Helper-v2.0.0`; seither sind das Hauptfenster (eine Zeile je App aus Definition, Paket und Tenant), der Deploy-Plan
 (Create/Skip/Update statt blindes Anlegen), Retire und Rebuild, Apps, die nur in Intune liegen, die WinGet-Suche mit lokalem
-Index, „Check tenant“, „From installer…“ und die Aufteilung von `functions.ps1` in 14 Dateien dazugekommen. Das meiste davon ist
+Index, „Check tenant“, „From installer…“, die Aufteilung von `functions.ps1` in 14 Dateien und – zuletzt – der Zuschnitt der Knöpfe
+nach den drei Stufen einer App (Definition, Paket, Intune) mit **einem** „Publish to Intune“, das nach Zustand anlegt oder die vorhandene App
+samt Definition aktualisiert (ohne Rebuild) dazugekommen. Das meiste davon ist
 im Feld gegen den Test-Tenant gelaufen (nächster Abschnitt), manches nur gegen Tests.
 
 `main` ist strukturell grün (Repo-Prüfungen, 19 Testdateien, UI-Prüfung des Hauptfensters per UI Automation). Ein grüner Lauf ist
@@ -42,7 +44,7 @@ Alles gegen `zarenko.onmicrosoft.com` (Test-Tenant, Testapps „ZZ IW32H …“,
 ## Offen
 
 **Nie von Hand im echten Fenster bedient** (nur per UI Automation oder Rendern geprüft):
-„Check tenant“, „From installer…“, „From WinGet…“, „From MSI…“, Return im WinGet-Suchfeld, Fenster-Optik der Rückfragen,
+der neue Aufbau der Knöpfe (Gruppen, Tooltips ausgegrauter Knöpfe), „Check tenant“, „From installer…“, „From WinGet…“, „From MSI…“, Return im WinGet-Suchfeld, Fenster-Optik der Rückfragen,
 kleine Bildschirme, ein verwaister Ordner im Fenster wirklich entfernt, Bearbeiten/Anlegen/Duplizieren gegen echte Daten
 (danach `git diff` auf `Apps.csv`).
 Quelle: Editor: „From installer…“ (2026-10-11)
@@ -65,8 +67,12 @@ Quelle: Offene Feldprüfung: Deploy-Plan statt blindem Anlegen (Stufe 3, 2026-10
   Quelle: Fehlermeldungen mit Fundstelle (2026-10-11)
 - Zwei Versionen derselben App im Tenant (`yes` für beide, kein Dubletten-Hinweis).
   Quelle: Offene Feldprüfung: Deploy-Plan statt blindem Anlegen (Stufe 3, 2026-10-10)
-- Die Fenster in den Bildern des README sind mit erfundenen Daten gerendert, nicht fotografiert.
+- Die Fenster in den Bildern des README sind mit erfundenen Daten gerendert, nicht fotografiert; `main-window.png` zeigt noch die alten Knöpfe
+  (Deploy, Rebuild, Retire) – neu erzeugen mit `Docs\Make-Screenshots.ps1` in einer aktiven Sitzung.
   Quelle: Bilder im README (2026-10-11)
+- Ein Update (Publish) einer **Nicht-WinGet-App** (Installer in `Files\`) und einer **MSI-App mit nativer Erkennung**, und das Update einer App mit
+  **Gruppen**-Zuweisung: im Feld gelaufen ist nur eine WinGet-App mit Skript-Erkennung und „alle Benutzer“-Zuweisung.
+  Quelle: Ein Weg: „Publish to Intune“, Knöpfe nach Zustand (2026-10-11)
 
 **Grenzen des Tenants, gegen den getestet wird:**
 - Gruppen-Zuweisungen mit „Einschließen“ und Filter (die App-Registrierung darf keine Entra-Gruppen lesen, 403).
@@ -90,6 +96,8 @@ Quelle: Offene Feldprüfung: Deploy-Plan statt blindem Anlegen (Stufe 3, 2026-10
 **Funktionen, die fehlen:**
 - Ansichtsauswahl (fremde Apps ein/aus) wird nicht gespeichert; aus einer Intune-only-Zeile lässt sich keine Definition erzeugen.
 - Paketbau und Upload parallelisieren (nicht versucht; Risiko: gemeinsame Laufwerksbuchstaben für `subst`).
+- Eine Installer-Quelle je Definition: bei einer Nicht-WinGet-App wartet *Build package* in der **Konsole** auf ENTER, damit jemand den Installer
+  nach `Files\` legt (`Build-AppPackage`); in der Oberfläche gibt es dafür keinen Schritt.
 - Installer-Download für feste Versionen (Hash, Signatur) wie im SCCMAppHelper – bewusst nicht übernommen, als Idee vorgemerkt.
   Quelle: WinGet-Suche mit lokalem Index (2026-10-11)
 - Aus dem SCCM-Vergleich noch nicht übernommen: Cache für Paket-Scans, `update.ps1` für Server ohne git.
@@ -102,7 +110,14 @@ Nicht ohne Grund neu aufrollen.
 
 - **Tenant** wird einmal am Anfang gewählt und lässt sich im Fenster wechseln.
 - **Fremde Apps** (nicht vom Tool angelegt, erkennbar am Vermerk) sind standardmäßig ausgeblendet.
-- **Retire** darf auch Zuweisungen löschen; vorher kommt immer die Rückfrage mit Namen, Ids und Zuweisungszahl, Vorgabe „No“.
+- **Remove from Intune** (intern Retire) darf auch Zuweisungen löschen; vorher kommt immer die Rückfrage mit Namen, Ids und Zuweisungszahl, Vorgabe „No“.
+- **Drei Stufen, drei Knopfgruppen:** Definition (Add / New version / Edit / Delete definition) – Paket (Build package) – Intune (Publish to Intune,
+  links Remove from Intune). Welcher Knopf geht, entscheidet `Get-InventoryActionState` aus dem Zustand der Zeile; der Rest ist ausgegraut, der
+  Tooltip nennt den Grund.
+- **Publish entscheidet nach Zustand, ohne zweite Frage** (Create / Update / Skip); ein **Rebuild** (löschen und neu anlegen) gibt es nicht mehr.
+  **Update** bringt Inhalt, Icon, Erkennung, Befehle, Anforderung, Herausgeber und Beschreibung auf den Stand der Definition und lässt Name,
+  Version und **Zuweisungen** stehen.
+- **Ein Paket, das älter ist als die Definition, wird nicht veröffentlicht** (Stempel `# ToolDefinitionFingerprint:`): erst *Build package*.
 - **Eine Zeile je App** im Hauptfenster; es gibt keine Startkacheln und keine getrennten Dialoge zum Anlegen und Verteilen.
 - **Der Deploy entscheidet vor dem Hochladen** (Plan: Create/Skip/Update), statt blind anzulegen.
 - **Vorlagen bleiben im Paket**: ein Template-Fingerabdruck zeigt veraltete Pakete, Erneuern ist ein eigener Schritt mit `.bak`.

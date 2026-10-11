@@ -45,6 +45,32 @@ function Read-TenantWin32Apps {
     }
 }
 
+function Set-TenantAppRequirement {
+    <#
+        Setzt die Anforderung (Architektur, Mindest-Windows) einer App, ohne sie zu loeschen und ohne ihre
+        Zuweisungen anzufassen. Set-IntuneWin32App des Moduls (1.5.0) nimmt die Regel, die dasselbe Modul mit
+        New-IntuneWin32AppRequirementRule baut, nicht an ("missing '@odata.type'", und es kennt die Schluessel
+        applicableArchitectures / minimumSupportedWindowsRelease nicht) - darum der direkte PATCH, mit denselben
+        Schluesseln, die Add-IntuneWin32App beim Anlegen sendet. Das Token ist das des Moduls.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)]$RequirementRule
+    )
+
+    $header = $global:AuthenticationHeader
+    if (-not $header) { throw 'Not signed in to a tenant - the requirement rule cannot be updated.' }
+
+    $body = [ordered]@{ '@odata.type' = '#microsoft.graph.win32LobApp' }
+    foreach ($key in @($RequirementRule.Keys)) {
+        if ($key -ne '@odata.type') { $body[$key] = $RequirementRule[$key] }
+    }
+    $json = $body | ConvertTo-Json -Depth 6
+    $uri = 'https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/{0}' -f $Id
+    $null = Invoke-RestMethod -Method Patch -Uri $uri -Headers $header -Body ([System.Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8' -ErrorAction Stop
+}
+
 function Connect-InventoryTenant {
     <#
         Tenant waehlen und anmelden - ueber Initialize-IntuneConnection, den
@@ -129,42 +155,45 @@ function Invoke-PackageDeploy {
 function Get-DeployPlan {
     <#
         .SYNOPSIS
-        Entscheidet pro Zeile, was ein Deploy tut: Create, Skip oder Update.
+        Entscheidet pro Zeile, was "Publish to Intune" tut: Create, Update oder Skip.
 
         .DESCRIPTION
         Reine Funktion ueber den Zustand der Inventarzeilen (IntuneSame/IntuneOther) -
-        pruefbar ohne Tenant.
-
-        Wozu: das erzeugte deploy.ps1 legte im Bulk-Lauf IMMER eine neue App an, auch
-        wenn dieselbe App in derselben Version schon in Intune lag - jeder zweite Lauf
-        erzeugte Dubletten. Jetzt entscheidet das Tool vorher, und das deploy.ps1
-        bekommt die Entscheidung mit (-Mode).
+        pruefbar ohne Tenant. Es gibt keine Rueckfrage "wie genau": der Zustand entscheidet.
 
           Create  keine App mit Name UND Version in Intune
-          Skip    gibt es schon oder ist nicht eindeutig; Reason sagt warum
-          Update  nur mit -ReplaceExisting: genau eine App mit Inhalt, deren Paketinhalt
-                  ersetzt wird. Erkennungsregel, Befehlszeilen, Anforderungen und
-                  Zuweisungen bleiben, wie sie in Intune sind: Update-IntuneWin32AppPackageFile
-                  aendert nur committedContentVersion und das Icon (Modulquelle 1.5.0).
+          Update  genau eine App mit Inhalt: sie wird auf den Stand des Pakets gebracht - Inhalt, Icon,
+                  Erkennungsregel, Befehlszeilen, Anforderung, Herausgeber, Beschreibung (deploy.ps1,
+                  Set-IntuneWin32App und Set-TenantAppRequirement). Name, Version und Zuweisungen bleiben.
+          Skip    nicht eindeutig oder nicht veroeffentlichbar; Reason sagt warum:
+                  zwei oder mehr gleiche Apps / eine App ohne Inhalt / das Paket ist aelter als die Definition
+                  (PackageDefinition changed|unknown: erst bauen, sonst ginge der alte Stand nach Intune)
+
+        Wozu: das erzeugte deploy.ps1 legte im Bulk-Lauf IMMER eine neue App an, auch wenn dieselbe App in
+        derselben Version schon in Intune lag - jeder zweite Lauf erzeugte Dubletten. Jetzt entscheidet das
+        Tool vorher, und das deploy.ps1 bekommt die Entscheidung mit (-Mode New|Update).
 
         Eine Zeile, deren Intune-Zustand nicht gelesen wurde, wird nicht geplant -
         "nicht nachgesehen" darf nicht wie "gibt es nicht" aussehen.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]$Rows,
-        [switch]$ReplaceExisting
+        [Parameter(Mandatory = $true)]$Rows
     )
 
     foreach ($row in @($Rows)) {
         if ([string]$row.Intune -eq 'not checked') {
-            throw ("The Intune state of '{0}' was not read - a deploy cannot be planned without it." -f $row.Key)
+            throw ("The Intune state of '{0}' was not read - a publish cannot be planned without it." -f $row.Key)
         }
         $same  = @(@($row.IntuneSame)  | Where-Object { $_ })
         $other = @(@($row.IntuneOther) | Where-Object { $_ })
 
-        $action = 'Create'; $reason = ''; $appId = ''; $replaceable = $false
-        if ($same.Count -eq 0) {
+        $action = 'Create'; $reason = ''; $appId = ''
+        if ($row.HasPackage -and $row.HasDefinition -and ([string]$row.PackageDefinition -in 'changed', 'unknown')) {
+            $action = 'Skip'
+            $reason = $(if ([string]$row.PackageDefinition -eq 'changed') { 'the package is older than the definition - build the package first' } else { 'the package was built before definitions were stamped - build the package first' })
+        }
+        elseif ($same.Count -eq 0) {
             $reason = 'not in Intune yet'
             if ($other.Count -gt 0) {
                 $versions = @($other | ForEach-Object { $(if ([string]$_.displayVersion) { [string]$_.displayVersion } else { '(none)' }) } | Select-Object -Unique)
@@ -177,11 +206,8 @@ function Get-DeployPlan {
         elseif (-not (Test-IntuneAppHasContent -App $same[0])) {
             $action = 'Skip'; $reason = 'the entry in Intune has no content - remove it in Intune first'
         }
-        elseif ($ReplaceExisting) {
-            $action = 'Update'; $appId = [string]$same[0].id; $reason = 'replace the package content of the app in Intune'
-        }
         else {
-            $action = 'Skip'; $reason = 'already in Intune'; $replaceable = $true
+            $action = 'Update'; $appId = [string]$same[0].id; $reason = 'already in Intune'
         }
 
         [pscustomobject]@{
@@ -190,7 +216,6 @@ function Get-DeployPlan {
             Action      = $action
             Reason      = $reason
             UpdateAppId = $appId
-            Replaceable = $replaceable
         }
     }
 }
@@ -198,20 +223,20 @@ function Get-DeployPlan {
 function Invoke-InventoryDeploy {
     <#
         .SYNOPSIS
-        Deploy aus dem Hauptfenster: Intune frisch lesen, planen, fragen, bauen, verteilen.
+        "Publish to Intune" aus dem Hauptfenster: Intune frisch lesen, planen, fragen, bauen, verteilen.
 
         .DESCRIPTION
-        Ein Pfad fuer jedes Deploy. Reihenfolge, mit Absicht:
+        Ein Pfad fuer jedes Publish. Reihenfolge, mit Absicht:
           1. Intune NEU lesen. Der Stand des Fensters kann veraltet sein (ein anderer
              Administrator, ein vorheriger Lauf); wer auf Grundlage von gestern entscheidet,
              legt Dubletten an. Scheitert das Lesen, wird nichts verteilt.
-          2. Get-DeployPlan: pro Zeile Create / Skip.
-          3. Rueckfrage mit dem Plan. Ja = wie geplant, Nein = zusaetzlich den Inhalt
-             schon vorhandener Apps ersetzen, Abbrechen = nichts tun.
+          2. Get-DeployPlan: pro Zeile Create / Update / Skip.
+          3. Zusammenfassung mit dem Plan, EINE Frage (Ja/Nein): was angelegt, was aktualisiert, was
+             uebersprungen wird und warum. Nein = nichts tun.
           4. Nur fuer Zeilen, die nicht uebersprungen werden und noch kein Paket haben: bauen.
           5. Invoke-PackageDeploy mit der Entscheidung je Paket.
 
-        -Ask ist die Rueckfrage (Text, Tasten) -> 'Yes' | 'No' | 'Cancel'; Tests ersetzen sie.
+        -Ask ist die Rueckfrage (Text, Tasten) -> 'Yes' | 'No'; Tests ersetzen sie.
         Gibt $null zurueck, wenn nichts verteilt wurde, sonst den Plan.
     #>
     [CmdletBinding()]
@@ -222,14 +247,14 @@ function Invoke-InventoryDeploy {
         [Parameter(Mandatory = $true)][string]$PacketRoot,
         [Parameter(Mandatory = $true)][string]$ToolVersion,
         [bool]$RemoveExisting = $false,
-        [scriptblock]$Ask = { param($Text, $Buttons) Show-ConfirmDialog -Text $Text -Title 'Deploy' -Buttons $Buttons -Icon Question -Default $(if ($Buttons -eq 'OK') { 'OK' } else { 'Yes' }) }
+        [scriptblock]$Ask = { param($Text, $Buttons) Show-ConfirmDialog -Text $Text -Title 'Publish to Intune' -Buttons $Buttons -Icon Question -Default $(if ($Buttons -eq 'OK') { 'OK' } else { 'Yes' }) }
     )
 
     $keys = @(@($Selection) | ForEach-Object { [string]$_.Key })
 
     $fresh = Read-TenantWin32Apps
     if ($null -eq $fresh) {
-        Write-Host "The apps in the tenant could not be read - nothing was deployed (without that state a deploy could create duplicates)." -ForegroundColor Yellow
+        Write-Host "The apps in the tenant could not be read - nothing was published (without that state a publish could create duplicates)." -ForegroundColor Yellow
         return $null
     }
 
@@ -245,33 +270,27 @@ function Invoke-InventoryDeploy {
         (@($items) | ForEach-Object { '  {0}  ({1})' -f $_.Key, $_.Reason }) -join "`n"
     }
     $create = @($plan | Where-Object { $_.Action -eq 'Create' })
+    $update = @($plan | Where-Object { $_.Action -eq 'Update' })
     $skip   = @($plan | Where-Object { $_.Action -eq 'Skip' })
-    $replaceable = @($skip | Where-Object { $_.Replaceable })
 
     $textParts = @()
     if ($create.Count -gt 0) { $textParts += ("Create in Intune ({0}):`n{1}" -f $create.Count, (& $describe $create)) }
+    if ($update.Count -gt 0) { $textParts += ("Update the app in Intune ({0}):`n{1}`n  Package content, detection rule, commands, requirement and icon are replaced; the assignments stay." -f $update.Count, (& $describe $update)) }
     if ($skip.Count -gt 0)   { $textParts += ("Skip ({0}):`n{1}" -f $skip.Count, (& $describe $skip)) }
-    if ($create.Count -eq 0 -and $replaceable.Count -eq 0) {
-        $textParts += 'Nothing to deploy.'
-    }
-    if ($replaceable.Count -gt 0) {
-        $textParts += ("Yes = deploy as planned.`nNo = also replace the package content of the {0} app(s) already in Intune. Their detection rule, commands, requirements and assignments stay as they are in Intune.`nCancel = do nothing." -f $replaceable.Count)
-        $buttons = 'YesNoCancel'
+    $buttons = 'YesNo'
+    if ($create.Count -eq 0 -and $update.Count -eq 0) {
+        $textParts += 'Nothing can be published.'
+        $buttons = 'OK'
     }
     else {
-        $textParts += $(if ($create.Count -gt 0) { 'Continue?' } else { 'Nothing will be changed.' })
-        $buttons = $(if ($create.Count -gt 0) { 'YesNo' } else { 'OK' })
+        $textParts += 'Continue?'
     }
 
     $answer = [string](& $Ask ($textParts -join "`n`n") $buttons)
-    if ($answer -eq 'Cancel' -or $answer -eq 'None' -or ($buttons -eq 'YesNo' -and $answer -ne 'Yes')) {
-        Write-Host "Deploy cancelled - nothing was changed." -ForegroundColor Yellow
-        return $null
-    }
     if ($buttons -eq 'OK') { return $null }
-
-    if ($answer -eq 'No' -and $replaceable.Count -gt 0) {
-        $plan = @(Get-DeployPlan -Rows $rows -ReplaceExisting)
+    if ($answer -ne 'Yes') {
+        Write-Host "Publish cancelled - nothing was changed." -ForegroundColor Yellow
+        return $null
     }
 
     $todo    = @($plan | Where-Object { $_.Action -ne 'Skip' })
