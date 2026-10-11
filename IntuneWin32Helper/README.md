@@ -181,7 +181,7 @@ list from the loader.
 
 ## Apps.csv
 
-Two columns beyond the obvious ones:
+Four columns beyond the obvious ones:
 
 | Column | Empty means |
 | --- | --- |

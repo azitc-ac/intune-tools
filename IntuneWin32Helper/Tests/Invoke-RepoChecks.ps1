@@ -1742,6 +1742,21 @@ foreach ($entry42 in $parsed.Values) {
     }
 }
 # ---------------------------------------------------------------------------
+# 43) Jedes Bild, das das README einbindet und im Repo liegen soll (relativer Pfad), gibt es auch - sonst zeigt
+#     GitHub ein kaputtes Bild. Die Bilder entstehen aus den echten Fenstern (Docs\Make-Screenshots.ps1).
+# ---------------------------------------------------------------------------
+$checked++
+$readmePath43 = Join-Path $RepoRoot 'README.md'
+if (Test-Path -LiteralPath $readmePath43) {
+    foreach ($m43 in [regex]::Matches([IO.File]::ReadAllText($readmePath43), '(?:!\[[^\]]*\]\(|<img[^>]*\ssrc=")(?<path>[^)"\s]+)')) {
+        $img43 = $m43.Groups['path'].Value
+        if ($img43 -match '^(https?:|data:)') { continue }
+        if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $readmePath43) ($img43 -replace '/', '\')))) {
+            Add-Failure "ReadmeImages" ("README.md bindet {0} ein, die Datei gibt es nicht (Docs\Make-Screenshots.ps1 erzeugt die Bilder)" -f $img43)
+        }
+    }
+}
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""
