@@ -223,6 +223,20 @@ function Remove-PackageFolder {
     return $true
 }
 
+# Eine Fehlermeldung mit der Stelle, von der sie kommt. "Cannot validate argument" sagt nicht, welcher der vielen
+# Aufrufe eines Laufs sie ausgeloest hat; Datei und Zeile stehen im ErrorRecord und kosten nichts (Muster aus
+# SCCMAppHelper). Fehler aus dem Intune-Modul bleiben sonst anonym.
+function Format-ErrorDetail {
+    param([Parameter(Mandatory = $true)]$ErrorRecord)
+
+    $message = [string]$ErrorRecord.Exception.Message
+    $info    = $ErrorRecord.InvocationInfo
+    if ($info -and $info.ScriptName) {
+        return ('{0} ({1}:{2})' -f $message, (Split-Path -Leaf $info.ScriptName), $info.ScriptLineNumber)
+    }
+    return $message
+}
+
 function Write-DeploymentSummary {
     <#
         .SYNOPSIS
@@ -1390,7 +1404,7 @@ function Get-DeployScripts {
         try {
             $results | Export-Csv -Path $ExportCsvPath -NoTypeInformation -Encoding UTF8 -Delimiter ';'
         } catch {
-            Write-Warning ("Konnte CSV nicht schreiben: {0}" -f $_.Exception.Message)
+            Write-Warning ("Konnte CSV nicht schreiben: {0}" -f (Format-ErrorDetail $_))
         }
     }
 
@@ -1577,7 +1591,7 @@ function Read-TenantWin32Apps {
         return , $apps
     }
     catch {
-        Write-Host ("Tenant state could not be read ({0}) - the Intune column stays empty." -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host ("Tenant state could not be read ({0}) - the Intune column stays empty." -f (Format-ErrorDetail $_)) -ForegroundColor Yellow
         return $null
     }
 }
@@ -1604,7 +1618,7 @@ function Connect-InventoryTenant {
         return (Initialize-IntuneConnection -Tenant $Tenant -Tenants $Tenants -Force:$Force)
     }
     catch {
-        Write-Host ("No connection to a tenant ({0}) - the Intune column stays empty." -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host ("No connection to a tenant ({0}) - the Intune column stays empty." -f (Format-ErrorDetail $_)) -ForegroundColor Yellow
         return $null
     }
 }
@@ -1791,7 +1805,7 @@ function Invoke-PackageBuild {
             }
         }
         catch {
-            Write-Host ("FAILED: {0} - {1}" -f $row.Key, $_.Exception.Message) -ForegroundColor Red
+            Write-Host ("FAILED: {0} - {1}" -f $row.Key, (Format-ErrorDetail $_)) -ForegroundColor Red
             $failed += [string]$row.Key
         }
     }
@@ -1851,7 +1865,7 @@ function Invoke-PackageDeploy {
         }
         catch {
             # Den Lauf nicht abbrechen: die restlichen Apps sollen noch durchlaufen.
-            Write-Host ("FAILED: {0} - {1}" -f $appLabel, $_.Exception.Message) -ForegroundColor Red
+            Write-Host ("FAILED: {0} - {1}" -f $appLabel, (Format-ErrorDetail $_)) -ForegroundColor Red
             $failed += $appLabel
         }
     }
@@ -2169,7 +2183,7 @@ function Remove-TenantWin32Apps {
             $attempted += [pscustomobject]@{ Id = $id; Key = [string]$app.Key; Detail = (@(@($warnings) | Where-Object { $_ }) -join ' ') }
         }
         catch {
-            $results += [pscustomobject]@{ Id = $id; Key = [string]$app.Key; State = 'Failed'; Detail = $_.Exception.Message }
+            $results += [pscustomobject]@{ Id = $id; Key = [string]$app.Key; State = 'Failed'; Detail = (Format-ErrorDetail $_) }
         }
     }
 
@@ -2791,7 +2805,7 @@ function Show-InventoryDialog {
             $null = Edit-SettingsDialog -Owner $window -PreferredPaths @($ConfigPath)
         }
         catch {
-            $null = [System.Windows.MessageBox]::Show($window, ("Error while opening the settings: {0}" -f $_.Exception.Message), 'Settings', 'OK', 'Error')
+            $null = [System.Windows.MessageBox]::Show($window, ("Error while opening the settings: {0}" -f (Format-ErrorDetail $_)), 'Settings', 'OK', 'Error')
         }
         # Tenants und Paketordner koennen sich geaendert haben: neu lesen.
         & $choose 'Refresh'
@@ -3114,8 +3128,8 @@ function Start-InventoryLoop {
         }
         catch {
             # Eine gescheiterte Aktion beendet das Tool nicht.
-            Write-Host ("Action [{0}] failed: {1}" -f $result.Action, $_.Exception.Message) -ForegroundColor Red
-            $null = [System.Windows.MessageBox]::Show(("Action [{0}] failed:`n`n{1}" -f $result.Action, $_.Exception.Message), 'IntuneWin32Helper', 'OK', 'Error')
+            Write-Host ("Action [{0}] failed: {1}" -f $result.Action, (Format-ErrorDetail $_)) -ForegroundColor Red
+            $null = [System.Windows.MessageBox]::Show(("Action [{0}] failed:`n`n{1}" -f $result.Action, (Format-ErrorDetail $_)), 'IntuneWin32Helper', 'OK', 'Error')
         }
     }
 }
@@ -3208,7 +3222,7 @@ function Remove-OrphanPackages {
             if (Remove-PackageFolder -Path $folder -PacketRoot $PacketRoot) { $removed += $key }
             else { $skipped += ("{0}: folder already gone" -f $key) }
         }
-        catch { $failed += ("{0}: {1}" -f $key, $_.Exception.Message) }
+        catch { $failed += ("{0}: {1}" -f $key, (Format-ErrorDetail $_)) }
     }
     return [pscustomobject]@{ Removed = @($removed); Skipped = @($skipped); Failed = @($failed) }
 }
@@ -3514,7 +3528,7 @@ function Open-EditDialog {
                 & $setValue 'WinGetParams' '"--scope=machine"'
             }
         }
-        catch { $errorText.Text = ("WinGet search failed: {0}" -f $_.Exception.Message) }
+        catch { $errorText.Text = ("WinGet search failed: {0}" -f (Format-ErrorDetail $_)) }
     })
     $msiButton.Add_Click({
         try {
@@ -3531,7 +3545,7 @@ function Open-EditDialog {
                 & $setValue 'SingleMSI' 'true'
             }
         }
-        catch { $errorText.Text = ("Reading the MSI failed: {0}" -f $_.Exception.Message) }
+        catch { $errorText.Text = ("Reading the MSI failed: {0}" -f (Format-ErrorDetail $_)) }
     })
 
     # --- OK: pruefen, bei Fehler offen bleiben ---
@@ -3708,7 +3722,7 @@ function Show-WinGetSearchDialog {
             $null = Get-WinGetIndex -Force
             & $describeIndex
         }
-        catch { & $showNote $_.Exception.Message 'winget index' 'Warning' }
+        catch { & $showNote (Format-ErrorDetail $_) 'winget index' 'Warning' }
         finally { $window.Cursor = 'Arrow' }
     })
 
@@ -3719,7 +3733,7 @@ function Show-WinGetSearchDialog {
             $added = Add-WinGetCatalogEntry -Name ([string]$picked.Name) -PackageId ([string]$picked.Id)
             & $showNote $(if ($added) { "$($picked.Id) is on the front page now." } else { "$($picked.Id) was already on the front page." }) 'WinGet Search'
         }
-        catch { & $showNote $_.Exception.Message 'WinGet Search' 'Warning' }
+        catch { & $showNote (Format-ErrorDetail $_) 'WinGet Search' 'Warning' }
     })
 
     $okButton.Add_Click({ if ($dataGrid.SelectedItem) { $window.DialogResult = $true } })
@@ -3738,7 +3752,7 @@ function Show-WinGetSearchDialog {
                 & $showNote ("Nothing found for [$needle].`n`nThe index is searched by package id, name, moniker and publisher. Try another spelling or the vendor name.") 'WinGet Search'
             }
         }
-        catch { & $showNote $_.Exception.Message 'WinGet Search' 'Warning' }
+        catch { & $showNote (Format-ErrorDetail $_) 'WinGet Search' 'Warning' }
         finally { $window.Cursor = 'Arrow'; & $describeIndex }
     }
     $searchButton.Add_Click({ & $runSearch })
@@ -4631,7 +4645,7 @@ function Edit-TenantDialog {
             $dlg.DialogResult = $true
             $dlg.Close()
         } catch {
-            [System.Windows.MessageBox]::Show(("Error: {0}" -f $_.Exception.Message), "Error", "OK", "Error") | Out-Null
+            [System.Windows.MessageBox]::Show(("Error: {0}" -f (Format-ErrorDetail $_)), "Error", "OK", "Error") | Out-Null
         }
     })
 

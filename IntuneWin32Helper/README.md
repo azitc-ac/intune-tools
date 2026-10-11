@@ -216,7 +216,8 @@ update result in the template), or an unguarded delete in Intune (`Remove-Intune
 not default to No, Rebuild deleting before building, the loop deleting directly), a fixed wait or a slow module query
 back in the build, or foreign Intune apps no longer protected from Retire (or the note that identifies the tool's
 own apps no longer written), the WinGet search not loaded at start, an unusable `Config\catalog.json`, the local index
-not excluded from git, a `[MessageBox]` in the search dialog, or a second place that downloads the index.
+not excluded from git, a `[MessageBox]` in the search dialog, or a second place that downloads the index, and a failure in the tenant / build / deploy / delete workflow that prints a bare
+`$_.Exception.Message` instead of going through `Format-ErrorDetail` (file and line of the failing call).
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the
 check red.
@@ -225,6 +226,7 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 
 | Test | What it proves |
 | --- | --- |
+| `Test-ErrorDetail.ps1` | an error message carries `(file:line)` of the failing call - also on the real path (the tenant read failing), without a location the message stays as it is |
 | `Test-WinGetIndex.ps1` | the local winget index with a real (small) SQLite database: update takes `index.db` out of the msix and counts the packages right (a one-row result must not fall apart into its columns), reads the schema as major.minor, a broken download keeps the working index, fetched only when missing or older than a day, search by id / name / moniker / publisher (also one hit, an apostrophe, newest version first, `0.10` before `0.9`), curated hits on top with the version from the index, fallback to the module, writing `catalog.json` |
 | `Test-WinGetDialog.ps1` | the search dialog through UI Automation: every control has an AutomationId, the curated list is the front page, Search / Return search, no hits and a failing search are reported, Remember writes the package into `catalog.json` (and says "already there"), Next returns name / id / version / publisher, Cancel nothing |
 | `Test-Prereqs.ps1` | `check-prereqs` finds the modules in the module path without the slow `Get-InstalledModule` query, checks once per process (every `deploy.ps1` ran it again), installs only what is missing |

@@ -443,6 +443,21 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Fehlermeldungen mit Fundstelle (2026-10-11)
+
+Aus dem Vergleich mit dem SCCMAppHelper (Befund eines UnterstÃ¼tzer-Agenten, Zahlen von mir nachgeprÃ¼ft): dort steht
+hinter jeder Fehlermeldung `(datei.ps1:zeile)`, weil â€žCannot validate argumentâ€œ ohne Herkunft eine Stunde Suche
+kostete. Hier gab es 31 Stellen mit nacktem `$_.Exception.Message`; Fehler aus dem Intune-Modul blieben anonym.
+`Format-ErrorDetail` (functions.ps1) hÃ¤ngt die Fundstelle an; 16 Stellen in den AblÃ¤ufen Tenant lesen, bauen,
+verteilen, lÃ¶schen, Hauptschleife, Bearbeiten-, Tenant- und WinGet-Dialog nutzen es. Die Einstellungs-, Logo- und
+Konfigurationsdialoge (15 Stellen) blieben bewusst bei der bloÃŸen Meldung.
+
+Belegt: `Tests/Test-ErrorDetail.ps1` (neu; Funktion und der echte Weg â€žLesen des Tenants scheitertâ€œ),
+PrÃ¼fung 39 (kein nacktes `$_.Exception.Message` in diesen Funktionen; 467 PrÃ¼fungen), Gegenproben E1 (Fundstelle
+entfernt â†’ Test rot), E2/E3 (Stelle zurÃ¼ckgebaut â†’ PrÃ¼fung rot).
+
+Nicht belegt: ob die Fundstelle bei Fehlern aus Modul-Cmdlets (nicht aus eigenem Code) auf die eigene Aufrufzeile
+zeigt â€“ sie zeigt auf den Aufruf in unserem Skript, nicht ins Modul.
 ## WinGet-Suche mit lokalem Index (2026-10-11)
 
 Der Suchdialog hinter â€žFrom WinGet...â€œ fragte bei jeder Suche `Find-WinGetPackage` (Modul `Microsoft.WinGet.Client`,

@@ -1638,6 +1638,29 @@ if (Test-Path -LiteralPath $gitignorePath) {
     }
 }
 # ---------------------------------------------------------------------------
+# 39) Fehler im Arbeitsablauf nennen ihre Fundstelle: in den Funktionen, die Tenant lesen, bauen, verteilen,
+#     loeschen und den Ablauf steuern, geht eine Fehlermeldung ueber Format-ErrorDetail (Datei:Zeile) und
+#     nicht als nacktes $_.Exception.Message auf den Bildschirm - ein Fehler aus dem Intune-Modul bleibt
+#     sonst anonym ("Cannot validate argument" - aus welchem der vielen Aufrufe?).
+# ---------------------------------------------------------------------------
+$checked++
+if ($functionsFile) {
+    $flow39 = 'Read-TenantWin32Apps', 'Connect-InventoryTenant', 'Invoke-PackageBuild', 'Invoke-PackageDeploy', 'Remove-TenantWin32Apps',
+              'Show-InventoryDialog', 'Start-InventoryLoop', 'Remove-OrphanPackages', 'Open-EditDialog', 'Show-WinGetSearchDialog',
+              'Edit-TenantDialog', 'Get-DeployScripts'
+    if (-not ($functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Format-ErrorDetail' }, $true))) {
+        Add-Failure "ErrorOrigin" "Format-ErrorDetail fehlt in functions.ps1"
+    }
+    $bare39 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.MemberExpressionAst] -and $n.Extent.Text -eq '$_.Exception.Message' }, $true)
+    foreach ($m in $bare39) {
+        $owner = $m.Parent
+        while ($owner -and $owner -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $owner = $owner.Parent }
+        if ($owner -and $owner.Name -in $flow39) {
+            Add-Failure "ErrorOrigin" ("functions.ps1:{0} `$_.Exception.Message in '{1}' - Fehler dieses Ablaufs gehen ueber Format-ErrorDetail `$_ (mit Datei:Zeile)" -f $m.Extent.StartLineNumber, $owner.Name)
+        }
+    }
+}
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""
