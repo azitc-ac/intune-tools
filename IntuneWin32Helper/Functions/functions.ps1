@@ -3580,23 +3580,179 @@ function Get-MsiProperties {
 }
 
 function Show-WinGetSearchDialog {
-    # Callback
-    $onSearch = {
-        param($q)
-        if ([string]::IsNullOrWhiteSpace($q)) { return @() }
-        $data = Find-WinGetPackage -Query $q -Source "winget"
-        return $data #| Select-Object Name, Id, Version, Publisher, Moniker, Source
+    <#
+        Waehlt ein Paket aus winget: vorn die kuratierte Liste (Config\catalog.json), dazu ein
+        Suchfeld, das den offiziellen Index durchsucht (wingetindex.ps1). Muster aus SCCMAppHelper
+        (Show-CatalogDialog). Gibt Name, Id, Version und Publisher des gewaehlten Pakets zurueck
+        oder $null bei Abbruch.
+
+        -OnSearch ersetzt die Suche (Tests); -Packages die kuratierte Liste.
+    #>
+    param(
+        $Packages = (Get-WinGetCatalogList),
+        [string]$Query = '',
+        [scriptblock]$OnSearch = { param($q) Search-WinGetCatalog -Query $q -Packages $Packages },
+        [string]$Title = 'WinGet Search'
+    )
+
+    Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+
+    $window = New-Object Windows.Window
+    $window.Title = $Title
+    $window.Width = 820
+    $window.Height = 580
+    $window.WindowStartupLocation = 'CenterScreen'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($window, 'WinGetDialog')
+
+    $grid = New-Object Windows.Controls.Grid
+    $grid.Margin = '12'
+    foreach ($height in 'Auto', '*', 'Auto', 'Auto') {
+        $row = New-Object Windows.Controls.RowDefinition
+        $row.Height = $(if ($height -eq '*') { New-Object Windows.GridLength -ArgumentList 1, ([Windows.GridUnitType]::Star) } else { [Windows.GridLength]::Auto })
+        $null = $grid.RowDefinitions.Add($row)
     }
 
-    # Start mit leerer Liste, Suche über Enter oder Button
-    $selectedApp = Open-SelectDialogWithSearch -data @() -title 'WinGet Search' -large -OnSearch $onSearch #-initialQuery 'vscode'
-    # Rückgabe bereinigen (bekannter Workaround gegen int-Werte in Collections)
-    if ($selectedApp -ne $null) {
-        $selectedApp = $selectedApp | Where-Object {$_ -isnot [int]}
-        if($selectedApp.Id){$publisher = $selectedApp.Id.split(".")[0]}
-        $selectedApp | Add-Member -NotePropertyName Publisher -NotePropertyValue $publisher
+    # --- Suchzeile ---
+    $searchPanel = New-Object Windows.Controls.DockPanel
+    $searchPanel.Margin = '0,0,0,8'
+    $searchBox = New-Object Windows.Controls.TextBox
+    $searchBox.Padding = '4'
+    $searchBox.VerticalContentAlignment = 'Center'
+    $searchBox.Text = $Query
+    $searchBox.ToolTip = 'Package id, name, moniker or publisher - at least two characters. Empty = the curated list.'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($searchBox, 'SearchQuery')
+    $searchButton = New-Object Windows.Controls.Button
+    $searchButton.Content = 'Search'
+    $searchButton.Padding = '12,4'
+    $searchButton.Margin = '8,0,0,0'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($searchButton, 'Search')
+    [Windows.Controls.DockPanel]::SetDock($searchButton, 'Right')
+    $null = $searchPanel.Children.Add($searchButton)
+    $null = $searchPanel.Children.Add($searchBox)
+    [Windows.Controls.Grid]::SetRow($searchPanel, 0)
+    $null = $grid.Children.Add($searchPanel)
+
+    # --- Liste ---
+    $dataGrid = New-Object Windows.Controls.DataGrid
+    $dataGrid.AutoGenerateColumns = $false
+    $dataGrid.IsReadOnly = $true
+    $dataGrid.SelectionMode = 'Single'
+    $dataGrid.SelectionUnit = 'FullRow'
+    $dataGrid.CanUserSortColumns = $true
+    [Windows.Automation.AutomationProperties]::SetAutomationId($dataGrid, 'WinGetGrid')
+    foreach ($column in 'Name', 'Id', 'Version', 'Source') {
+        $col = New-Object Windows.Controls.DataGridTextColumn
+        $col.Header = $column
+        $col.Binding = New-Object Windows.Data.Binding($column)
+        $col.Width = $(switch ($column) { 'Name' { 250 } 'Id' { 340 } 'Version' { 110 } default { 70 } })
+        $null = $dataGrid.Columns.Add($col)
     }
-    return $selectedApp
+    $dataGrid.ItemsSource = @(& $OnSearch '')
+    [Windows.Controls.Grid]::SetRow($dataGrid, 1)
+    $null = $grid.Children.Add($dataGrid)
+
+    # --- Indexzeile: wo die Suche hinschaut und wie alt das ist ---
+    $indexLine = New-Object Windows.Controls.DockPanel
+    $indexLine.Margin = '0,8,0,0'
+    $indexText = New-Object Windows.Controls.TextBlock
+    $indexText.Foreground = [System.Windows.Media.Brushes]::DimGray
+    $indexText.VerticalAlignment = 'Center'
+    $indexText.TextWrapping = 'Wrap'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($indexText, 'IndexStatus')
+    $updateIndexButton = New-Object Windows.Controls.Button
+    $updateIndexButton.Content = 'Update index'
+    $updateIndexButton.Padding = '12,4'
+    $updateIndexButton.Margin = '8,0,0,0'
+    $updateIndexButton.ToolTip = 'Fetch the winget index from cdn.winget.microsoft.com again - it is refreshed once a day by itself'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($updateIndexButton, 'UpdateIndex')
+    [Windows.Controls.DockPanel]::SetDock($updateIndexButton, 'Right')
+    $null = $indexLine.Children.Add($updateIndexButton)
+    $null = $indexLine.Children.Add($indexText)
+    [Windows.Controls.Grid]::SetRow($indexLine, 2)
+    $null = $grid.Children.Add($indexLine)
+
+    $describeIndex = { $indexText.Text = Get-WinGetIndexStatusText }
+    & $describeIndex
+
+    # --- Knoepfe ---
+    $buttons = New-Object Windows.Controls.StackPanel
+    $buttons.Orientation = 'Horizontal'
+    $buttons.HorizontalAlignment = 'Right'
+    $buttons.Margin = '0,10,0,0'
+    $rememberButton = New-Object Windows.Controls.Button
+    $rememberButton.Content = 'Remember'
+    $rememberButton.Padding = '18,6'
+    $rememberButton.Margin = '0,0,8,0'
+    $rememberButton.ToolTip = 'Add the selected package to Config\catalog.json - it is on the front page next time'
+    [Windows.Automation.AutomationProperties]::SetAutomationId($rememberButton, 'Remember')
+    $okButton = New-Object Windows.Controls.Button
+    $okButton.Content = 'Next'; $okButton.Padding = '18,6'; $okButton.Margin = '0,0,8,0'; $okButton.IsDefault = $true
+    [Windows.Automation.AutomationProperties]::SetAutomationId($okButton, 'Next')
+    $cancelButton = New-Object Windows.Controls.Button
+    $cancelButton.Content = 'Cancel'; $cancelButton.Padding = '18,6'; $cancelButton.IsCancel = $true
+    [Windows.Automation.AutomationProperties]::SetAutomationId($cancelButton, 'Cancel')
+    $null = $buttons.Children.Add($rememberButton)
+    $null = $buttons.Children.Add($okButton)
+    $null = $buttons.Children.Add($cancelButton)
+    [Windows.Controls.Grid]::SetRow($buttons, 3)
+    $null = $grid.Children.Add($buttons)
+
+    $showNote = {
+        param([string]$Text, [string]$Caption, [string]$Icon = 'Information')
+        $null = Show-ConfirmDialog -Text $Text -Title $Caption -Buttons OK -Default OK -Icon $Icon
+    }
+
+    $updateIndexButton.Add_Click({
+        $window.Cursor = 'Wait'
+        try {
+            $null = Get-WinGetIndex -Force
+            & $describeIndex
+        }
+        catch { & $showNote $_.Exception.Message 'winget index' 'Warning' }
+        finally { $window.Cursor = 'Arrow' }
+    })
+
+    $rememberButton.Add_Click({
+        $picked = $dataGrid.SelectedItem
+        if (-not $picked) { & $showNote 'Nothing selected.' 'WinGet Search'; return }
+        try {
+            $added = Add-WinGetCatalogEntry -Name ([string]$picked.Name) -PackageId ([string]$picked.Id)
+            & $showNote $(if ($added) { "$($picked.Id) is on the front page now." } else { "$($picked.Id) was already on the front page." }) 'WinGet Search'
+        }
+        catch { & $showNote $_.Exception.Message 'WinGet Search' 'Warning' }
+    })
+
+    $okButton.Add_Click({ if ($dataGrid.SelectedItem) { $window.DialogResult = $true } })
+    $dataGrid.Add_MouseDoubleClick({ if ($dataGrid.SelectedItem) { $window.DialogResult = $true } })
+
+    $runSearch = {
+        $needle = $searchBox.Text
+        $window.Cursor = 'Wait'
+        $indexText.Text = 'Searching ... the first search fetches the index and can take a moment.'
+        # Die Meldung muss gezeichnet sein, bevor die Suche den Dispatcher belegt.
+        try { $window.Dispatcher.Invoke([Action]{}, 'Background') } catch { }
+        try {
+            $merged = @(& $OnSearch $needle)
+            $dataGrid.ItemsSource = $merged
+            if ($needle.Trim() -and $merged.Count -eq 0) {
+                & $showNote ("Nothing found for [$needle].`n`nThe index is searched by package id, name, moniker and publisher. Try another spelling or the vendor name.") 'WinGet Search'
+            }
+        }
+        catch { & $showNote $_.Exception.Message 'WinGet Search' 'Warning' }
+        finally { $window.Cursor = 'Arrow'; & $describeIndex }
+    }
+    $searchButton.Add_Click({ & $runSearch })
+    # Enter im Suchfeld sucht - es nimmt nicht "Next". Handled haelt die Eingabetaste vom Standardknopf fern.
+    $searchBox.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; & $runSearch } })
+
+    $window.Add_ContentRendered({ $searchBox.Focus(); $searchBox.SelectAll() })
+    $window.Content = $grid
+    if ($window.ShowDialog() -ne $true) { return $null }
+
+    $selected = $dataGrid.SelectedItem
+    $publisher = ''
+    if ($selected.Id) { $publisher = ([string]$selected.Id).Split('.')[0] }
+    return [pscustomobject]@{ Name = $selected.Name; Id = $selected.Id; Version = $selected.Version; Publisher = $publisher }
 }
 
 function Open-SelectDialog {

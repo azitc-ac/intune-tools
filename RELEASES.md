@@ -443,6 +443,40 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## WinGet-Suche mit lokalem Index (2026-10-11)
+
+Der Suchdialog hinter â€žFrom WinGet...â€œ fragte bei jeder Suche `Find-WinGetPackage` (Modul `Microsoft.WinGet.Client`,
+online, ohne Titelseite). Jetzt arbeitet er wie im SCCMAppHelper: `Functions\wingetindex.ps1` holt einmal am Tag
+den offiziellen Index (`source.msix` vom CDN, 20,5 MB â†’ `Config\winget-index\index.db`, nicht im Git) und liest
+ihn Ã¼ber `winsqlite3.dll`; `Config\catalog.json` ist die kuratierte Titelseite (28 Pakete, *Remember* ergÃ¤nzt
+sie); der Dialog hat Indexzeile, *Update index*, Hinweis bei â€žnichts gefundenâ€œ und AutomationIds. Das Modul
+bleibt als RÃ¼ckfall, wenn der Index nicht zu holen ist.
+
+Belegt:
+
+- **Gegen das echte CDN** (einmal, diese Maschine): Index 15.546 Pakete, Abruf samt Entpacken und PrÃ¼fen 1,5 s,
+  danach jede Suche ca. 150 ms (`putty`: 5 Treffer; `PuTTY.PuTTY`: 12 Versionen, neueste 0.85.0.0); alle 28 Ids der
+  Titelseite stehen im Index. Die Metadaten des Index sind `majorVersion=1`, `minorVersion=7`.
+- Dabei zwei Fehler gefunden, die im SCCMAppHelper-Original derselbe Code haben dÃ¼rfte (dort nicht geprÃ¼ft):
+  `COUNT(*)` lieferte â€ž49â€œ statt 15546 (ein Ergebnis aus genau einer Zeile zerfiel in der Pipeline in seine
+  Spalten, Ã¼brig blieb das erste Zeichen) und die Schemaversion kam als â€ž7.1â€œ statt â€ž1.7â€œ. Beides behoben und
+  vom Test erzwungen.
+- `Tests/Test-WinGetIndex.ps1` (neu, mit echter kleiner SQLite-Datenbank, ohne Netz), `Tests/Test-WinGetDialog.ps1`
+  (neu, 29 PrÃ¼fungen per UI Automation), PrÃ¼fung 38 in `Invoke-RepoChecks.ps1` (447 PrÃ¼fungen); alle 15
+  Testdateien und die PrÃ¼fungen grÃ¼n.
+- 19 Gegenproben (11 am Index, 8 am Dialog), jede schlug an (bei einer brach der Lauf ab, ohne FAIL-Zeile, Exit 1): Zeilen-Komma, Schema-Reihenfolge, kaputter Download rÃ¤umt nicht auf,
+  AltersprÃ¼fung, Apostroph-Maskierung, Reihenfolge kuratiert/Index, Version aus dem Index, Herausgeber-Suche,
+  JSON-Maskierung, Versionssortierung, Warnung beim Modul-RÃ¼ckfall, Remember, Publisher, Return-Suche,
+  AutomationId, Meldungen bei keinem Treffer / Fehler / ohne Auswahl, Titelseite; dazu fÃ¼nf fÃ¼r PrÃ¼fung 38.
+
+Nicht belegt:
+
+- **Return im Suchfeld:** belegt ist, dass das KeyDown-Ereignis sucht; dass `Handled` die Eingabetaste vom
+  Standardknopf â€žNextâ€œ fernhÃ¤lt, lÃ¤sst sich ohne Vordergrundfenster nicht prÃ¼fen (echte Tastatur).
+- Der Dialog wurde nicht von Hand bedient, nur per UI Automation; der erste Abruf des Index blockiert das Fenster
+  einen Moment (Meldung â€žSearching ...â€œ ist vorher gezeichnet).
+- Kein Download der Installer (Hash, Signatur): bewusst nicht Ã¼bernommen, das Paket ruft zur Laufzeit
+  `winget install` auf. Als Idee fÃ¼r fixe Versionen vorgemerkt.
 ## Stufe 5: Apps, die nur in Intune liegen (2026-10-11)
 
 Das Inventar kannte nur Definitionen und Pakete. Jetzt hat auch jede App im Tenant, zu der es hier weder

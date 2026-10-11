@@ -635,7 +635,8 @@ foreach ($p in $parsed.Values) {
     }, $true)
     foreach ($r in $requests) {
         $fn = & $enclosingFunction $r
-        if ($fn -ne 'Resolve-PackageLogo') {
+        # Zweiter erlaubter Abruf: der winget-Index (Save-WinGetIndexSource, Pruefung 38) - die einzige Naht, die Tests ersetzen.
+        if ($fn -ne 'Resolve-PackageLogo' -and $fn -ne 'Save-WinGetIndexSource') {
             Add-Failure "LogoOnePath" ("{0}:{1} Invoke-WebRequest in '{2}' - Logos laufen über Resolve-PackageLogo" -f `
                 $p.File.Name, $r.Extent.StartLineNumber, $fn)
         }
@@ -1565,6 +1566,75 @@ if ($functionsFile) {
 if (Test-Path -LiteralPath $templatePath) {
     if ((Get-Content -LiteralPath $templatePath -Raw) -notmatch '-Notes "Created by IntuneWin32Helper') {
         Add-Failure "ForeignAppsProtected" "deploy_template.ps1 schreibt den Vermerk 'Created by IntuneWin32Helper' nicht mehr (Add-IntuneWin32App -Notes) - das Inventar hielte alle neuen Apps fuer fremd"
+    }
+}
+# ---------------------------------------------------------------------------
+# 38) Die WinGet-Suche (Functions\wingetindex.ps1, Muster aus SCCMAppHelper): der Startpfad laedt die
+#     Datei; der Dialog bleibt per UI Automation bedienbar (kein [MessageBox]::Show, das UIPI fuer
+#     Tests unbedienbar macht) und fragt das Modul nur als Rueckfall in Search-WinGetCatalog; die
+#     kuratierte Liste Config\catalog.json ist gueltig und der lokale Index nicht im Repo.
+# ---------------------------------------------------------------------------
+$checked++
+$startFile38 = $parsed.Values | Where-Object { $_.File.Name -eq 'start-IntuneWin32Helper.ps1' } | Select-Object -First 1
+$indexFile38 = $parsed.Values | Where-Object { $_.File.Name -eq 'wingetindex.ps1' } | Select-Object -First 1
+if (-not $indexFile38) { Add-Failure "WinGetSearch" "Functions\wingetindex.ps1 fehlt" }
+if ($startFile38 -and $startFile38.Ast.Extent.Text -notmatch 'wingetindex\.ps1') {
+    Add-Failure "WinGetSearch" "start-IntuneWin32Helper.ps1 laedt Functions\wingetindex.ps1 nicht - der Suchdialog liefe ins Leere"
+}
+if ($functionsFile) {
+    $dlg38 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Show-WinGetSearchDialog' }, $true) | Select-Object -First 1
+    if (-not $dlg38) { Add-Failure "WinGetSearch" "Show-WinGetSearchDialog fehlt" }
+    else {
+        if ($dlg38.Extent.Text -match 'MessageBox') {
+            Add-Failure "WinGetSearch" "Show-WinGetSearchDialog nutzt [MessageBox] - Hinweise gehen ueber Show-ConfirmDialog, sonst ist der Dialog per UI Automation nicht zu bedienen"
+        }
+        if ($dlg38.Extent.Text -match 'Find-WinGetPackage') {
+            Add-Failure "WinGetSearch" "Show-WinGetSearchDialog ruft Find-WinGetPackage selbst - gesucht wird ueber Search-WinGetCatalog (Index zuerst, Modul nur als Rueckfall)"
+        }
+    }
+}
+if ($indexFile38) {
+    $callers38 = @($indexFile38.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Find-WinGetPackage' }, $true))
+    foreach ($call in $callers38) {
+        $owner = $call.Parent
+        while ($owner -and $owner -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $owner = $owner.Parent }
+        if (-not $owner -or $owner.Name -ne 'Search-WinGetCatalog') {
+            Add-Failure "WinGetSearch" ("wingetindex.ps1:{0} Find-WinGetPackage in '{1}' - das Modul wird nur in Search-WinGetCatalog als Rueckfall gefragt" -f $call.Extent.StartLineNumber, $(if ($owner) { $owner.Name } else { '<Skript>' }))
+        }
+    }
+}
+if ($indexFile38) {
+    # Der Abruf des Index hat genau eine Stelle - die Naht, die der Test ersetzt (kein Netz im Test).
+    $web38 = @($indexFile38.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Invoke-WebRequest' }, $true))
+    foreach ($call in $web38) {
+        $owner = $call.Parent
+        while ($owner -and $owner -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $owner = $owner.Parent }
+        if (-not $owner -or $owner.Name -ne 'Save-WinGetIndexSource') {
+            Add-Failure "WinGetSearch" ("wingetindex.ps1:{0} Invoke-WebRequest ausserhalb von Save-WinGetIndexSource - der Abruf waere im Test nicht ersetzbar" -f $call.Extent.StartLineNumber)
+        }
+    }
+}
+$catalogPath38 = Join-Path (Join-Path $RepoRoot "Config") "catalog.json"
+if (-not (Test-Path -LiteralPath $catalogPath38)) { Add-Failure "WinGetSearch" "Config\catalog.json fehlt - die Titelseite des Suchdialogs waere leer" }
+else {
+    try {
+        $catalog38 = Get-Content -LiteralPath $catalogPath38 -Raw | ConvertFrom-Json
+        $entries38 = @($catalog38.packages)
+        if ($entries38.Count -eq 0) { Add-Failure "WinGetSearch" "Config\catalog.json enthaelt keine Pakete" }
+        foreach ($e in $entries38) {
+            if ([string]::IsNullOrWhiteSpace([string]$e.name) -or [string]$e.packageId -notmatch '^\S+\.\S+$') {
+                Add-Failure "WinGetSearch" ("Config\catalog.json: Eintrag '{0}' / '{1}' hat keinen Namen oder keine gueltige Paket-Id (Herausgeber.Paket)" -f $e.name, $e.packageId)
+            }
+        }
+        foreach ($g in ($entries38 | Group-Object packageId | Where-Object { $_.Count -gt 1 })) {
+            Add-Failure "WinGetSearch" ("Config\catalog.json: Paket-Id '{0}' kommt {1}x vor" -f $g.Name, $g.Count)
+        }
+    }
+    catch { Add-Failure "WinGetSearch" ("Config\catalog.json ist kein gueltiges JSON: {0}" -f $_.Exception.Message) }
+}
+if (Test-Path -LiteralPath $gitignorePath) {
+    if ((Get-Content -LiteralPath $gitignorePath -Raw) -notmatch '(?m)^Config/winget-index/\s*$') {
+        Add-Failure "WinGetSearch" ".gitignore schliesst Config/winget-index/ nicht aus - der lokale Index (einige zehn MB) kaeme ins Repo"
     }
 }
 # ---------------------------------------------------------------------------

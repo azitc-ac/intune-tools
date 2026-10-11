@@ -18,6 +18,7 @@ if (Test-Path -LiteralPath $versionFile) {
 # Funktionen zuerst laden: Protokoll und Konfiguration laufen ueber gemeinsame
 # Helfer (Start-ToolTranscript / Get-ToolConfig), nicht ueber eigene Pfade.
 . "$rootDir\functions\functions.ps1"
+. "$rootDir\functions\wingetindex.ps1"
 
 $null = Start-ToolTranscript -RootDir $rootDir
 

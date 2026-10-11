@@ -7,3 +7,6 @@ Logs/
 
 # Sicherungen, die Update-DeployScript beim Nachziehen alter Skripte anlegt
 *.bak
+
+# Der lokale winget-Index (einmal am Tag vom CDN geholt, einige zehn MB)
+Config/winget-index/

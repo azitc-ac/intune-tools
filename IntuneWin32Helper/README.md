@@ -101,6 +101,15 @@ with a definition, a folder not named `<Name> - <Version>`, a folder without `de
 anything outside `packetRoot`. Use *Show: Package without definition* and select all to clean up in
 one go.
 
+**WinGet search.** *From WinGet...* in the editor opens a search dialog (pattern from SCCMAppHelper). The front
+page is the curated list `Config\catalog.json` (name and `packageId`); the search box looks up package id, name,
+moniker and publisher in the official winget index, which the tool keeps in `Config\winget-index\` (one download
+of `source.msix` from `cdn.winget.microsoft.com`, about 20 MB, refreshed once a day; the line under the list shows
+how many packages it holds and when it was fetched, *Update index* fetches it again). That makes the search a
+local query - about 150 ms - and independent of the `Microsoft.WinGet.Client` module; the module is only asked
+when the index cannot be fetched or read. *Remember* adds the selected package to `catalog.json`. The index is
+read through `winsqlite3.dll`, which ships with Windows 10 / Server 2016 and later; nothing is installed.
+
 **Add, New version and Edit** open one editor. The facts about the row (package folder, template,
 Intune state, next step) are read-only at the top; the fields below are grouped (Application, Source,
 Installation, Intune), label on the left, field on the right. `Architecture` and `MinimumOS` are lists
@@ -206,7 +215,8 @@ update result in the template), or an unguarded delete in Intune (`Remove-Intune
 `Remove-TenantWin32Apps`, no read-back after deleting, no question before deleting, a question that does
 not default to No, Rebuild deleting before building, the loop deleting directly), a fixed wait or a slow module query
 back in the build, or foreign Intune apps no longer protected from Retire (or the note that identifies the tool's
-own apps no longer written).
+own apps no longer written), the WinGet search not loaded at start, an unusable `Config\catalog.json`, the local index
+not excluded from git, a `[MessageBox]` in the search dialog, or a second place that downloads the index.
 
 Each check corresponds to a bug this tool already had, so re-introducing one turns the
 check red.
@@ -215,6 +225,8 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 
 | Test | What it proves |
 | --- | --- |
+| `Test-WinGetIndex.ps1` | the local winget index with a real (small) SQLite database: update takes `index.db` out of the msix and counts the packages right (a one-row result must not fall apart into its columns), reads the schema as major.minor, a broken download keeps the working index, fetched only when missing or older than a day, search by id / name / moniker / publisher (also one hit, an apostrophe, newest version first, `0.10` before `0.9`), curated hits on top with the version from the index, fallback to the module, writing `catalog.json` |
+| `Test-WinGetDialog.ps1` | the search dialog through UI Automation: every control has an AutomationId, the curated list is the front page, Search / Return search, no hits and a failing search are reported, Remember writes the package into `catalog.json` (and says "already there"), Next returns name / id / version / publisher, Cancel nothing |
 | `Test-Prereqs.ps1` | `check-prereqs` finds the modules in the module path without the slow `Get-InstalledModule` query, checks once per process (every `deploy.ps1` ran it again), installs only what is missing |
 | `Test-IntuneOnly.ps1` | apps only in Intune get a row, the tool note tells "created by this tool" from "foreign" (one note in a duplicate is enough, a note without version counts), a defined app never gets a second row, foreign apps are never planned for Retire |
 | `Test-TenantRead.ps1` | the tenant list and the assignment count are read straight from Graph (the module's filtered list lagged behind new apps and its assignment cmdlet missed an "all users" assignment): all pages, Win32 and catalog apps only, an error or a missing token means "not read", not "empty" / "0" |

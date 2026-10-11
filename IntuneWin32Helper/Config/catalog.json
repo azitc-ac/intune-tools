@@ -1,0 +1,34 @@
+﻿{
+    "comment": "Front page of the WinGet search. packageId is the winget-pkgs identifier (the Id that goes into ProgramID). Anything not listed here is reachable through the search box; Remember adds to this list.",
+    "packages": [
+        { "name": "7-Zip",                        "packageId": "7zip.7zip" },
+        { "name": "Notepad++",                    "packageId": "Notepad++.Notepad++" },
+        { "name": "VLC media player",             "packageId": "VideoLAN.VLC" },
+        { "name": "Google Chrome",                "packageId": "Google.Chrome" },
+        { "name": "Mozilla Firefox",              "packageId": "Mozilla.Firefox" },
+        { "name": "Adobe Acrobat Reader",         "packageId": "Adobe.Acrobat.Reader.64-bit" },
+        { "name": "PDF24 Creator",                "packageId": "geeksoftwareGmbH.PDF24Creator" },
+        { "name": "WinSCP",                       "packageId": "WinSCP.WinSCP" },
+        { "name": "PuTTY",                        "packageId": "PuTTY.PuTTY" },
+        { "name": "Git",                          "packageId": "Git.Git" },
+        { "name": "Greenshot",                    "packageId": "Greenshot.Greenshot" },
+        { "name": "KeePass",                      "packageId": "DominikReichl.KeePass" },
+        { "name": "Visual Studio Code",           "packageId": "Microsoft.VisualStudioCode" },
+        { "name": "PowerShell",                   "packageId": "Microsoft.PowerShell" },
+        { "name": "PowerToys",                    "packageId": "Microsoft.PowerToys" },
+        { "name": "SQL Server Management Studio", "packageId": "Microsoft.SQLServerManagementStudio" },
+        { "name": "Remote Desktop Manager",       "packageId": "Devolutions.RemoteDesktopManager" },
+        { "name": "TeamViewer",                   "packageId": "TeamViewer.TeamViewer" },
+        { "name": "Zoom",                         "packageId": "Zoom.Zoom" },
+        { "name": "Process Explorer",             "packageId": "Microsoft.Sysinternals.ProcessExplorer" },
+        { "name": "Sysinternals Suite",           "packageId": "Microsoft.Sysinternals.Suite" },
+        { "name": "Windows Terminal",             "packageId": "Microsoft.WindowsTerminal" },
+        { "name": "Microsoft Edge",               "packageId": "Microsoft.Edge" },
+        { "name": "Foxit PDF Reader",             "packageId": "Foxit.FoxitReader" },
+        { "name": "IrfanView",                    "packageId": "IrfanSkiljan.IrfanView" },
+        { "name": "WinMerge",                     "packageId": "WinMerge.WinMerge" },
+        { "name": "Wireshark",                    "packageId": "WiresharkFoundation.Wireshark" },
+        { "name": "mRemoteNG",                    "packageId": "mRemoteNG.mRemoteNG" }
+    ]
+}
+
