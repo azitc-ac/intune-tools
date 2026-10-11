@@ -5,7 +5,7 @@ Die `IntuneWin32Helper/README.md` sagt, **wie das Tool funktioniert**; `RELEASES
 ihrem Beleg**; diese Datei sagt, **wo es steht, was im Feld gelaufen ist, was offen ist und was entschieden ist**.
 Sie fasst zusammen und verweist, sie ersetzt `RELEASES.md` nicht.
 
-Stand: 2026-10-11
+Stand: 2026-10-12
 
 Zwei Prüfungen halten die Datei ehrlich (`Tests/Invoke-RepoChecks.ps1`, Prüfung 44): jeder Abschnitt von `RELEASES.md` mit
 „Nicht belegt“ oder einem offenen Kästchen ist unten über eine Quellenzeile erwähnt (das Wort „Quelle“, ein Doppelpunkt, dann
@@ -19,7 +19,9 @@ IntuneWin32Helper **2.1.0** (`IntuneWin32Helper/VERSION`). Der letzte Rückkehrp
 (Create/Skip/Update statt blindes Anlegen), Retire und Rebuild, Apps, die nur in Intune liegen, die WinGet-Suche mit lokalem
 Index, „Check tenant“, „From installer…“, die Aufteilung von `functions.ps1` in 14 Dateien und – zuletzt – der Zuschnitt der Knöpfe
 nach den drei Stufen einer App (Definition, Paket, Intune) mit **einem** „Publish to Intune“, das nach Zustand anlegt oder die vorhandene App
-samt Definition aktualisiert (ohne Rebuild) dazugekommen. Das meiste davon ist
+samt Definition aktualisiert (ohne Rebuild) dazugekommen. Seit 2026-10-12 geht der Weg strikt von links nach rechts: Ein Paket, das fehlt
+oder nicht zu Definition und Vorlage passt, wird mit *Build package* gebaut (nicht von Publish erneuert, `Update-DeployScript` ist weg); bis dahin
+sind *Publish* und *Remove from Intune* gesperrt. Das meiste davon ist
 im Feld gegen den Test-Tenant gelaufen (nächster Abschnitt), manches nur gegen Tests.
 
 `main` ist strukturell grün (Repo-Prüfungen, 19 Testdateien, UI-Prüfung des Hauptfensters per UI Automation). Ein grüner Lauf ist
@@ -33,6 +35,7 @@ Alles gegen `zarenko.onmicrosoft.com` (Test-Tenant, Testapps „ZZ IW32H …“,
 | --- | --- |
 | Installer-Engines NSIS und Burn auf einem Client, Inno mit Fund (`/ALLUSERS`) | Quelle: IntuneWin32Helper 2.0.0 — im Feld gelaufener Stand |
 | Hauptfenster → Build → Deploy, eine App | Quelle: Offene Feldprüfung: Hauptfenster (Stufe 1, 2026-10-09) |
+| Definition → Build → Publish von links nach rechts: Publish überspringt ein Paket, das gebaut werden muss (Definition geändert, ältere Vorlage); nach dem Bau Update und `up to date` | Quelle: Ein Weg: „Publish to Intune“, Knöpfe nach Zustand (2026-10-11) |
 | „up to date“ nur mit Stempel im Vermerk der Intune-App (Anlegen, Update, App ohne Stempel → `publish (updates the app in Intune)`) | Quelle: Ein Weg: „Publish to Intune“, Knöpfe nach Zustand (2026-10-11) |
 | Create, Skip, Update (Zuweisung bleibt), Erneuern, Retire, Rebuild, Dubletten | Quelle: Feldprüfung Stufe 3 und 4 gegen den Test-Tenant (2026-10-10) — Ergebnis |
 | Mehrere Apps in einem Deploy, Zuweisungsarten, Tenant-Wechsel, Geschwindigkeit | Quelle: Feldprüfung, zweiter Teil: Mehrfach-Deploy, Zuweisungsarten, Tenant-Wechsel, Geschwindigkeit (2026-10-11) |

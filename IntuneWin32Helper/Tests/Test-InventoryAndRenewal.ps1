@@ -48,39 +48,27 @@ try {
         return $path
     }
 
-    # 1) Veralteter Stempel -> wird erneuert, Werte bleiben, .bak entsteht
-    $old = New-Package 'Outdated' '# ToolTemplateFingerprint: 000000000000'
-    if (-not ([IO.File]::ReadAllText($old) -match '\$Tenant')) { $problems += "setup: package does not know -Tenant, test would prove nothing" }
-    $r = Update-DeployScript -DeployScriptPath $old -RootDir $rootDir -ToolVersion '0.0.2' 6>$null
-    $t = [IO.File]::ReadAllText($old)
-    if ($r -ne $true)                                 { $problems += "outdated: Update-DeployScript returned '$r', expected True" }
-    if (-not (Test-Path -LiteralPath "$old.bak"))     { $problems += "outdated: no deploy.ps1.bak" }
-    if ((Get-PackageTemplateFingerprint -DeployScriptPath $old) -ne $current) { $problems += "outdated: stamp after renewal is not the current one" }
-    if ($t.Contains('#TPLFP#'))                       { $problems += "outdated: placeholder #TPLFP# left in the script" }
-    foreach ($kept in '$Architecture = "arm64"', '"W11_22H2"', '{11111111-2222-3333-4444-555555555555}', '$PackageName = "Outdated"') {
-        if (-not $t.Contains($kept)) { $problems += "outdated: value lost on renewal: $kept" }
-    }
-    # Erneuert wird aus den Werten des alten Skripts, nicht aus Apps.csv: der Stempel der Definition bleibt, wie er war.
-    # (Sonst sah ein Paket, das vor einer Aenderung der Definition gebaut wurde, nach dem Erneuern wieder "aktuell" aus.)
-    $expectedStamp = Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = 'Outdated'; Version = '1.0' })
-    if ((Get-PackageDefinitionFingerprint -DeployScriptPath $old) -ne $expectedStamp) { $problems += "outdated: the definition stamp changed on renewal" }
-    if ($t.Contains('#DEFFP#')) { $problems += "outdated: placeholder #DEFFP# left in the script" }
-
-    # 2) Ohne Stempel -> wird erneuert
+    # 1-3) Die Vorlage eines Pakets: veralteter Stempel, kein Stempel, aktueller Stempel. Ein Paket, dessen Vorlage nicht
+    #      die aktuelle ist, wird nicht an Ort und Stelle erneuert (Update-DeployScript ist weg), sondern mit Build package
+    #      neu gebaut: das Inventar nennt den Grund (BuildReason) und Next, die Knoepfe rechts davon sind gesperrt.
+    $old  = New-Package 'Outdated' '# ToolTemplateFingerprint: 000000000000'
     $unst = New-Package 'Unstamped' ''
-    $r = Update-DeployScript -DeployScriptPath $unst -RootDir $rootDir -ToolVersion '0.0.2' 6>$null
-    if ($r -ne $true) { $problems += "unstamped: Update-DeployScript returned '$r', expected True" }
-
-    # 3) Aktueller Stempel -> unberuehrt (auch von Hand angepasst)
-    $cur = New-Package 'Current' ("# ToolTemplateFingerprint: $current")
-    Add-Content -LiteralPath $cur -Value '# von Hand angepasst'
-    $before = [IO.File]::ReadAllBytes($cur)
-    $r = Update-DeployScript -DeployScriptPath $cur -RootDir $rootDir -ToolVersion '0.0.2' 6>$null
-    $after = [IO.File]::ReadAllBytes($cur)
-    if ($r -ne $false) { $problems += "current: Update-DeployScript returned '$r', expected False" }
-    if ([Convert]::ToBase64String($before) -ne [Convert]::ToBase64String($after)) { $problems += "current: script was changed" }
-    if (Test-Path -LiteralPath "$cur.bak") { $problems += "current: a .bak was written" }
-
+    $cur  = New-Package 'Current' ("# ToolTemplateFingerprint: $current")
+    if (-not ([IO.File]::ReadAllText($old) -match '\$Tenant')) { $problems += "setup: package does not know -Tenant, test would prove nothing" }
+    if (Get-Command -Name Update-DeployScript -ErrorAction SilentlyContinue) { $problems += 'Update-DeployScript exists again: a package is only made by Build package' }
+    $tplDefs = @('Outdated', 'Unstamped', 'Current') | ForEach-Object { [pscustomobject]@{ DisplayName = $_; Version = '1.0' } }
+    $tplInv = @(Get-AppInventory -Definitions $tplDefs -PacketRoot $work -RootDir $rootDir -IntuneApps @() 6>$null)
+    $tplRow = @{}; foreach ($x in $tplInv) { $tplRow[$x.AppName] = $x }
+    if ($tplRow['Outdated'].Template -ne 'outdated' -or $tplRow['Outdated'].Status -ne 'Package, template outdated') { $problems += "outdated: Template '$($tplRow['Outdated'].Template)' Status '$($tplRow['Outdated'].Status)'" }
+    if ($tplRow['Unstamped'].Template -ne 'unstamped' -or $tplRow['Unstamped'].Status -ne 'Package, template unstamped') { $problems += "unstamped: Template '$($tplRow['Unstamped'].Template)' Status '$($tplRow['Unstamped'].Status)'" }
+    foreach ($n in 'Outdated', 'Unstamped') {
+        if ($tplRow[$n].Next -ne 'build package, then publish' -or -not $tplRow[$n].BuildReason) { $problems += "$n : Next '$($tplRow[$n].Next)' BuildReason '$($tplRow[$n].BuildReason)', expected a build first" }
+        $st = Get-InventoryActionState -Rows @($tplRow[$n])
+        if (-not $st.Build -or $st.Publish -or $st.Remove) { $problems += "$n : Build=$($st.Build) Publish=$($st.Publish) Remove=$($st.Remove), expected only Build" }
+    }
+    if ($tplRow['Current'].Template -ne 'current' -or $tplRow['Current'].BuildReason) { $problems += "current: Template '$($tplRow['Current'].Template)' BuildReason '$($tplRow['Current'].BuildReason)'" }
+    $stCur = Get-InventoryActionState -Rows @($tplRow['Current'])
+    if ($stCur.Build -or -not $stCur.Publish) { $problems += "current: Build=$($stCur.Build) Publish=$($stCur.Publish), expected Publish only" }
     # 4) Inventar: Inhaltsloser Eintrag faellt auf
     # Was die Zeile "up to date" nennen darf: nur eine App, deren Vermerk den Stempel der Definition von heute traegt.
     # Eine App ohne Stempel (vom alten Werkzeug, von Hand) oder mit dem Stempel einer anderen Definition ist es nicht.
@@ -88,6 +76,8 @@ try {
     $null = New-Package 'IntNoStamp' ("# ToolTemplateFingerprint: $current")
     $null = New-Package 'IntOldStamp' ("# ToolTemplateFingerprint: $current")
     $null = New-Package 'IntForeignNote' ("# ToolTemplateFingerprint: $current")
+    $null = New-Package 'Ghost' ("# ToolTemplateFingerprint: $current")
+    $null = New-Package 'Twice' ("# ToolTemplateFingerprint: $current")
     $apps = @(
         [pscustomobject]@{ displayName = 'Current';  displayVersion = '1.0'; publishingState = 'published';    committedContentVersion = '1'; notes = (Format-IntuneAppNotes -ToolVersion '2.1.1' -DefinitionFingerprint (& $stampOf 'Current')) }
         [pscustomobject]@{ displayName = 'IntNoStamp';     displayVersion = '1.0'; publishingState = 'published'; committedContentVersion = '1'; notes = 'Created by IntuneWin32Helper 2.0.9' }
@@ -139,5 +129,5 @@ if ($problems.Count -gt 0) {
     foreach ($pr in $problems) { [Console]::WriteLine("FAIL: $pr") }
     exit 1
 }
-[Console]::WriteLine("Inventory and renewal: outdated/unstamped renewed with values kept, current untouched, content-less entry flagged. PASS")
+[Console]::WriteLine("Inventory: a package from an older template must be built again, a current one is publishable, an app in Intune is up to date only with the stamp of the definition, content-less entry flagged. PASS")
 exit 0

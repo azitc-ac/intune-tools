@@ -461,11 +461,41 @@ hat drei Stufen – Definition, Paket, Intune – und die Knöpfe heißen jetzt 
 - **Stempel der Definition:** `Build-AppPackage` schreibt `# ToolDefinitionFingerprint:` in `deploy.ps1` (Hash über die Felder, die in Paket und App
   eingehen). Das Inventar zeigt `Package, definition changed` (Zeile nach dem Bau geändert) und `Package, built before the definition stamp` (älteres
   Paket); beides → `Next: build package, then publish`, und Publish überspringt die Zeile mit Grund – sonst ginge der alte Stand nach Intune.
-  Erneuern aus der Vorlage (`Update-DeployScript`) behält den alten Stempel.
+  (Das Erneuern aus der Vorlage, `Update-DeployScript`, gibt es seit dem Nachtrag „Von links nach rechts“ unten nicht mehr.)
 - **Ausgegraut nach Zustand:** `Get-InventoryActionState` (reine Funktion) liefert für die markierten Zeilen, welcher Knopf geht; ein
   ausgegrauter *Publish*/*Remove* nennt im Tooltip den Grund. Prüfung 46: das Fenster hat keine eigene Regel daneben.
-- **Neue Texte in „Next step“:** `publish`, `publish (builds the package first)`, `publish (new version)`, `build package, then publish`.
-- **„up to date“ nur mit Beleg (Nachtrag, gleicher Tag):** „up to date“ stand bei einem neu gebauten 7-Zip, dessen App in Intune noch vom alten
+- **Neue Texte in „Next step“:** `publish`, `publish (new version)`, `publish (updates the app in Intune)`, `build package, then publish`
+  (`publish (builds the package first)` und `publish (renews the package from the template)` gibt es nicht mehr, siehe Nachtrag unten).
+- **Von links nach rechts (Nachtrag 2026-10-12):** Auslöser: „im Fall `package, template outdated` soll erst ein Build erforderlich sein, der das
+  `deploy.ps1` erneuert – es ist nicht sinnvoll, das in die nachgelagerte Aktion Publish zu packen. Definition → Build package → Publish to Intune“, und
+  „bei `definition changed` soll außer Build package nach rechts hin alles ausgegraut sein; danach Build package ausgegraut und Publish das einzig
+  Anwählbare“. Umgesetzt:
+  - **`BuildReason` je Inventarzeile** (kein Paket / Definition nach dem Bau geändert / Paket ohne Definitions-Stempel / Paket aus älterer oder ohne
+    Vorlage): hat die Zeile einen, ist `Build package` der einzige Knopf rechts der Definition, `Publish to Intune` und `Remove from Intune` sind gesperrt
+    (Tooltip: „run Build package first – <Grund>“), `Next step` heißt `build package, then publish`. Ohne `BuildReason` ist `Build package` gesperrt und
+    `Publish` der nächste Schritt; ist die App in Intune schon `up to date`, ist auch `Publish` gesperrt. `Get-BuildTargets` wählt die Zeilen für den Bau
+    (Knopf und Aktion fragen dieselbe Funktion); ein Paket auf dem Stand wird nicht neu gebaut.
+  - **Publish baut und erneuert nichts mehr:** `Invoke-InventoryDeploy` baut keine fehlenden Pakete, `Invoke-PackageDeploy` erneuert kein `deploy.ps1`;
+    `Get-DeployPlan` setzt eine Zeile mit `BuildReason` auf Skip („… – run Build package first“). `Update-DeployScript` ist **entfernt** (samt der Sicherungen
+    `deploy.ps1.bak` / `detection.ps1.bak`): ein Paket entsteht nur in `Build-AppPackage`, `deploy.ps1` und `detection.ps1` kommen mit dem Bau aus der
+    Definition und der aktuellen Vorlage. Prüfungen: 30 (`Update-DeployScript` darf nicht zurückkehren), 32 (`Invoke-InventoryDeploy`, `Invoke-PackageDeploy`
+    und `Get-DeployPlan` rufen keinen Paket-Hersteller), 46 (Build-Aktion und -Knopf über `Get-BuildTargets`), 47 (`Write-DeployScript` nur in `Build-AppPackage`).
+  - **Drei Zonen im Fenster:** Definition (links), Paket (Mitte), Intune (rechts) mit Überschrift und Farbe (grau, grün, blau); die Spalte `Package` hat
+    einen eigenen grünen Kopf mit Trennlinie, wie `Intune` blau. Open folder, Remove orphan folder, Settings und Close stehen in einer Zeile darunter.
+    `Test-MainWindowUi.ps1` prüft die Reihenfolge über die Positionen der Knöpfe.
+  - **Im Feld belegt (Test-Tenant, Test-App „ZZ IW32H Feldtest“, am Ende gelöscht, 0 Apps dieses Namens):** Definition ohne Paket → `Definition only` /
+    `build package, then publish`; nach *Build* `publish`; *Publish* legt an (eine Frage); Definition geändert → `Package, definition changed`,
+    `IntuneDefinition=changed`, *Publish* meldet „Skip … run Build package first“ („Nothing can be published“, nichts hochgeladen); nach *Build* →
+    `publish (updates the app in Intune)`; *Publish* aktualisiert (Herausgeber „ZZ Changed Publisher“ in Intune), danach `up to date`. Vorlage geändert →
+    `Package, template outdated`, *Publish* Skip („built from an older template – run Build package first“); nach *Build* wieder `up to date`.
+    Gegenproben (8 eingebaute Fehler: Vorlage ohne Bauzwang, Publish/Remove ohne `BuildReason`, Build bei aktuellem Paket, Plan ohne Skip, Publish bei
+    `up to date`, Build-Aktion ohne `Get-BuildTargets`, `Get-BuildTargets` ohne `BuildReason`): zunächst überlebte die Build-Aktion (ihre Auswahl war nicht
+    getestet) – `Get-BuildTargets` und die Prüfung 46 kamen dazu, danach wurden alle erkannt.
+    **Nicht belegt:** die neue Knopfleiste und der farbige Spaltenkopf von Hand (die Sitzung war getrennt, nur per UI Automation geprüft); `main-window.png` im
+    README zeigt noch die alte Leiste; ein Bau und eine Zuweisung zusammen (die Zuweisung blieb in diesem Lauf nicht geprüft – der Update-Zweig mit Zuweisung
+    ist am 2026-10-11 belegt); `Remove from Intune` ist bei einer Zeile mit `BuildReason` gesperrt, auch wenn dort Dubletten liegen (nach Vorgabe von links nach
+    rechts, die Dubletten lassen sich erst nach dem Bau entfernen).
+- **„up to date“ nur mit Beleg (Nachtrag, 2026-10-11):** „up to date“ stand bei einem neu gebauten 7-Zip, dessen App in Intune noch vom alten
   Werkzeug stammte – das Inventar prüfte Paket gegen Definition und ob die App da ist, aber nie, ob die App in Intune der Definition entspricht
   (der Vermerk war nur „Created by IntuneWin32Helper“), und *Publish* war trotzdem frei. Jetzt schreibt `deploy.ps1` beim Anlegen **und** beim Update
   den Vermerk `Created by IntuneWin32Helper <Version>; definition <Stempel>` (`Format-IntuneAppNotes`, `-Notes $AppNotes` an `Add-IntuneWin32App` und

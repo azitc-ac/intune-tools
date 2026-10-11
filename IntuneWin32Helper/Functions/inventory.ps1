@@ -105,7 +105,11 @@ function Get-AppInventory {
                 # Stand der Definition in der App in Intune (Stempel im Vermerk): current | changed | unknown (App ohne
                 # Stempel, z. B. vom alten Werkzeug) | - (keine einzelne App mit Inhalt, oder nicht abgefragt)
                 IntuneDefinition  = '-'
-                Status     = ''
+                # Warum das Paket gebaut werden muss, bevor es weitergeht (leer: es muss nicht). Der Weg geht von links
+                # nach rechts - Definition, Paket, Intune: ist das Paket nicht auf dem Stand von Definition und Vorlage,
+                # ist alles rechts davon (Publish, Remove from Intune) gesperrt, bis Build package gelaufen ist.
+                BuildReason       = ''
+                Status    = ''
                 Intune      = $(if ($intuneChecked) { '-' } else { 'not checked' })
                 Next        = ''
                 FullPath    = ''
@@ -209,9 +213,22 @@ function Get-AppInventory {
                 else                                                                           { $row.IntuneDefinition = 'changed' }
             }
         }
+        # Muss das Paket neu gebaut werden? Nur eine Zeile mit Definition kann gebaut werden. Build package erzeugt den
+        # ganzen Ordner neu aus Definition und Vorlage - deploy.ps1 inklusive; Publish fasst das Paket nie an.
+        if ($row.HasDefinition) {
+            if (-not $row.HasPackage)                          { $row.BuildReason = 'there is no package yet' }
+            elseif ($row.PackageDefinition -eq 'changed')      { $row.BuildReason = 'the definition was changed after the package was built' }
+            elseif ($row.PackageDefinition -eq 'unknown')      { $row.BuildReason = 'the package was built before definitions were stamped' }
+            elseif ($row.Template -eq 'outdated')              { $row.BuildReason = 'the package was built from an older template' }
+            elseif ($row.Template -eq 'unstamped')             { $row.BuildReason = 'the package was built before templates were stamped' }
+        }
+
         # Der naechste sinnvolle Schritt folgt aus dem Zustand der Zeile.
         if ($row.IntuneOnly -and $row.Origin -eq 'foreign') {
             $row.Next = 'not created by this tool'
+        }
+        elseif ($row.BuildReason) {
+            $row.Next = 'build package, then publish'
         }
         elseif ($emptyCount -gt 0) {
             # Zuerst: ein inhaltsloser Eintrag verdeckt sonst jeden anderen Befund.
@@ -220,19 +237,11 @@ function Get-AppInventory {
         elseif ($row.IntuneOnly) {
             $row.Next = $(if ($row.Intune -like 'yes (*') { 'check duplicates in Intune' } else { 'in Intune only - no definition or package here' })
         }
-        elseif ($row.Package -ne 'yes') {
-            # Publish baut ein fehlendes Paket selbst.
-            $row.Next = 'publish (builds the package first)'
-        }
         elseif ($row.Definition -ne 'yes') {
             $row.Next = 'package without a row in Apps.csv'
         }
         elseif ($row.Intune -like 'yes (*') {
             $row.Next = 'check duplicates in Intune'
-        }
-        elseif ($row.PackageDefinition -eq 'changed' -or $row.PackageDefinition -eq 'unknown') {
-            # Das Paket spiegelt die Definition nicht (mehr): erst bauen, sonst ginge der alte Stand nach Intune.
-            $row.Next = 'build package, then publish'
         }
         elseif ($row.Intune -eq '-') {
             $row.Next = 'publish'
@@ -241,9 +250,6 @@ function Get-AppInventory {
             # Name vorhanden, Version nicht: Publish legt diese Version neu an,
             # die andere bleibt (sie hat ihre eigene Zeile oder wird von Hand entfernt).
             $row.Next = 'publish (new version)'
-        }
-        elseif ($row.Template -eq 'outdated' -or $row.Template -eq 'unstamped') {
-            $row.Next = 'publish (renews the package from the template)'
         }
         elseif ($row.IntuneDefinition -eq 'changed' -or $row.IntuneDefinition -eq 'unknown') {
             # Paket und Definition passen, die App in Intune nicht (oder es ist nicht zu sagen): Publish aktualisiert sie.
@@ -288,6 +294,16 @@ function Get-AppInventory {
     return @($order | ForEach-Object { $rows[$_] })
 }
 
+function Get-BuildTargets {
+    <#
+        Welche der markierten Zeilen Build package baut: die mit Definition, deren Paket fehlt oder nicht mehr zu
+        Definition und Vorlage passt (BuildReason). Ein Paket auf dem Stand bleibt, wie es ist. Der Knopf
+        (Get-InventoryActionState) und die Aktion im Hauptfenster fragen dieselbe Funktion.
+    #>
+    param($Rows = @())
+    return @(@($Rows) | Where-Object { $_ -and $_.HasDefinition -and [string]$_.BuildReason })
+}
+
 function Get-InventoryActionState {
     <#
         .SYNOPSIS
@@ -314,12 +330,16 @@ function Get-InventoryActionState {
     $withDefinition = @($rows | Where-Object { $_.HasDefinition })
     $one = ($rows.Count -eq 1)
 
+    # Der Weg geht von links nach rechts. Braucht das Paket einen Bau (BuildReason), ist alles rechts von
+    # Build package gesperrt; ist das Paket auf dem Stand, ist Build package gesperrt.
+    $needsBuild = @(Get-BuildTargets -Rows $rows)
+
     # Publish: je Zeile ein Grund, warum nicht (leer = geht)
     $whyNot = {
         param($row)
         if (-not ($row.HasDefinition -or $row.HasPackage)) { return 'there is no definition and no package here to publish' }
-        if ($row.HasPackage -and $row.HasDefinition -and [string]$row.PackageDefinition -eq 'changed') { return 'the package is older than the definition - run Build package first' }
-        if ($row.HasPackage -and $row.HasDefinition -and [string]$row.PackageDefinition -eq 'unknown') { return 'the package was built by an older version of the tool - run Build package once' }
+        if ($row.HasDefinition -and [string]$row.BuildReason) { return ('run Build package first - {0}' -f $row.BuildReason) }
+        if ($row.HasDefinition -and [string]$row.IntuneDefinition -eq 'current') { return 'the app in Intune is already up to date with the definition and the package' }
         if ([string]$row.Intune -like 'yes (*') { return 'the app is in Intune more than once - remove the duplicates first (Remove from Intune)' }
         if ([string]$row.Intune -eq 'no content') { return 'the entry in Intune has no content - remove it first (Remove from Intune)' }
         return ''
@@ -330,18 +350,33 @@ function Get-InventoryActionState {
     if ($rows.Count -eq 0) { $publishWhy = 'select an app first' }
     elseif ($publishable.Count -eq 0) { $publishWhy = [string](@($publishReasons | Where-Object { $_ })[0]) }
 
-    $removable = @($rows | Where-Object { ([string]$_.Intune -like 'yes*' -or [string]$_.Intune -eq 'no content') -and [string]$_.Origin -ne 'foreign' })
+    # Remove from Intune liegt rechts von Build package: bei einer Zeile, die erst gebaut werden muss, gesperrt.
+    $removable = @($rows | Where-Object { ([string]$_.Intune -like 'yes*' -or [string]$_.Intune -eq 'no content') -and [string]$_.Origin -ne 'foreign' -and -not ([string]$_.BuildReason) })
     $orphans = @($rows | Where-Object { $_.HasPackage -and -not $_.HasDefinition })
+
+    $buildWhy = ''
+    if ($rows.Count -eq 0) { $buildWhy = 'select an app first' }
+    elseif ($withDefinition.Count -eq 0) { $buildWhy = 'there is no definition to build from' }
+    elseif ($needsBuild.Count -eq 0) { $buildWhy = 'the package is already built from this definition and the current template - change the definition first if it should be built again' }
+
+    $removeWhy = ''
+    if ($rows.Count -eq 0) { $removeWhy = 'select an app first' }
+    elseif ($removable.Count -eq 0) {
+        $removeWhy = 'no app of this name and version in Intune that this tool may remove'
+        $stale = @($rows | Where-Object { [string]$_.BuildReason })
+        if ($stale.Count -gt 0) { $removeWhy = ('run Build package first - {0}' -f $stale[0].BuildReason) }
+    }
 
     [pscustomobject]@{
         Edit         = ($one -and $withDefinition.Count -eq 1)
         NewVersion   = ($one -and $withDefinition.Count -eq 1)
         Delete       = ($withDefinition.Count -gt 0)
-        Build        = ($withDefinition.Count -gt 0)
+        Build        = ($needsBuild.Count -gt 0)
+        BuildWhy     = $buildWhy
         Publish      = ($publishable.Count -gt 0)
         PublishWhy   = $publishWhy
         Remove       = ($removable.Count -gt 0)
-        RemoveWhy    = $(if ($rows.Count -eq 0) { 'select an app first' } elseif ($removable.Count -eq 0) { 'no app of this name and version in Intune that this tool may remove' } else { '' })
+        RemoveWhy    = $removeWhy
         RemoveFolder = ($orphans.Count -gt 0)
     }
 }

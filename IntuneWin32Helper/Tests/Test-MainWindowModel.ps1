@@ -79,7 +79,7 @@ try {
         if ($d.Status -ne 'Definition only')       { $problems += "DefOnly: Status '$($d.Status)'" }
         if (-not $d.HasDefinition -or $d.HasPackage) { $problems += "DefOnly: HasDefinition=$($d.HasDefinition) HasPackage=$($d.HasPackage)" }
         if ($d.Publisher -ne 'P1')                 { $problems += "DefOnly: Publisher '$($d.Publisher)'" }
-        if ($d.Next -ne 'publish (builds the package first)') { $problems += "DefOnly: Next '$($d.Next)'" }
+        if ($d.Next -ne 'build package, then publish' -or $d.BuildReason -notmatch 'no package yet') { $problems += "DefOnly: Next '$($d.Next)' BuildReason '$($d.BuildReason)'" }
         if (-not [object]::ReferenceEquals($d.DefinitionRecord, $defs[0])) { $problems += "DefOnly: DefinitionRecord is not the input record (edit/delete could not find the row again)" }
 
         $w = $row['WithPkg']
@@ -90,6 +90,14 @@ try {
 
         $o = $row['Old']
         if ($o.Status -ne 'Package, template outdated') { $problems += "Old: Status '$($o.Status)'" }
+        if ($o.Next -ne 'build package, then publish' -or $o.BuildReason -notmatch 'older template') { $problems += "Old: a package from an older template must be built again first: Next '$($o.Next)' BuildReason '$($o.BuildReason)'" }
+        # Echte Zeilen durch Get-InventoryActionState: Definition ohne Paket und Paket aus aelterer Vorlage - Build ja, Publish und Remove nein.
+        foreach ($name in 'DefOnly', 'Old') {
+            $st = Get-InventoryActionState -Rows @($row[$name])
+            if (-not $st.Build -or $st.Publish -or $st.Remove) { $problems += "$name : buttons Build=$($st.Build) Publish=$($st.Publish) Remove=$($st.Remove), expected Build only" }
+        }
+        $stW = Get-InventoryActionState -Rows @($row['WithPkg'])
+        if ($stW.Build -or -not $stW.Publish) { $problems += "WithPkg: a current package: Build=$($stW.Build) Publish=$($stW.Publish), expected Publish only" }
 
         $x = $row['Orphan']
         if ($x.Status -ne 'No definition')         { $problems += "Orphan: Status '$($x.Status)'" }

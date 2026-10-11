@@ -39,7 +39,7 @@ foreach ($value in @('true', 'TRUE', 'ja', '1')) {
     if ($c.Install -match 'Silent' -or $c.Uninstall -match 'Silent') { $problems += "interactive '$value': -DeployMode Silent suppresses every dialog" }
 }
 
-# Anlegen und Erneuern tragen den Wert weiter
+# Anlegen traegt den Wert ins Skript
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ('iw32h-cmdline-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $null = New-Item -ItemType Directory -Force -Path $work
 try {
@@ -51,12 +51,6 @@ try {
         $path = Join-Path $folder 'deploy.ps1'
         $expected = ('$Interactive = "{0}"' -f $case.Value)
         if (-not ([IO.File]::ReadAllText($path)).Contains($expected)) { $problems += "$($case.Name): written script lacks $expected" }
-        # veralteter Stempel -> Erneuern muss den Wert behalten
-        $t = [regex]::Replace([IO.File]::ReadAllText($path), '(?m)^#\s*ToolTemplateFingerprint:.*$', '# ToolTemplateFingerprint: 000000000000')
-        [IO.File]::WriteAllText($path, $t, (New-Object System.Text.UTF8Encoding $true))
-        $renewed = Update-DeployScript -DeployScriptPath $path -RootDir $rootDir -ToolVersion '0.0.2' 6>$null
-        if ($renewed -ne $true) { $problems += "$($case.Name): not renewed" }
-        if (-not ([IO.File]::ReadAllText($path)).Contains($expected)) { $problems += "$($case.Name): renewal lost $expected" }
     }
 }
 finally {
@@ -70,5 +64,5 @@ if ($problems.Count -gt 0) {
     foreach ($pr in $problems) { Write-Host "FAIL: $pr" }
     exit 1
 }
-Write-Host "Deploy command line: default silent without ServiceUI, Interactive=true with ServiceUI and without Silent, value survives renewal. PASS"
+Write-Host "Deploy command line: default silent without ServiceUI, Interactive=true with ServiceUI and without Silent, value is written into deploy.ps1. PASS"
 exit 0

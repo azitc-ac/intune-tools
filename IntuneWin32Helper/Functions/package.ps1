@@ -125,7 +125,7 @@ function Build-AppPackage {
 
     # für normale Pakete
     # kopieren von detect.ps1 und anpassen
-    # Gemeinsamer Pfad mit Update-DeployScript (Write-DetectionScript).
+    # Einziger Aufrufer von Write-DetectionScript.
     Write-Host "Writing detection.ps1 from template"
     $arpSearchName = Get-ArpSearchName -DisplayName $AppName -ArpName ([string]$App.ArpName)
     $null = Write-DetectionScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion -RootDir $RootDir `
@@ -172,7 +172,7 @@ function Build-AppPackage {
     $null = Resolve-PackageLogo -AppFolder $SourcePath -AppName $AppName -LogoUrl $App.logoURL -RootDir $RootDir
 
     #deploy template an App anpassen und kopieren
-    # Gemeinsamer Pfad mit Update-DeployScript - Anlegen und Erneuern nutzen EINE Quelle.
+    # Einziger Aufrufer von Write-DeployScript: ein Paket entsteht nur beim Bauen.
     $null = Write-DeployScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion `
         -Publisher $AppPublisher -Description $desc -RootDir $RootDir -ToolVersion $ToolVersion `
         -Architecture ([string]$App.Architecture) -MinimumOS ([string]$App.MinimumOS) `

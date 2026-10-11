@@ -13,11 +13,12 @@ that list:
 
 ```
 Tenant [xyz.onmicrosoft.com v]  Show [All (foreign Intune apps hidden) v]  [Filter...]      [Check tenant] [Refresh]
- Application | Version | Publisher | Package         |  Intune  | Next step
- (grey header: definition and package)                | (blue header: tenant)
-[gear] [Open folder] [Remove orphan folder] [Remove from Intune]
-              [Add...] [New version...] [Edit...] [Delete definition]   [Build package]   [Publish to Intune]   [Close]
-              \_________ 1. definition _________/                       2. package          3. Intune
+ Application | Version | Publisher || Package         || Intune  | Next step
+ (grey: definition)                 || (green: package) || (blue: tenant)
+ 1 Definition                          2 Package                            3 Intune
+ [Add...] [New version...] [Edit...]   [Build package]                      [Publish to Intune] [Remove from Intune]
+ [Delete definition]
+[gear] [Open folder] [Remove orphan folder]                                                                  [Close]
 ```
 
 | Column | Meaning |
@@ -50,16 +51,25 @@ tenant); the permission is read from the token. After a failed check the previou
 ![Check tenant: five steps, each with its result](Docs/check-tenant.png)
 
 An app has three things - the **definition** (a row in `Apps.csv`), the **package** (the folder with the PSADT
-files) and the **app in Intune** - and the buttons follow them, left to right: **1.** Add / New version / Edit /
-Delete definition, **2.** Build package, **3.** Publish to Intune (and Remove from Intune on the left, because it
-deletes). Which button is possible depends on the selected row; the others are greyed out and their tooltip says
-why. The rule is one function (`Get-InventoryActionState`) with a test that lists every state, and a check that the
-window has no rule of its own.
+files) and the **app in Intune** - and the buttons follow them, left to right, in three coloured zones that match
+the colours of the columns: **1 Definition** (Add / New version / Edit / Delete definition), **2 Package** (Build package),
+**3 Intune** (Publish to Intune, Remove from Intune). The steps depend on each other from left to right:
+
+- A change on the left makes everything to its right wait. If the package is missing or no longer matches the definition
+  or the template (`Definition only`, `Package, definition changed`, `Package, built before the definition stamp`,
+  `Package, template outdated` / `unstamped`), **Build package** is the only button right of the definition that works;
+  **Publish to Intune** and **Remove from Intune** are greyed out.
+- Once the package is built, **Build package** is greyed out and **Publish to Intune** is the next step. When the app in Intune
+  is already up to date, Publish is greyed out too.
+
+Greyed-out buttons say why in their tooltip. The rule is one function (`Get-InventoryActionState`, with `Get-BuildTargets`
+choosing the rows to build) with a test that lists every state, and a check that the window has no rule of its own.
+**Publish never builds or renews a package** - that is Build package, always.
 
 | What you want | What you do |
 | --- | --- |
-| **A new app** | **Add...** (the editor offers WinGet, MSI and *From installer...*), then **Publish to Intune** - it builds the package first |
-| **A new version** of an app (another version number, the old one goes away) | **New version...**, put the installer into `Files\`, **Publish to Intune**; then select the old version and **Remove from Intune**. The two versions are two apps in Intune; assignments are not carried over |
+| **A new app** | **Add...** (the editor offers WinGet, MSI and *From installer...*), **Build package**, **Publish to Intune** |
+| **A new version** of an app (another version number, the old one goes away) | **New version...**, put the installer into `Files\`, **Build package**, **Publish to Intune**; then select the old version and **Remove from Intune**. The two versions are two apps in Intune; assignments are not carried over |
 | **The same version, brought up to date** (the definition was edited, an older package, a new template) | **Edit...** the definition if needed, **Build package**, **Publish to Intune** - the app in Intune is updated in place and its assignments stay |
 | **Take an app out** | **Remove from Intune** (asks first; definition and package stay) |
 | **Tidy up** | **Delete definition** (the row only), **Remove orphan folder** (a package folder without a row) |
@@ -67,9 +77,10 @@ window has no rule of its own.
 | Button | Possible when |
 | --- | --- |
 | **Edit...**, **New version...** | exactly one row with a definition is selected |
-| **Delete definition**, **Build package** | the selection has a row with a definition |
-| **Publish to Intune** | a selected row can be published: it has a definition or a package, the package is not older than the definition, the app is not in Intune twice and has no empty entry there |
-| **Remove from Intune** | an app of this name **and** version is in Intune and was created by this tool |
+| **Delete definition** | the selection has a row with a definition |
+| **Build package** | a selected row has a definition and its package is missing or no longer matches the definition or the template |
+| **Publish to Intune** | a selected row can be published: its package matches the definition and the template (or it is a package without a definition), the app is not in Intune twice, has no empty entry there and is not already up to date |
+| **Remove from Intune** | an app of this name **and** version is in Intune and was created by this tool, and its package does not have to be built first |
 | **Remove orphan folder** | a selected row is a package folder without a definition |
 
 The row tooltip spells out all three states, and the selection survives every action.
@@ -105,7 +116,7 @@ decision to `deploy.ps1` (`-Mode New|Update`, `-UpdateAppId`). There is no "how 
 | exactly one app with this name and version, with content | **Update** - the app is brought up to date in place |
 | two or more | **Skip** - remove the duplicates first |
 | one, but without content (failed upload) | **Skip** - remove the entry first |
-| (any) but the package is older than the definition | **Skip** - run *Build package* first |
+| (any) but the package is missing, older than the definition or built from an older template | **Skip** - run *Build package* first |
 
 **Update** replaces what the definition decides: the package content and icon (`Update-IntuneWin32AppPackageFile`),
 detection rule, install and uninstall command, publisher and description (`Set-IntuneWin32App`) and the requirement
@@ -116,22 +127,21 @@ definition (publisher, minimum OS, interactive) - after one publish publisher, c
 ones, the assignment was still there, and a second publish brought the old values back.
 
 A dialog shows the plan - what is created, what is updated, what is skipped and why - and asks once: **Yes** or **No**
-(nothing happens). A row without a package is built first, also when only an update is planned. Rows that are skipped are
-not built. If the tenant cannot be read, nothing is published. Running `deploy.ps1` by hand still asks (`-Mode Ask`), as before.
+(nothing happens). Publish does not build and does not renew anything: a row whose package must be built first is
+skipped with that reason. If the tenant cannot be read, nothing is published. Running `deploy.ps1` by hand still asks (`-Mode Ask`), as before.
 
 **Does the app in Intune match the definition?** `deploy.ps1` writes the note `Created by IntuneWin32Helper <version>; definition <stamp>`
 into the app, when it creates it and when it updates it; the inventory reads it back. Only a matching stamp is `up to date`. An app
 without a stamp (made by the old tool or by hand) or with another one shows `publish (updates the app in Intune)`: nobody has
 checked that it is what the definition says, and one publish makes it so (assignments stay).
 
-**Is the package older than the definition?** `Build-AppPackage` stamps `deploy.ps1` with a short hash over the definition
+**Does the package match the definition and the template?** `Build-AppPackage` stamps `deploy.ps1` with a short hash over the definition
 fields that go into the package and the app (`# ToolDefinitionFingerprint:`); the inventory compares it with the row of
 today. `Package, definition changed` means the row was edited after the build. A package built before the stamp existed
-shows `Package, built before the definition stamp` - build it once and it is known from then on. Renewing from the template
-(`Update-DeployScript`) keeps the old stamp: it takes its values from the old script, so it does not pick up an edit.
+shows `Package, built before the definition stamp` - build it once and it is known from then on.
 
-Changing the template changed its fingerprint: existing packages show `Package, template outdated`
-once and are renewed (with a `.bak`) on their next publish.
+Changing the template changes its fingerprint: existing packages show `Package, template outdated` and need
+**Build package** (which rebuilds the whole folder, `deploy.ps1` and `detection.ps1` included) before they can be published.
 
 **Remove orphan folder** deletes the package folder of selected rows that have **no definition** in
 `Apps.csv` (status `No definition` - typically what is left after a rename or a deleted definition).
@@ -174,17 +184,15 @@ of the file the next time the tool saves it.
 
 The generated `deploy.ps1` and `detection.ps1` stay **inside** the package on purpose: the package
 is then a record of what was actually deployed, a template change cannot silently alter a package
-that was already tested, and a single app can be given a special case by hand. The price is that a
-template fix does not reach old packages by itself - which is exactly what the `Package` column
-makes visible (`template outdated`). `Write-DeployScript` stamps every package with a short hash over the templates
+that was already tested. The price is that a template fix does not reach old packages by itself - which is
+exactly what the `Package` column makes visible (`template outdated`). `Write-DeployScript` stamps every package with a short hash over the templates
 (`# ToolTemplateFingerprint:`), and the inventory compares it against the current state.
 `unstamped` means the package predates the stamp.
 
-Renewing happens on deploy (`Update-DeployScript`, with `deploy.ps1.bak` and `detection.ps1.bak`
-backups) and only for packages that need it - by the same stamp the inventory shows: `outdated` and
-`unstamped` are renewed, `current` is left alone even if it was edited by hand. The stamp covers
-all templates, so `deploy.ps1` **and** `detection.ps1` are renewed together; the search name or
-WinGet id is carried over from the old `detection.ps1`.
+A package from an older template is not repaired in place and not renewed on publish: **Build package** makes it again from
+the definition and the current templates (the stamp covers all of them, so `deploy.ps1` **and** `detection.ps1` come
+together). The search name and the WinGet id come from the definition, so nothing has to be carried over. Changes made by
+hand inside a package are lost on a build - the tool asks before it replaces a package that exists.
 
 ## Configuration
 
@@ -220,7 +228,7 @@ by an earlier version load it, so the name stays. It dot-sources the files that 
 | `dialogs.ps1` | `Show-ConfirmDialog` - every message and question (there is no `MessageBox`) |
 | `logo.ps1` | resolving and resizing logos |
 | `installer.ps1` | path length, installer engine, install commands, MSI properties |
-| `deployscripts.ps1` | template fingerprint, writing and renewing `detection.ps1` / `deploy.ps1`, reading package folders |
+| `deployscripts.ps1` | template and definition fingerprints, writing `detection.ps1` / `deploy.ps1` (only `Build-AppPackage` calls them), reading package folders |
 | `package.ps1` | building packages, removing package folders and orphans |
 | `appscsv.ps1` | `Apps.csv` - `Save-AppsCsv` is its only writer |
 | `inventory.ps1` | one row per app from definition, package and tenant |
@@ -323,8 +331,8 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 | `Test-IntuneOnly.ps1` | apps only in Intune get a row, the tool note tells "created by this tool" from "foreign" (one note in a duplicate is enough, a note without version counts), a defined app never gets a second row, foreign apps are never planned for Retire |
 | `Test-TenantRead.ps1` | the tenant list and the assignment count are read straight from Graph (the module's filtered list lagged behind new apps and its assignment cmdlet missed an "all users" assignment): all pages, Win32 and catalog apps only, an error or a missing token means "not read", not "empty" / "0" |
 | `Test-RemoveFromIntune.ps1` | only apps with the row's name **and** version from the fresh tenant are deleted (not another version, not what the window showed), the question names every app and its assignments, "No" and an unreadable tenant delete nothing, a delete that only warns is reported as `StillListed` and not as removed |
-| `Test-InventoryActionState.ps1` | which button is possible when: 16 row and selection states (definition only, package current / changed / unstamped, in Intune once / twice / empty / other version, orphan, only in Intune, foreign app, nothing selected, several rows) with the expected state of all seven buttons, and a disabled Publish or Remove says why |
+| `Test-InventoryActionState.ps1` | which button is possible when, left to right: 20 row and selection states (definition only, package current / changed / unstamped / from an older template, in Intune once / twice / empty / other version / up to date, orphan, only in Intune, foreign app, nothing selected, several rows) with the expected state of all seven buttons - a package that must be built locks everything right of Build package, a current package locks Build package - and a disabled Build, Publish or Remove says why; `Get-BuildTargets` picks only the rows that need a build |
 | `Test-DefinitionFingerprint.ps1` | the definition stamp in the package: every field that goes into the package or the app changes it, custom columns, column order, spaces and the spelling of `true` do not, it is written into `deploy.ps1` and read back (an empty or unreplaced stamp reads as unknown, and does not swallow the next line), the inventory says current / changed / unknown / n/a |
-| `Test-DeployPlan.ps1` | the plan: Intune is matched by name **and** version, Create/Update/Skip per state (one existing app is updated, no second question), duplicates and empty entries are never replaced, a package older than the definition is skipped (also when the app is in Intune) and a skipped row is never built, the decision reaches `deploy.ps1` as `-Mode`, Intune is read fresh before planning, only planned apps are built and deployed, nothing happens on cancel or an unreadable tenant |
+| `Test-DeployPlan.ps1` | the plan: Intune is matched by name **and** version, Create/Update/Skip per state (one existing app is updated, no second question), duplicates and empty entries are never replaced, a package that must be built first (missing, older than the definition, from an older template) is skipped (also when the app is in Intune), Publish builds and renews nothing, the decision reaches `deploy.ps1` as `-Mode`, Intune is read fresh before planning, only planned apps are deployed, nothing happens on cancel or an unreadable tenant |
 | `Test-MainWindowModel.ps1` | the state of every inventory row, and that `Apps.csv` survives read, save and read again (values, own columns, BOM, header) |
 | `Test-MainWindowUi.ps1` | operates the real main window through UI Automation: buttons follow the selected row, the selection survives, the filter narrows, a tenant switch is reported, and the real `Start-InventoryLoop` shows the window again after Refresh and ends on Close. Needs a desktop session - the window flashes briefly |

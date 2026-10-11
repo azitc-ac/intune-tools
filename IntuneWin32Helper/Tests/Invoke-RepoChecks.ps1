@@ -1140,9 +1140,11 @@ if ($functionsFile) {
             Add-Failure "DetectionOnePath" ("{0} Erkennungsvorlage ausserhalb von Write-DetectionScript benutzt (in '{1}')" -f (Get-NodePlace $r), $owner)
         }
     }
+    # Es gibt kein Erneuern an Ort und Stelle mehr (Update-DeployScript ist weg): ein Paket aus einer aelteren Vorlage
+    # wird mit Build package neu gebaut. Kehrt so eine Funktion zurueck, muss sie detection.ps1 mit erneuern.
     $upd = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Update-DeployScript' }, $true)
-    if ($upd -and $upd.Extent.Text -notmatch 'Write-DetectionScript') {
-        Add-Failure "DetectionOnePath" "Update-DeployScript erneuert detection.ps1 nicht - der Stempel meldet danach 'current' fuer eine alte Erkennung"
+    if ($upd) {
+        Add-Failure "DetectionOnePath" "Update-DeployScript ist wieder da - ein Paket entsteht nur in Build-AppPackage (Build package); ein zweiter Weg erneuert nur Teile und der Stempel meldet danach 'current' fuer eine alte Erkennung"
     }
     $derive = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-DerivedInstallCommands' }, $true)
     if ($derive) {
@@ -1292,15 +1294,24 @@ if ($functionsFile) {
         }
     }
 
-    # Und die Aktionen benutzen diesen Weg: Build geht ueber Invoke-PackageBuild, Deploy ueber
-    # Invoke-InventoryDeploy, und das baut seinerseits ueber Invoke-PackageBuild.
+    # Und die Aktionen benutzen diesen Weg: Build geht ueber Invoke-PackageBuild; Publish (Invoke-InventoryDeploy) baut nicht.
     $loopFn2   = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-InventoryLoop' }, $true)
     $deployFn2 = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-InventoryDeploy' }, $true)
     if ($loopFn2 -and $loopFn2.Extent.Text -notmatch 'Invoke-PackageBuild') {
         Add-Failure "PackageOneBuildPath" "Start-InventoryLoop ruft Invoke-PackageBuild in der Aktion Build nicht auf"
     }
-    if (-not $deployFn2 -or $deployFn2.Extent.Text -notmatch 'Invoke-PackageBuild') {
-        Add-Failure "PackageOneBuildPath" "Invoke-InventoryDeploy fehlt oder baut nicht ueber Invoke-PackageBuild - die Aktion Deploy baut anders als Build"
+    # Der Weg ist Definition -> Build package -> Publish: Publish baut und erneuert nichts am Paket (ein Paket, das erst
+    # gebaut werden muss, steht im Plan als Skip). Sonst gaebe es zwei Orte, die ein Paket herstellen, und das Paket aus
+    # einer aelteren Vorlage wuerde im Hintergrund einer Aktion repariert, die nur hochladen soll.
+    $deployPathFns = @('Invoke-InventoryDeploy', 'Invoke-PackageDeploy', 'Get-DeployPlan')
+    $packageMakers = @('Invoke-PackageBuild', 'Build-AppPackage', 'Write-DeployScript', 'Update-DeployScript', 'Write-DetectionScript')
+    foreach ($fnName in $deployPathFns) {
+        $deployPathFn = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName }, $true)
+        if (-not $deployPathFn) { Add-Failure "PackageOneBuildPath" "$fnName fehlt"; continue }
+        $makers = $deployPathFn.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in $packageMakers }, $true)
+        foreach ($m in $makers) {
+            Add-Failure "PackageOneBuildPath" ("{0} {1} ruft {2} - Publish baut und erneuert kein Paket, das ist Build package (Definition -> Paket -> Intune)" -f (Get-NodePlace $m), $fnName, $m.GetCommandName())
+        }
     }
 }
 # ---------------------------------------------------------------------------
@@ -1827,6 +1838,16 @@ if ($functionsFile) {
             }
         }
     }
+    # Auch die Aktion Build waehlt ihre Zeilen ueber dieselbe Funktion wie der Knopf (Get-BuildTargets): sonst baute sie
+    # ein Paket auf dem Stand neu, obwohl der Knopf dafuer ausgegraut waere.
+    $loop46 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-InventoryLoop' }, $true) | Select-Object -First 1
+    if (-not $loop46 -or -not $loop46.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Get-BuildTargets' }, $true)) {
+        Add-Failure "ButtonStateSingleSource" "Start-InventoryLoop waehlt die Zeilen fuer Build package nicht ueber Get-BuildTargets - die Aktion und der Knopf haetten zwei Regeln"
+    }
+    $state46 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-InventoryActionState' }, $true) | Select-Object -First 1
+    if (-not $state46 -or -not $state46.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Get-BuildTargets' }, $true)) {
+        Add-Failure "ButtonStateSingleSource" "Get-InventoryActionState fragt Get-BuildTargets nicht - der Knopf Build package haette eine eigene Regel"
+    }
 }
 # ---------------------------------------------------------------------------
 # 47) "Publish to Intune" ist EIN Weg ohne Rueckfrage "wie genau": Get-DeployPlan hat keinen Schalter, der zwischen
@@ -1841,8 +1862,8 @@ if ($functionsFile) {
     elseif (@($plan47.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -match 'Replace' }).Count -gt 0) {
         Add-Failure "PublishOnePath" "Get-DeployPlan hat wieder einen Schalter fuer 'vorhandene Apps ersetzen' - Publish entscheidet nach Zustand, ohne zweite Frage"
     }
-    # Jedes Schreiben eines deploy.ps1 gibt den Stempel der Definition mit (Bau: neu aus der Definition; Erneuern: der
-    # alte bleibt) - sonst sieht ein Paket nach dem Schreiben "unbekannt" aus und muesste ohne Grund neu gebaut werden.
+    # Jedes Schreiben eines deploy.ps1 gibt den Stempel der Definition von heute mit (es gibt nur den Bau) - sonst sieht
+    # ein Paket nach dem Schreiben "unbekannt" aus und muesste ohne Grund neu gebaut werden.
     foreach ($write47 in $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Write-DeployScript' }, $true)) {
         $names47 = @($write47.CommandElements | Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] } | ForEach-Object { $_.ParameterName })
         if ($names47 -notcontains 'DefinitionFingerprint') {
@@ -1856,9 +1877,11 @@ if ($functionsFile) {
             if ($elements47[$j47] -is [System.Management.Automation.Language.CommandParameterAst] -and $elements47[$j47].ParameterName -eq 'DefinitionFingerprint' -and $j47 + 1 -lt $elements47.Count) { $argText47 = $elements47[$j47 + 1].Extent.Text }
         }
         $owner47 = & $enclosingFunction $write47
-        $expected47 = $(if ($owner47 -eq 'Build-AppPackage') { 'Get-DefinitionFingerprint' } elseif ($owner47 -eq 'Update-DeployScript') { 'Get-PackageDefinitionFingerprint' } else { '' })
-        if ($expected47 -and $argText47 -notmatch [regex]::Escape($expected47)) {
-            Add-Failure "PublishOnePath" ("{0} {1}: -DefinitionFingerprint ist '{2}', erwartet ein {3}(...) - sonst traegt das Paket nicht den Stempel, der zu ihm gehoert" -f (Get-NodePlace $write47), $owner47, $argText47, $expected47)
+        if ($owner47 -ne 'Build-AppPackage') {
+            Add-Failure "PublishOnePath" ("{0} Write-DeployScript in '{1}' - ein deploy.ps1 entsteht nur beim Bau (Build-AppPackage)" -f (Get-NodePlace $write47), $owner47)
+        }
+        elseif ($argText47 -notmatch 'Get-DefinitionFingerprint') {
+            Add-Failure "PublishOnePath" ("{0} Build-AppPackage: -DefinitionFingerprint ist '{1}', erwartet ein Get-DefinitionFingerprint(...) - sonst traegt das Paket nicht den Stempel, der zu ihm gehoert" -f (Get-NodePlace $write47), $argText47)
         }
     }
 }

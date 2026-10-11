@@ -168,12 +168,10 @@ function Write-DetectionScript {
         Erzeugt detection.ps1 eines App-Ordners aus der aktuellen Vorlage.
 
         .DESCRIPTION
-        Anlegen (createApps) und Erneuern (Update-DeployScript) teilen diesen
-        einen Pfad - wie Write-DeployScript fuer deploy.ps1. Frueher wurde
-        detection.ps1 nur in createApps gerendert, Update-DeployScript fasste es
-        nicht an: der Vorlagen-Stempel (ueber ALLE Vorlagen) stand nach dem
-        Erneuern auf "current", die Erkennung im Paket blieb aber die alte -
-        eine Korrektur wie "kein HKCU" erreichte kein bestehendes Paket.
+        Build-AppPackage ist der einzige Aufrufer - wie Write-DeployScript fuer deploy.ps1. Ein Paket aus einer
+        aelteren Vorlage wird nicht an Ort und Stelle repariert, sondern mit Build package neu gebaut: der
+        Vorlagen-Stempel gilt fuer ALLE Vorlagen, und eine Korrektur wie "kein HKCU" erreicht ein bestehendes Paket
+        nur so.
     #>
     [CmdletBinding()]
     param(
@@ -257,9 +255,9 @@ function Write-DeployScript {
         Erzeugt das deploy.ps1 eines App-Ordners aus der aktuellen Vorlage.
 
         .DESCRIPTION
-        Anlegen (createApps) und Erneuern (Update-DeployScript) teilen diesen
-        einen Pfad. Ohne das wirkt eine Vorlagenaenderung nur auf neu erstellte
-        Apps, waehrend bereits erstellte Ordner ihre alte Kopie behalten.
+        Build-AppPackage ist der einzige Aufrufer: ein Paket entsteht nur beim Bauen (Build package), auch wenn die
+        Vorlage sich geaendert hat. Das Inventar zeigt ein Paket aus einer aelteren Vorlage ("template outdated") und
+        verlangt dann den Bau; Publish erneuert nichts.
     #>
     [CmdletBinding()]
     param(
@@ -285,8 +283,8 @@ function Write-DeployScript {
         # leer = still und ohne ServiceUI (siehe Get-DeployCommandLine).
         [AllowEmptyString()][string]$Interactive = '',
 
-        # Stand der Definition, aus der gebaut wird (Get-DefinitionFingerprint). Leer = unbekannt: beim Erneuern
-        # aus der Vorlage gibt Update-DeployScript den Stempel des alten Skripts weiter.
+        # Stand der Definition, aus der gebaut wird (Get-DefinitionFingerprint). Leer = unbekannt (das Inventar
+        # zeigt das Paket dann als "built before the definition stamp").
         [AllowEmptyString()][string]$DefinitionFingerprint = ''
     )
 
@@ -307,107 +305,10 @@ function Write-DeployScript {
         Out-File (Join-Path $AppFolder "deploy.ps1") -Encoding utf8 -Force
 }
 
-function Update-DeployScript {
-    <#
-        .SYNOPSIS
-        Zieht ein vorhandenes deploy.ps1 auf die aktuelle Vorlage nach.
-
-        .DESCRIPTION
-        Erneuert wird, was das Inventar als "outdated" oder "unstamped" fuehrt:
-        der Vorlagen-Stempel im Skript weicht vom aktuellen Stand ab oder fehlt.
-        Die app-spezifischen Werte werden aus dem alten Skript uebernommen, das
-        alte als deploy.ps1.bak gesichert. Ein Skript mit aktuellem Stempel
-        bleibt unberuehrt - auch wenn es von Hand angepasst wurde.
-
-        Frueher entschied hier ein anderes Merkmal als im Inventar: erneuert
-        wurde nur ein Skript OHNE $Tenant/Initialize-IntuneConnection. Das kennt
-        aber schon die Vorlage von 2.0.0 - im Feld (2026-09-28) wurde dadurch
-        weder ein Paket aus 2.0.0 noch eines mit veraltetem Stempel erneuert,
-        obwohl das Inventar "renew from template" anzeigte. Vorlagen-Korrekturen
-        erreichten bestehende Pakete nie.
-
-        .OUTPUTS
-        [bool] $true, wenn erneuert wurde.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$DeployScriptPath,
-        [Parameter(Mandatory = $true)][string]$RootDir,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ToolVersion
-    )
-
-    if (-not (Test-Path -LiteralPath $DeployScriptPath)) { return $false }
-
-    # Schon aktuell? Dann nichts anfassen. Dasselbe Merkmal wie im Inventar
-    # (Get-AppInventory, Spalte Template) - sonst zeigt das eine "outdated" und
-    # das andere erneuert trotzdem nicht.
-    $stamp = Get-PackageTemplateFingerprint -DeployScriptPath $DeployScriptPath
-    if ($stamp -and $stamp -eq (Get-TemplateFingerprint -RootDir $RootDir)) { return $false }
-
-    $raw = Get-Content -LiteralPath $DeployScriptPath -Raw
-
-    $readValue = {
-        param($text, $name)
-        $m = [regex]::Match($text, ('(?m)^\s*\$' + $name + '\s*=\s*"(.*?)"\s*$'))
-        if ($m.Success) { return $m.Groups[1].Value }
-        return ""
-    }
-
-    $appFolder   = Split-Path -Parent $DeployScriptPath
-    $appName     = & $readValue $raw "PackageName"
-    $appVersion  = & $readValue $raw "AppVersion"
-    $publisher   = & $readValue $raw "Publisher"
-    $description = & $readValue $raw "Description"
-    # In aelteren Skripten gibt es diese beiden nicht - dann bleiben sie leer
-    # und Write-DeployScript setzt die Vorgaben.
-    $architecture   = & $readValue $raw "Architecture"
-    $minimumOS      = & $readValue $raw "MinimumOS"
-    $msiProductCode = & $readValue $raw "MsiProductCode"
-    # Aeltere Skripte kennen die Spalte nicht - leer heisst Standard (ohne
-    # ServiceUI). Ein als interaktiv gebautes Paket bleibt beim Erneuern interaktiv.
-    $interactive    = & $readValue $raw "Interactive"
-
-    # Fallback: Werte aus dem Ordnernamen ableiten - ueber dieselbe Funktion, die
-    # auch Get-DeployScripts benutzt, statt einer zweiten Zerlegung.
-    if (-not $appName) {
-        $parsed = Parse-AppFolderName -FolderName (Split-Path -Leaf $appFolder)
-        $appName = $parsed.AppName
-        if (-not $appVersion) { $appVersion = $parsed.AppVersion }
-    }
-
-    Copy-Item -LiteralPath $DeployScriptPath -Destination ($DeployScriptPath + ".bak") -Force
-    Write-Host ("Updating outdated deploy.ps1 from template: {0} (backup: deploy.ps1.bak)" -f $DeployScriptPath) -ForegroundColor Yellow
-
-    # Erneuert wird aus den Werten des alten Skripts, nicht aus Apps.csv: der Definitions-Stempel bleibt, wie er war
-    # (zeigte er "Definition geaendert", bleibt er es - das Erneuern aus der Vorlage holt keine Aenderung der Definition nach).
-    Write-DeployScript -AppFolder $appFolder -AppName $appName -AppVersion $appVersion `
-        -Publisher $publisher -Description $description -RootDir $RootDir -ToolVersion $ToolVersion `
-        -Architecture $architecture -MinimumOS $minimumOS -MsiProductCode $msiProductCode `
-        -Interactive $interactive -DefinitionFingerprint (Get-PackageDefinitionFingerprint -DeployScriptPath $DeployScriptPath)
-
-    # detection.ps1 gehoert zum selben Stempel - mit erneuern. Suchname und
-    # WinGet-ID kommen aus dem alten Skript: $ArpName, sonst $PackageID (dort
-    # stand in aelteren Paketen der Suchname, ggf. von Hand angepasst).
-    $detectionPath = Join-Path $appFolder 'detection.ps1'
-    if (Test-Path -LiteralPath $detectionPath) {
-        $oldDetection = Get-Content -LiteralPath $detectionPath -Raw
-        $oldArpName   = & $readValue $oldDetection "ArpName"
-        $oldPackageId = & $readValue $oldDetection "PackageID"
-        if (-not $oldArpName -and $appVersion -ne 'LatestAvailable') { $oldArpName = $oldPackageId }
-        Copy-Item -LiteralPath $detectionPath -Destination ($detectionPath + ".bak") -Force
-        Write-DetectionScript -AppFolder $appFolder -AppName $appName -AppVersion $appVersion -RootDir $RootDir `
-            -ProgramId $oldPackageId -ArpName $oldArpName
-        Write-Host ("Updated detection.ps1 from template (backup: detection.ps1.bak)") -ForegroundColor Yellow
-    }
-
-    return $true
-}
-
 # ============================================================================
 #  Paketordner lesen
 #  Diese beiden Funktionen lagen INNERHALB von deployApps und waren dadurch
-#  nirgends sonst aufrufbar - Update-DeployScript musste das Zerlegen des
-#  Ordnernamens eigenstaendig nachbauen. Jetzt auf oberster Ebene, eine Quelle.
+#  nirgends sonst aufrufbar. Jetzt auf oberster Ebene, eine Quelle.
 # ============================================================================
 function Parse-AppFolderName {
     param(

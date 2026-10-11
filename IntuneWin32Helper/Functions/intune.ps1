@@ -100,8 +100,8 @@ function Connect-InventoryTenant {
 
 function Invoke-PackageDeploy {
     <#
-        Verteilt Pakete nach Intune: erneuert das deploy.ps1 bei Bedarf und ruft es
-        mit dem Tenant auf. Stand frueher als Rumpf in deployApps.
+        Verteilt Pakete nach Intune: ruft das deploy.ps1 jedes Pakets mit dem Tenant und der Entscheidung des
+        Plans auf. Stand frueher als Rumpf in deployApps.
     #>
     [CmdletBinding()]
     param(
@@ -136,10 +136,8 @@ function Invoke-PackageDeploy {
         Write-Host ("Deploy Application: {0} ({1})" -f $appLabel, $app.Mode) -ForegroundColor Cyan
 
         try {
-            # Aeltere deploy.ps1 kennen -Tenant und -Mode nicht: aus der aktuellen
-            # Vorlage nachziehen (Sicherung wird angelegt).
-            $null = Update-DeployScript -DeployScriptPath $app.FullPath -RootDir $RootDir -ToolVersion $ToolVersion
-
+            # Das deploy.ps1 wird hier nicht erneuert: ein Paket aus einer aelteren Vorlage steht im Plan als Skip,
+            # Build package erzeugt es neu (Get-DeployPlan, BuildReason).
             & $app.FullPath -Tenant $Tenant -Mode ([string]$app.Mode) -UpdateAppId ([string]$app.UpdateAppId)
             $succeeded += $appLabel
         }
@@ -166,8 +164,9 @@ function Get-DeployPlan {
                   Erkennungsregel, Befehlszeilen, Anforderung, Herausgeber, Beschreibung (deploy.ps1,
                   Set-IntuneWin32App und Set-TenantAppRequirement). Name, Version und Zuweisungen bleiben.
           Skip    nicht eindeutig oder nicht veroeffentlichbar; Reason sagt warum:
-                  zwei oder mehr gleiche Apps / eine App ohne Inhalt / das Paket ist aelter als die Definition
-                  (PackageDefinition changed|unknown: erst bauen, sonst ginge der alte Stand nach Intune)
+                  zwei oder mehr gleiche Apps / eine App ohne Inhalt / das Paket muss erst gebaut werden
+                  (BuildReason: kein Paket, Definition geaendert, Paket aus aelterer Vorlage - sonst ginge ein alter
+                  Stand nach Intune). Publish baut und erneuert nichts: der Weg ist Definition, Build package, Publish.
 
         Wozu: das erzeugte deploy.ps1 legte im Bulk-Lauf IMMER eine neue App an, auch wenn dieselbe App in
         derselben Version schon in Intune lag - jeder zweite Lauf erzeugte Dubletten. Jetzt entscheidet das
@@ -189,9 +188,10 @@ function Get-DeployPlan {
         $other = @(@($row.IntuneOther) | Where-Object { $_ })
 
         $action = 'Create'; $reason = ''; $appId = ''
-        if ($row.HasPackage -and $row.HasDefinition -and ([string]$row.PackageDefinition -in 'changed', 'unknown')) {
+        if ($row.HasDefinition -and [string]$row.BuildReason) {
+            # Publish baut nicht und erneuert nichts am Paket: erst Build package (Definition -> Paket -> Intune).
             $action = 'Skip'
-            $reason = $(if ([string]$row.PackageDefinition -eq 'changed') { 'the package is older than the definition - build the package first' } else { 'the package was built before definitions were stamped - build the package first' })
+            $reason = ('{0} - run Build package first' -f $row.BuildReason)
         }
         elseif ($same.Count -eq 0) {
             $reason = 'not in Intune yet'
@@ -223,7 +223,7 @@ function Get-DeployPlan {
 function Invoke-InventoryDeploy {
     <#
         .SYNOPSIS
-        "Publish to Intune" aus dem Hauptfenster: Intune frisch lesen, planen, fragen, bauen, verteilen.
+        "Publish to Intune" aus dem Hauptfenster: Intune frisch lesen, planen, fragen, verteilen.
 
         .DESCRIPTION
         Ein Pfad fuer jedes Publish. Reihenfolge, mit Absicht:
@@ -233,8 +233,8 @@ function Invoke-InventoryDeploy {
           2. Get-DeployPlan: pro Zeile Create / Update / Skip.
           3. Zusammenfassung mit dem Plan, EINE Frage (Ja/Nein): was angelegt, was aktualisiert, was
              uebersprungen wird und warum. Nein = nichts tun.
-          4. Nur fuer Zeilen, die nicht uebersprungen werden und noch kein Paket haben: bauen.
-          5. Invoke-PackageDeploy mit der Entscheidung je Paket.
+          4. Invoke-PackageDeploy mit der Entscheidung je Paket. Gebaut oder erneuert wird nichts: ein Paket, das
+             erst gebaut werden muss, steht im Plan als Skip (Build package ist der Schritt davor).
 
         -Ask ist die Rueckfrage (Text, Tasten) -> 'Yes' | 'No'; Tests ersetzen sie.
         Gibt $null zurueck, wenn nichts verteilt wurde, sonst den Plan.
@@ -246,7 +246,6 @@ function Invoke-InventoryDeploy {
         [Parameter(Mandatory = $true)][string]$RootDir,
         [Parameter(Mandatory = $true)][string]$PacketRoot,
         [Parameter(Mandatory = $true)][string]$ToolVersion,
-        [bool]$RemoveExisting = $false,
         [scriptblock]$Ask = { param($Text, $Buttons) Show-ConfirmDialog -Text $Text -Title 'Publish to Intune' -Buttons $Buttons -Icon Question -Default $(if ($Buttons -eq 'OK') { 'OK' } else { 'Yes' }) }
     )
 
@@ -296,19 +295,11 @@ function Invoke-InventoryDeploy {
     $todo    = @($plan | Where-Object { $_.Action -ne 'Skip' })
     $skipped = @($plan | Where-Object { $_.Action -eq 'Skip' } | ForEach-Object { '{0}: {1}' -f $_.Key, $_.Reason })
 
-    # Bauen nur, was verteilt wird und noch kein Paket hat.
-    $builtByKey = @{}
-    $toBuild = @($todo | Where-Object { -not $_.Row.HasPackage -and $_.Row.HasDefinition } | ForEach-Object { $_.Row })
-    if ($toBuild.Count -gt 0) {
-        $built = Invoke-PackageBuild -Rows $toBuild -PacketRoot $PacketRoot -RootDir $RootDir -ToolVersion $ToolVersion -RemoveExisting $RemoveExisting
-        foreach ($b in @($built.Built)) { $builtByKey[('{0} - {1}' -f $b.AppName, $b.AppVersion)] = $b }
-    }
-
+    # Gebaut wird hier nicht (das ist der Schritt davor): jede Zeile im Plan hat ein Paket, das zur Definition passt.
     $packages = @()
     foreach ($item in $todo) {
         $path = [string]$item.Row.FullPath
-        if (-not $path -and $builtByKey.ContainsKey($item.Key)) { $path = [string]$builtByKey[$item.Key].FullPath }
-        if (-not $path) { continue }   # Bau gescheitert - Invoke-PackageBuild hat es gemeldet
+        if (-not $path) { continue }
         $mode = $(if ($item.Action -eq 'Update') { 'Update' } else { 'New' })
         $packages += [pscustomobject]@{
             AppName     = $item.Row.AppName

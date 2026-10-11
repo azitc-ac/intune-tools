@@ -136,8 +136,9 @@ if ($Child) {
         exit 0
     }
 
-    function New-SampleRow([string]$name, [string]$status, [bool]$hasDef, [bool]$hasPkg, [string]$intune, [string]$next, [string]$template, [string]$origin = '') {
+    function New-SampleRow([string]$name, [string]$status, [bool]$hasDef, [bool]$hasPkg, [string]$intune, [string]$next, [string]$template, [string]$origin = '', [string]$buildReason = '', [string]$intuneDefinition = '-') {
         [pscustomobject]@{
+            BuildReason = $buildReason; IntuneDefinition = $intuneDefinition
             Key = "$name - 1.0"; AppName = $name; AppVersion = '1.0'; Publisher = 'Sample Inc'
             Definition = $(if ($hasDef) { 'yes' } else { '-' }); Package = $(if ($hasPkg) { 'yes' } else { '-' })
             Template = $template; Status = $status; Intune = $intune; Next = $next
@@ -148,8 +149,8 @@ if ($Child) {
         }
     }
     $rows = @(
-        (New-SampleRow 'DefOnly' 'Definition only' $true  $false '-'   'create package' '-'),
-        (New-SampleRow 'Both'    'Package'         $true  $true  'yes' 'up to date'     'current'),
+        (New-SampleRow 'DefOnly' 'Definition only' $true  $false '-'   'build package, then publish' '-' '' 'there is no package yet'),
+        (New-SampleRow 'Both'    'Package'         $true  $true  'yes' 'publish (updates the app in Intune)' 'current' '' '' 'unknown'),
         (New-SampleRow 'Orphan'  'No definition'   $false $true  '-'   'package without a row in Apps.csv' 'current'),
         (New-SampleRow 'ToolOnly' 'Intune only'    $false $false 'yes' 'in Intune only - no definition or package here' '-' 'tool'),
         (New-SampleRow 'Foreign' 'Foreign app'     $false $false 'yes' 'not created by this tool' '-' 'foreign')
@@ -242,12 +243,29 @@ try {
             Test-That "control $id exists" ($null -ne (Find-UiaElement -Root $window -AutomationId $id -TimeoutSeconds 5))
         }
 
+        # Die drei Zonen stehen von links nach rechts: Definition (Add, New version, Edit, Delete definition), Paket (Build package),
+        # Intune (Publish, Remove from Intune) - jede Zone ganz rechts von der vorigen.
+        $rects = @{}
+        foreach ($id in 'Add', 'NewVersion', 'Edit', 'Delete', 'Build', 'Publish', 'Remove') {
+            $rects[$id] = (Find-UiaElement -Root $window -AutomationId $id -TimeoutSeconds 5).Current.BoundingRectangle
+        }
+        $finite = @($rects.Values | Where-Object { -not [double]::IsInfinity($_.X) -and $_.Width -gt 0 }).Count -eq 7
+        Test-That 'the buttons have a position (the window is rendered)' $finite
+        if ($finite) {
+            $definitionRight = (@('Add', 'NewVersion', 'Edit', 'Delete') | ForEach-Object { $rects[$_].Right } | Measure-Object -Maximum).Maximum
+            Test-That 'definition buttons: Add, New version, Edit, Delete definition in this order' ($rects.Add.X -lt $rects.NewVersion.X -and $rects.NewVersion.X -lt $rects.Edit.X -and $rects.Edit.X -lt $rects.Delete.X)
+            Test-That 'zones: Build package is right of every definition button' ($rects.Build.X -gt $definitionRight) "Build.X=$($rects.Build.X) definition right=$definitionRight"
+            Test-That 'zones: Publish and Remove from Intune are right of Build package' ($rects.Publish.X -gt $rects.Build.Right -and $rects.Remove.X -gt $rects.Publish.X) "Publish.X=$($rects.Publish.X) Build.Right=$($rects.Build.Right)"
+            Test-That 'zones: the definition buttons are the left group, the Intune buttons the right group of one row' ([Math]::Abs($rects.Add.Y - $rects.Publish.Y) -lt 4 -and [Math]::Abs($rects.Add.Y - $rects.Build.Y) -lt 4)
+        }
+
         if ($grid) {
             Test-That 'four rows are listed (the foreign Intune app is hidden)' ((Get-UiaElement -Root $grid -ControlType DataItem).Count -eq 4) "rows: $((Get-UiaElement -Root $grid -ControlType DataItem).Count)"
 
-            # Die mitgegebene Auswahl ist beim Oeffnen markiert: DefOnly -> alles moeglich.
+            # Die mitgegebene Auswahl ist beim Oeffnen markiert: DefOnly -> von links nach rechts der naechste Schritt ist Build package,
+            # alles rechts davon (Publish, Remove from Intune) ist gesperrt.
             Start-Sleep -Milliseconds 800
-            Test-ButtonStates $window @{ Edit = $true; NewVersion = $true; Delete = $true; Build = $true; Publish = $true; RemoveFolder = $false; Remove = $false } 'DefOnly restored as selection'
+            Test-ButtonStates $window @{ Edit = $true; NewVersion = $true; Delete = $true; Build = $true; Publish = $false; RemoveFolder = $false; Remove = $false } 'DefOnly restored as selection'
 
             # Zeile ohne Definition: nicht bearbeiten, nicht loeschen, nicht bauen - verteilen schon.
             $null = Select-GridRowByCell $grid 'Orphan'
@@ -257,7 +275,7 @@ try {
             # Eine Zeile MIT Definition und Paket ist nicht verwaist: der Knopf bleibt aus.
             $null = Select-GridRowByCell $grid 'Both'
             Start-Sleep -Milliseconds 300
-            Test-ButtonStates $window @{ RemoveFolder = $false; Remove = $true } 'Both (definition, package, app in Intune)'
+            Test-ButtonStates $window @{ RemoveFolder = $false; Remove = $true; Build = $false; Publish = $true; Edit = $true } 'Both (package current, app in Intune unstamped: Build package is done, Publish is next)'
             # Eine App nur in Intune, vom Tool angelegt: loeschen ja, alles andere nein.
             $null = Select-GridRowByCell $grid 'ToolOnly'
             Start-Sleep -Milliseconds 300

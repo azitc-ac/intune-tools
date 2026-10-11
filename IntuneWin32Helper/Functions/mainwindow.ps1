@@ -159,9 +159,12 @@ function Show-InventoryDialog {
     [Windows.Automation.AutomationProperties]::SetAutomationId($dataGrid, 'InventoryGrid')
 
     $converter = New-Object Windows.Media.BrushConverter
-    $leftHeaderBrush  = $converter.ConvertFromString('#EDEDED')   # Definition und Paket
-    $rightHeaderBrush = $converter.ConvertFromString('#D6E6F7')   # Tenant
-    $separatorBrush   = $converter.ConvertFromString('#7FA6D1')
+    # Drei Zonen, in der Liste und in der Knopfleiste dieselben Farben: Definition (grau), Paket (gruen), Intune (blau).
+    $zones = @{
+        Definition = @{ Header = $converter.ConvertFromString('#EDEDED'); Line = $converter.ConvertFromString('#9A9A9A') }
+        Package    = @{ Header = $converter.ConvertFromString('#E1EFDA'); Line = $converter.ConvertFromString('#6FA85A') }
+        Intune     = @{ Header = $converter.ConvertFromString('#D6E6F7'); Line = $converter.ConvertFromString('#7FA6D1') }
+    }
 
     # Farben je Zustand: gruen ist erledigt, blau der naechste Schritt, orange
     # will angesehen werden, rot stimmt nicht, grau fehlt noch.
@@ -176,7 +179,7 @@ function Show-InventoryDialog {
         @('up to date',                                       'DarkGreen'),
         @('publish (updates the app in Intune)',              'DarkOrange'),
         @('deploy',                                           'DodgerBlue'),
-        @('renew from template, then deploy',                 'DarkOrange'),
+        @('build package, then publish',                      'DodgerBlue'),
         @('check duplicates in Intune',                       'DarkOrange'),
         @('remove the entry without content in Intune',       'Firebrick'),
         @('package without a row in Apps.csv',                'Firebrick'),
@@ -184,12 +187,12 @@ function Show-InventoryDialog {
     )
 
     $columnSpecs = @(
-        @{ Header = 'Application'; Binding = 'AppName';    Width = 250; Right = $false; Colors = $null },
-        @{ Header = 'Version';     Binding = 'AppVersion'; Width = 120; Right = $false; Colors = $null },
-        @{ Header = 'Publisher';   Binding = 'Publisher';  Width = 170; Right = $false; Colors = $null },
-        @{ Header = 'Package';     Binding = 'Status';     Width = 200; Right = $false; Colors = $statusColors },
-        @{ Header = 'Intune';      Binding = 'Intune';     Width = 190; Right = $true;  Colors = $null; Separator = $true },
-        @{ Header = 'Next step';   Binding = 'Next';       Width = 0;   Right = $true;  Colors = $nextColors }
+        @{ Header = 'Application'; Binding = 'AppName';    Width = 250; Zone = 'Definition'; Colors = $null },
+        @{ Header = 'Version';     Binding = 'AppVersion'; Width = 120; Zone = 'Definition'; Colors = $null },
+        @{ Header = 'Publisher';   Binding = 'Publisher';  Width = 170; Zone = 'Definition'; Colors = $null },
+        @{ Header = 'Package';     Binding = 'Status';     Width = 200; Zone = 'Package';    Colors = $statusColors; Separator = $true },
+        @{ Header = 'Intune';      Binding = 'Intune';     Width = 190; Zone = 'Intune';     Colors = $null; Separator = $true },
+        @{ Header = 'Next step';   Binding = 'Next';       Width = 0;   Zone = 'Intune';     Colors = $nextColors }
     )
 
     foreach ($spec in $columnSpecs) {
@@ -203,7 +206,8 @@ function Show-InventoryDialog {
         try {
             # Die Kopfzeile sagt, auf welcher Seite die Spalte steht.
             $headerStyle = New-Object Windows.Style -ArgumentList ([Windows.Controls.Primitives.DataGridColumnHeader])
-            $headerBrush = $(if ($spec.Right) { $rightHeaderBrush } else { $leftHeaderBrush })
+            $headerBrush = $zones[$spec.Zone].Header
+            $separatorBrush = $zones[$spec.Zone].Line
             $null = $headerStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::BackgroundProperty), $headerBrush))
             $null = $headerStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::PaddingProperty), (New-Object Windows.Thickness -ArgumentList 8, 5, 8, 5)))
             $null = $headerStyle.Setters.Add((New-Object Windows.Setter -ArgumentList ([Windows.Controls.Control]::FontWeightProperty), ([Windows.FontWeights]::SemiBold)))
@@ -284,17 +288,56 @@ function Show-InventoryDialog {
     $viewBox.Add_SelectionChanged($applyFilter)
 
     # --- Knopfleiste ---
-    $bar = New-Object Windows.Controls.DockPanel
+    # Oben der Weg einer App in drei Zonen, von links nach rechts: Definition (links), Paket (Mitte), Intune (rechts) -
+    # mit den Farben der Liste. Darunter, ohne Farbe: Einstellungen, Aufraeumen im Paketordner, Schliessen.
+    $bar = New-Object Windows.Controls.StackPanel
     $bar.Margin = '0,12,0,0'
-    $bar.LastChildFill = $false
+    $zoneGrid = New-Object Windows.Controls.Grid
+    foreach ($widthKind in 'Auto', '*', 'Auto', '*', 'Auto') {
+        $columnDefinition = New-Object Windows.Controls.ColumnDefinition
+        $columnDefinition.Width = $(if ($widthKind -eq '*') { New-Object Windows.GridLength -ArgumentList 1, ([Windows.GridUnitType]::Star) } else { [Windows.GridLength]::Auto })
+        $null = $zoneGrid.ColumnDefinitions.Add($columnDefinition)
+    }
+    $newZone = {
+        param([string]$title, [string]$zone, [int]$column, [string]$align)
+        $border = New-Object Windows.Controls.Border
+        $border.BorderBrush = $zones[$zone].Line
+        $border.BorderThickness = New-Object Windows.Thickness -ArgumentList 0, 3, 0, 0
+        $border.Background = $zones[$zone].Header
+        $border.Padding = '8,4,0,6'
+        $border.HorizontalAlignment = $align
+        $stack = New-Object Windows.Controls.StackPanel
+        $caption = New-Object Windows.Controls.TextBlock
+        $caption.Text = $title
+        $caption.FontWeight = [Windows.FontWeights]::SemiBold
+        $caption.Foreground = [System.Windows.Media.Brushes]::DimGray
+        $caption.Margin = '0,0,0,4'
+        $null = $stack.Children.Add($caption)
+        $buttons = New-Object Windows.Controls.StackPanel
+        $buttons.Orientation = 'Horizontal'
+        $null = $stack.Children.Add($buttons)
+        $border.Child = $stack
+        [Windows.Controls.Grid]::SetColumn($border, $column)
+        $null = $zoneGrid.Children.Add($border)
+        return $buttons
+    }
+    $definitionPanel = & $newZone '1  Definition' 'Definition' 0 'Left'
+    $packagePanel    = & $newZone '2  Package'    'Package'    2 'Center'
+    $intunePanel     = & $newZone '3  Intune'     'Intune'     4 'Right'
+    $null = $bar.Children.Add($zoneGrid)
+
+    $toolDock = New-Object Windows.Controls.DockPanel
+    $toolDock.Margin = '0,10,0,0'
+    $toolDock.LastChildFill = $false
     $left = New-Object Windows.Controls.StackPanel
     $left.Orientation = 'Horizontal'
     [Windows.Controls.DockPanel]::SetDock($left, 'Left')
     $right = New-Object Windows.Controls.StackPanel
     $right.Orientation = 'Horizontal'
     [Windows.Controls.DockPanel]::SetDock($right, 'Right')
-    $null = $bar.Children.Add($left)
-    $null = $bar.Children.Add($right)
+    $null = $toolDock.Children.Add($left)
+    $null = $toolDock.Children.Add($right)
+    $null = $bar.Children.Add($toolDock)
     [Windows.Controls.Grid]::SetRow($bar, 3)
     $null = $grid.Children.Add($bar)
 
@@ -343,20 +386,19 @@ function Show-InventoryDialog {
     $folderButton  = & $newButton 'Open folder'      'OpenFolder' 'The package folder of the selected row, or the package root' $left
     $orphanButton  = & $newButton 'Remove orphan folder' 'RemoveFolder' 'Delete the package folder of selected rows that have no definition in Apps.csv - the app in Intune stays' $left
 
-    # Links: aufraeumen (loescht etwas). Rechts: der Weg einer App in drei Schritten, von links nach rechts -
-    # Definition, Paket, Intune. Zwischen den Gruppen eine Luecke, damit man die Schritte sieht.
-    $removeButton = & $newButton 'Remove from Intune' 'Remove' 'Delete the app of the selected row in Intune (name AND version) - with its assignments. The definition and the package folder stay' $left
-
+    # Die drei Zonen, von links nach rechts: Definition, Paket, Intune.
     $baseTips = @{}
-    $addButton     = & $newButton 'Add...'            'Add'        'Add an application definition (the editor offers WinGet and MSI to prefill)' $right
-    $versionButton = & $newButton 'New version...'    'NewVersion' 'Copy the selected definition as a new version (another version number = another app in Intune)' $right
-    $editButton    = & $newButton 'Edit...'           'Edit'       'Edit the definition of the selected row. Afterwards: Build package, then Publish to Intune' $right
-    $deleteButton  = & $newButton 'Delete definition' 'Delete'     'Remove the row from Apps.csv - the package folder and the app in Intune stay' $right
-    $deleteButton.Margin = '0,0,24,0'
-    $buildButton   = & $newButton 'Build package'     'Build'      'Create the package folder on disk from the definition (replaces the one that is there)' $right
-    $buildButton.Margin = '0,0,24,0'
-    $publishButton = & $newButton 'Publish to Intune' 'Publish'    'Put the app into Intune: create it, or - if it is already there - bring it up to date (package, detection, commands, requirement, icon; the assignments stay). A row without a package is built first' $right
+    $addButton     = & $newButton 'Add...'            'Add'        'Add an application definition (the editor offers WinGet and MSI to prefill)' $definitionPanel
+    $versionButton = & $newButton 'New version...'    'NewVersion' 'Copy the selected definition as a new version (another version number = another app in Intune)' $definitionPanel
+    $editButton    = & $newButton 'Edit...'           'Edit'       'Edit the definition of the selected row. Afterwards: Build package, then Publish to Intune' $definitionPanel
+    $deleteButton  = & $newButton 'Delete definition' 'Delete'     'Remove the row from Apps.csv - the package folder and the app in Intune stay' $definitionPanel
+    $deleteButton.Margin = '0'
+    $buildButton   = & $newButton 'Build package'     'Build'      'Create the package folder on disk from the definition and the current template (replaces the one that is there). Possible when the package is missing or no longer matches the definition or the template' $packagePanel
+    $buildButton.Margin = '0'
+    $publishButton = & $newButton 'Publish to Intune' 'Publish'    'Put the app into Intune: create it, or - if it is already there - bring it up to date (package, detection, commands, requirement, icon; the assignments stay). Needs a package that matches the definition - Build package comes first' $intunePanel
     $publishButton.Margin = '0,0,24,0'
+    $removeButton = & $newButton 'Remove from Intune' 'Remove' 'Delete the app of the selected row in Intune (name AND version) - with its assignments. The definition and the package folder stay' $intunePanel
+    $removeButton.Margin = '0'
     $closeButton   = & $newButton 'Close'             'Cancel'     'Close the tool' $right
     $closeButton.Margin = '0'
     $closeButton.IsCancel = $true
@@ -404,6 +446,7 @@ function Show-InventoryDialog {
         $versionButton.IsEnabled = $state.NewVersion
         $deleteButton.IsEnabled  = $state.Delete
         $buildButton.IsEnabled   = $state.Build
+        $buildButton.ToolTip     = $(if ($state.Build) { $baseTips[$buildButton] } else { 'Not possible now: ' + $state.BuildWhy })
         $publishButton.IsEnabled = $state.Publish
         $publishButton.ToolTip   = $(if ($state.Publish) { $baseTips[$publishButton] } else { 'Not possible now: ' + $state.PublishWhy })
         # Remove loescht in Intune, was zu Name UND Version der Zeile gehoert; fremde Apps nie.
@@ -599,7 +642,8 @@ function Start-InventoryLoop {
                 }
 
                 'Build' {
-                    $targets = @($selection | Where-Object { $_.HasDefinition })
+                    # Gebaut wird, was gebaut werden muss (BuildReason); ein Paket auf dem Stand bleibt, wie es ist.
+                    $targets = @(Get-BuildTargets -Rows $selection)
                     $existing = @($targets | Where-Object { $_.HasPackage })
                     $go = $true
                     if ($existing.Count -gt 0) {
@@ -612,16 +656,15 @@ function Start-InventoryLoop {
                 }
 
                 'Publish' {
-                    # Zuerst der Tenant: scheitert das, soll nicht vorher gebaut werden. Auch mit
-                    # bekanntem Tenant: ein abgelaufener Token wuerde das frische Lesen vereiteln.
+                    # Zuerst der Tenant. Auch mit bekanntem Tenant: ein abgelaufener Token wuerde das frische Lesen vereiteln.
                     $tenant = Connect-InventoryTenant -Tenants $tenants -Tenant $tenant
                     $reloadIntune = ($null -ne $tenant)
                     if (-not $tenant) {
                         Write-Host "No tenant - nothing was published." -ForegroundColor Yellow
                     }
                     else {
-                        # Lesen, planen, fragen, bauen, verteilen: ein Pfad in Invoke-InventoryDeploy.
-                        $null = Invoke-InventoryDeploy -Selection $selection -Tenant $tenant -RootDir $RootDir -PacketRoot $packetRoot -ToolVersion $ToolVersion -RemoveExisting $removeExisting
+                        # Lesen, planen, fragen, verteilen: ein Pfad in Invoke-InventoryDeploy (gebaut wird dort nicht).
+                        $null = Invoke-InventoryDeploy -Selection $selection -Tenant $tenant -RootDir $RootDir -PacketRoot $packetRoot -ToolVersion $ToolVersion
                         $reloadIntune = $true
                     }
                 }
