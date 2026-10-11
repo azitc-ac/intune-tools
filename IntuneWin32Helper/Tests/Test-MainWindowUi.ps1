@@ -405,7 +405,7 @@ try {
                 Test-That "editdialog: $col is a $($expectedType[$col])" ($el.Current.ControlType.ProgrammaticName -eq $expectedType[$col]) "is $($el.Current.ControlType.ProgrammaticName)"
             }
         }
-        foreach ($id in 'OK', 'Cancel', 'FromWinGet', 'FromMsi', 'Error') {
+        foreach ($id in 'OK', 'Cancel', 'FromWinGet', 'FromMsi', 'FromInstaller', 'Error') {
             Test-That "editdialog: $id exists" ($null -ne (Find-UiaElement -Root $dlg -AutomationId $id -TimeoutSeconds 5))
         }
         $infoPackage = Find-UiaElement -Root $dlg -AutomationId 'InfoPackage' -TimeoutSeconds 5

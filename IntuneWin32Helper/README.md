@@ -126,7 +126,14 @@ Intune state, next step) are read-only at the top; the fields below are grouped 
 Installation, Intune), label on the left, field on the right. `Architecture` and `MinimumOS` are lists
 filled from the IntuneWin32App module, `Interactive` and `SingleMSI` are check boxes, the commands are
 multi-line, and the WinGet fields are only enabled while `Version` is `LatestAvailable`. Under
-`ArpName` the editor spells out the search name that detection and uninstall will use. OK checks name
+`ArpName` the editor spells out the search name that detection and uninstall will use; the hints under `Version`,
+`MsiProductCode` and `logoURL` follow the value as well. **From installer...** takes an EXE or MSI, recognises the
+engine from the file (Inno, NSIS, Burn, InstallShield, 7-Zip, Visual Studio bootstrapper) and fills in the install
+and uninstall command with the switches of that engine - the very commands the package build would derive from
+`Files\` anyway, now readable and editable before the build. Name, publisher and version come from the file, but only into
+empty fields. An engine that is not recognised gets `/S` as a guess, says so in a message and carries the note as a
+comment in the command; an MSI is zero-config (`SingleMSI`, no commands). The file name in the command is the name in
+`Files\`, so the installer has to go there under that name. OK checks name
 and version - also against duplicates - and stays open until they are right. The package name comes
 from `DisplayName`; the old `PackageName` column of `Apps.csv` is gone (it was never read) and drops out
 of the file the next time the tool saves it.
@@ -276,6 +283,7 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 | --- | --- |
 | `Test-ErrorDetail.ps1` | an error message carries `(file:line)` of the failing call - also on the real path (the tenant read failing), without a location the message stays as it is |
 | `Test-TenantCheck.ps1` | "Check tenant" step by step with sign-in and Graph replaced: all OK; an incomplete entry never tries to sign in; a failing sign-in, a token that only reads, a failing read and a token of another tenant each fail their own step and skip what builds on it; a token without permission claims or no JWT is a remark, not a crash; a failed check restores the previous token |
+| `Test-InstallerSuggestion.ps1` | "From installer..." against small files with the marks of Inno, NSIS and Burn: switches and file name in the command, an unknown engine is a marked guess, typed name/publisher/version stay (also with a real version resource), the uninstall search follows DisplayName/ArpName, an MSI is zero-config, and the editor suggests exactly what the package build derives |
 | `Test-LogoAndHints.ps1` | logo search by related name (exact, trimmed, word-prefix both ways, longest wins, `PDF` never takes `PDF24 Creator`, `defaultlogo` never a candidate), an explicit URL beats a guess, the live hints of the editor (Version, MsiProductCode, logoURL, ArpName), `Set-PsadtLogPath` (read-only file and folder, BOM kept, pattern missing = `$false`, and the pattern is still in the installed PSAppDeployToolkit template) |
 | `Test-WinGetIndex.ps1` | the local winget index with a real (small) SQLite database: update takes `index.db` out of the msix and counts the packages right (a one-row result must not fall apart into its columns), reads the schema as major.minor, a broken download keeps the working index, fetched only when missing or older than a day, search by id / name / moniker / publisher (also one hit, an apostrophe, newest version first, `0.10` before `0.9`), curated hits on top with the version from the index, fallback to the module, writing `catalog.json` |
 | `Test-WinGetDialog.ps1` | the search dialog through UI Automation: every control has an AutomationId, the curated list is the front page, Search / Return search, no hits and a failing search are reported, Remember writes the package into `catalog.json` (and says "already there"), Next returns name / id / version / publisher, Cancel nothing |

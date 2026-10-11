@@ -443,6 +443,19 @@ tenant`** — der Neuabruf nach dem Deploy zeigt die neue App.
       maschinell bedient worden. Beleg: eine Definition anlegen, bearbeiten, löschen;
       `Apps.csv` danach unverändert bis auf diese Zeile.
 
+## Editor: „From installer…“ (2026-10-11)
+
+Der Paketbau leitete Install- und Uninstall-Befehl schon aus dem Installer in `Files\` ab (Engine-Erkennung wie im
+SCCMAppHelper), aber erst beim Bau – im Editor sah man nichts davon. Neu: Knopf **From installer…** wählt eine EXE oder MSI,
+erkennt die Engine und trägt `InstallCmd`/`UninstallCmd` ein, dazu Name, Hersteller und Version aus der Versionsressource
+(nur in leere Felder). MSI: Zero-Config (`SingleMSI`, keine Befehle). Unbekannte Engine: `/S` als Vermutung, mit Meldung und
+Vermerk im Befehl. Ein Weg für Bau und Editor: `Get-InstallCommandsForFile` (der Bau ruft ihn über
+`Get-DerivedInstallCommands`), ein Test vergleicht beide.
+
+Belegt: `Test-InstallerSuggestion.ps1` (neu, 25 Prüfungen) und die UI-Prüfung (Knopf vorhanden); Gegenproben: 8 eingebaute Fehler,
+einer überlebte zuerst (getippte Werte werden überschrieben – die Test-EXE hatte keine Versionsressource), dafür kam ein Fall mit
+einer echten EXE dazu, danach erkannt. **Nicht belegt:** der Knopf von Hand im echten Fenster (Dateidialog), und eine echte
+Inno-/NSIS-Setup-Datei (getestet mit Dateien, die nur die Kennung der Engine tragen).
 ## Logo mit Namenskürzung, mitlaufende Hinweise, PSADT-Log (2026-10-11)
 
 - **Logo-Suche:** `Find-LogoFile` (aus SCCMAppHelper): genau → ohne `(x64)`/Endversion → Logo ist Wortanfang des App-Namens →

@@ -185,6 +185,25 @@ function Get-DerivedInstallCommands {
     $installer = Find-PackageInstaller -ContentPath $ContentPath
     if (-not $installer) { return $null }
 
+    return (Get-InstallCommandsForFile -Path $installer.File.FullName -AppName $AppName)
+}
+
+function Get-InstallCommandsForFile {
+    <#
+        Install- und Uninstall-Befehl fuer EINE Installer-Datei (MSI oder EXE). Der gemeinsame Weg des Paketbaus
+        (Get-DerivedInstallCommands, Installer aus Files\) und des Editors ("From installer...", beliebige Datei):
+        derselbe Vorschlag, den der Bau spaeter ohnehin einsetzt. Der Dateiname im Befehl ist der Name in Files\.
+        $AppName ist der Suchname der Programmliste (Get-ArpSearchName).
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$AppName
+    )
+
+    $installer = [pscustomobject]@{
+        Kind = $(if ([IO.Path]::GetExtension($Path) -eq '.msi') { 'msi' } else { 'exe' })
+        File = (Get-Item -LiteralPath $Path)
+    }
     $name = $installer.File.Name
 
     if ($installer.Kind -eq 'msi') {

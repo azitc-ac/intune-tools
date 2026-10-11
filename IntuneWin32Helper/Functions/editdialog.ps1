@@ -76,6 +76,49 @@ function Get-EditHint {
     return $null
 }
 
+function Get-InstallerSuggestion {
+    <#
+        Was der Editor aus einer gewaehlten Installer-Datei vorschlaegt ("From installer..."), ohne Fenster:
+          MSI: Name, Version, Hersteller, Product Code und SingleMSI (Zero-Config, die Befehle entfallen).
+          EXE: die Engine wird an der Datei erkannt (Get-InstallerEngine); daraus Install- und Uninstall-
+               Befehl wie sie der Paketbau ohnehin ableiten wuerde. Name, Version und Hersteller kommen aus
+               der Versionsressource, aber nur in leere Felder - ein getippter Wert bleibt.
+        $Current: aktuelle Feldwerte (DisplayName, ArpName, Version, Publisher). Rueckgabe: Values (Feld -> Wert),
+        Engine, Certain, Note. Eine nicht erkannte Engine ist als geraten gekennzeichnet (Certain = $false).
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [System.Collections.IDictionary]$Current = @{}
+    )
+
+    $get = { param([string]$k) if ($Current.Contains($k)) { ([string]$Current[$k]).Trim() } else { '' } }
+    $values = [ordered]@{}
+
+    if ([IO.Path]::GetExtension($Path) -eq '.msi') {
+        $props = Get-MsiProperties -Path $Path
+        foreach ($pair in @(@('DisplayName', 'ProductName'), @('Version', 'ProductVersion'), @('Publisher', 'Manufacturer'), @('MsiProductCode', 'ProductCode'))) {
+            if ($props[$pair[1]]) { $values[$pair[0]] = [string]$props[$pair[1]] }
+        }
+        $values['SingleMSI'] = 'true'
+        return [pscustomobject]@{ Values = $values; Engine = 'msi'; Certain = $true; Note = '' }
+    }
+
+    $info = (Get-Item -LiteralPath $Path).VersionInfo
+    $filled = @{
+        DisplayName = [string]$info.ProductName
+        Publisher   = [string]$info.CompanyName
+        Version     = $(if ($info.ProductVersion) { [string]$info.ProductVersion } else { [string]$info.FileVersion })
+    }
+    foreach ($k in 'DisplayName', 'Publisher', 'Version') {
+        if (-not (& $get $k) -and $filled[$k] -and $filled[$k].Trim()) { $values[$k] = $filled[$k].Trim() }
+    }
+    $name = $(if (& $get 'DisplayName') { & $get 'DisplayName' } elseif ($values.Contains('DisplayName')) { $values['DisplayName'] } else { [IO.Path]::GetFileNameWithoutExtension($Path) })
+    $commands = Get-InstallCommandsForFile -Path $Path -AppName (Get-ArpSearchName -DisplayName $name -ArpName (& $get 'ArpName'))
+    $values['InstallCmd'] = $commands.Install
+    $values['UninstallCmd'] = $commands.Uninstall
+    return [pscustomobject]@{ Values = $values; Engine = $commands.Engine; Certain = [bool]$commands.Certain; Note = [string]$commands.Note }
+}
+
 function Open-EditDialog {
     <#
         .SYNOPSIS
@@ -131,7 +174,7 @@ function Open-EditDialog {
         WinGetParams   = 'Extra winget arguments, e.g. "--scope=machine". Used only when Version is LatestAvailable.'
         MsiProductCode = 'Detection by the MSI product code - native in Intune, version included. Empty: detection.ps1 is used.'
         logoURL        = 'Empty: Logos\<DisplayName>.png if it exists, otherwise the default logo. Nothing is uploaded anywhere.'
-        InstallCmd     = 'PSADT code for the install section. Empty: derived from the installer in Files\ when the package is built.'
+        InstallCmd     = 'PSADT code for the install section. Empty: derived from the installer in Files\ when the package is built. "From installer..." fills in the same suggestion now, so you can read and change it.'
         UninstallCmd   = 'PSADT code for the uninstall section. Empty: derived like the install command.'
         Interactive    = 'Runs the setup AS SYSTEM IN THE USER SESSION. A setup that starts its app when it is done leaves it running as SYSTEM on the desktop. Leave off unless the package must show dialogs.'
         Architecture   = 'Empty means x64.'
@@ -180,6 +223,7 @@ function Open-EditDialog {
     $cancelButton = & $newButton 'Cancel'   'Cancel'    'Discard the changes' 'Right'
     $wingetButton = & $newButton 'From WinGet...' 'FromWinGet' 'Search WinGet and fill in name, publisher, id and version' 'Left'
     $msiButton    = & $newButton 'From MSI...'    'FromMsi'    'Read name, version, publisher and product code from an MSI file' 'Left'
+    $installerButton = & $newButton 'From installer...' 'FromInstaller' 'Pick the installer (EXE or MSI): the engine is recognised and the install and uninstall commands are suggested - the same ones the package build would derive' 'Left'
     $okButton.IsDefault = $true
     $cancelButton.IsCancel = $true
     $okButton.Margin = '8,0,0,0'
@@ -406,6 +450,28 @@ function Open-EditDialog {
             }
         }
         catch { $errorText.Text = ("Reading the MSI failed: {0}" -f (Format-ErrorDetail $_)) }
+    })
+
+    # Der Installer, der spaeter in Files\ liegt: Engine erkennen, Befehle vorschlagen. Eine geratene Engine
+    # wird gesagt - die Befehle tragen ausserdem den Vermerk als Kommentar.
+    $installerButton.Add_Click({
+        try {
+            $dialog = New-Object Microsoft.Win32.OpenFileDialog
+            $dialog.Title  = 'Select the installer'
+            $dialog.Filter = 'Installers (*.exe;*.msi)|*.exe;*.msi|All files (*.*)|*.*'
+            $dialog.Multiselect = $false
+            if ($dialog.ShowDialog() -eq $true -and $dialog.FileName) {
+                $current = @{}
+                foreach ($k in $controls.Keys) { $current[$k] = [string](& $getValue $k) }
+                $suggestion = Get-InstallerSuggestion -Path $dialog.FileName -Current $current
+                foreach ($k in $suggestion.Values.Keys) { & $setValue $k ([string]$suggestion.Values[$k]) }
+                $errorText.Text = ''
+                if (-not $suggestion.Certain) {
+                    $null = Show-ConfirmDialog -Text ("The installer engine was not recognised.`n`n{0}`n`nThe commands are filled in as a guess - check them before you deploy." -f $suggestion.Note) -Title 'From installer' -Buttons OK -Default OK -Icon Warning -Owner $window
+                }
+            }
+        }
+        catch { $errorText.Text = ("Reading the installer failed: {0}" -f (Format-ErrorDetail $_)) }
     })
 
     # --- OK: pruefen, bei Fehler offen bleiben ---
