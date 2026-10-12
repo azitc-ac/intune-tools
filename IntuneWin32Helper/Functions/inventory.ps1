@@ -272,11 +272,11 @@ function Get-AppInventory {
         if ($row.IntuneOnly)               { $row.Status = $(if ($row.Origin -eq 'foreign') { 'Foreign app' } else { 'Intune only' }) }
         elseif (-not $row.HasDefinition)   { $row.Status = 'No definition' }
         elseif (-not $row.HasPackage)      { $row.Status = 'Definition only' }
-        elseif ($row.PackageDefinition -eq 'changed') { $row.Status = 'Package, definition changed' }
-        elseif ($row.PackageDefinition -eq 'unknown') { $row.Status = 'Package, built before the definition stamp' }
-        elseif ($row.Template -eq 'outdated')  { $row.Status = 'Package, template outdated' }
-        elseif ($row.Template -eq 'unstamped') { $row.Status = 'Package, template unstamped' }
-        else                               { $row.Status = 'Package' }
+        elseif ($row.PackageDefinition -eq 'changed') { $row.Status = 'Outdated, rebuild: definition changed' }
+        elseif ($row.PackageDefinition -eq 'unknown') { $row.Status = 'Outdated, rebuild: no definition stamp' }
+        elseif ($row.Template -eq 'outdated')  { $row.Status = 'Outdated, rebuild: template changed' }
+        elseif ($row.Template -eq 'unstamped') { $row.Status = 'Outdated, rebuild: template unstamped' }
+        else                               { $row.Status = 'Ready' }
 
         $packageFolder = '-'
         if ($row.FullPath) { $packageFolder = Split-Path -Parent $row.FullPath }

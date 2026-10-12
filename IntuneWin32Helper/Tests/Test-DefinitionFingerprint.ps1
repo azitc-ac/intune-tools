@@ -6,7 +6,7 @@
     Er sagt dem Inventar, ob ein Paket aus der Definition von heute gebaut wurde. Geprueft wird:
 
       1. Jedes Feld, das in Paket oder App eingeht, aendert den Stempel - sonst bliebe eine geaenderte Definition
-         unbemerkt ("Package" statt "Package, definition changed") und ginge mit dem alten Paket nach Intune.
+         unbemerkt ("Ready" statt "Outdated, rebuild: definition changed") und ginge mit dem alten Paket nach Intune.
       2. Was nicht eingeht, aendert ihn nicht: eigene Spalten, die Reihenfolge der Spalten, Gross-/Kleinschreibung
          von true/false, Leerzeichen am Rand.
       3. Der Stempel steht im erzeugten deploy.ps1 und wird von Get-PackageDefinitionFingerprint gelesen; ein

@@ -59,8 +59,8 @@ try {
     $tplDefs = @('Outdated', 'Unstamped', 'Current') | ForEach-Object { [pscustomobject]@{ DisplayName = $_; Version = '1.0' } }
     $tplInv = @(Get-AppInventory -Definitions $tplDefs -PacketRoot $work -RootDir $rootDir -IntuneApps @() 6>$null)
     $tplRow = @{}; foreach ($x in $tplInv) { $tplRow[$x.AppName] = $x }
-    if ($tplRow['Outdated'].Template -ne 'outdated' -or $tplRow['Outdated'].Status -ne 'Package, template outdated') { $problems += "outdated: Template '$($tplRow['Outdated'].Template)' Status '$($tplRow['Outdated'].Status)'" }
-    if ($tplRow['Unstamped'].Template -ne 'unstamped' -or $tplRow['Unstamped'].Status -ne 'Package, template unstamped') { $problems += "unstamped: Template '$($tplRow['Unstamped'].Template)' Status '$($tplRow['Unstamped'].Status)'" }
+    if ($tplRow['Outdated'].Template -ne 'outdated' -or $tplRow['Outdated'].Status -ne 'Outdated, rebuild: template changed') { $problems += "outdated: Template '$($tplRow['Outdated'].Template)' Status '$($tplRow['Outdated'].Status)'" }
+    if ($tplRow['Unstamped'].Template -ne 'unstamped' -or $tplRow['Unstamped'].Status -ne 'Outdated, rebuild: template unstamped') { $problems += "unstamped: Template '$($tplRow['Unstamped'].Template)' Status '$($tplRow['Unstamped'].Status)'" }
     foreach ($n in 'Outdated', 'Unstamped') {
         if ($tplRow[$n].Next -ne 'build package, then publish' -or -not $tplRow[$n].BuildReason) { $problems += "$n : Next '$($tplRow[$n].Next)' BuildReason '$($tplRow[$n].BuildReason)', expected a build first" }
         $st = Get-InventoryActionState -Rows @($tplRow[$n])

@@ -150,7 +150,7 @@ if ($Child) {
     }
     $rows = @(
         (New-SampleRow 'DefOnly' 'Definition only' $true  $false '-'   'build package, then publish' '-' '' 'there is no package yet'),
-        (New-SampleRow 'Both'    'Package'         $true  $true  'yes' 'publish (updates the app in Intune)' 'current' '' '' 'unknown'),
+        (New-SampleRow 'Both'    'Ready'           $true  $true  'yes' 'publish (updates the app in Intune)' 'current' '' '' 'unknown'),
         (New-SampleRow 'Orphan'  'No definition'   $false $true  '-'   'package without a row in Apps.csv' 'current'),
         (New-SampleRow 'ToolOnly' 'Intune only'    $false $false 'yes' 'in Intune only - no definition or package here' '-' 'tool'),
         (New-SampleRow 'Foreign' 'Foreign app'     $false $false 'yes' 'not created by this tool' '-' 'foreign')

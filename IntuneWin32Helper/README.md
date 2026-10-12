@@ -23,7 +23,7 @@ Tenant [xyz.onmicrosoft.com v]  Show [All (foreign Intune apps hidden) v]  [Filt
 
 | Column | Meaning |
 | --- | --- |
-| `Package` | `Definition only`, `Package`, `Package, definition changed` (the package was built before the definition was edited), `Package, built before the definition stamp` (an older package - build it once), `Package, template outdated` / `unstamped`, or `No definition` (a package folder without a row in `Apps.csv`) |
+| `Package` | `Definition only`, `Ready`, `Outdated, rebuild: definition changed` (the package was built before the definition was edited), `Outdated, rebuild: no definition stamp` (an older package - build it once), `Outdated, rebuild: template changed` / `unstamped`, or `No definition` (a package folder without a row in `Apps.csv`) |
 | `Intune` | matched by **name and version**: `yes` is an app with this name and this version; `other version: 1.0.5` means the name exists, this version does not (a publish creates it; the other version stays); `yes (2x)` means the same name **and** version twice (duplicates); `no content` means an entry a failed upload left behind (not published, no committed content); `not checked` when no tenant is connected |
 | `Next step` | the sensible next step, derived from the row |
 
@@ -56,8 +56,8 @@ the colours of the columns: **1 Definition** (Add / New version / Edit / Delete 
 **3 Intune** (Publish to Intune, Remove from Intune). The steps depend on each other from left to right:
 
 - A change on the left makes everything to its right wait. If the package is missing or no longer matches the definition
-  or the template (`Definition only`, `Package, definition changed`, `Package, built before the definition stamp`,
-  `Package, template outdated` / `unstamped`), **Build package** is the only button right of the definition that works;
+  or the template (`Definition only`, `Outdated, rebuild: definition changed`, `Outdated, rebuild: no definition stamp`,
+  `Outdated, rebuild: template changed` / `unstamped`), **Build package** is the only button right of the definition that works;
   **Publish to Intune** is greyed out.
 - Once the package is built, **Build package** is greyed out and **Publish to Intune** is the next step. When the app in Intune
   is already up to date, Publish is greyed out too.
@@ -140,10 +140,10 @@ checked that it is what the definition says, and one publish makes it so (assign
 
 **Does the package match the definition and the template?** `Build-AppPackage` stamps `deploy.ps1` with a short hash over the definition
 fields that go into the package and the app (`# ToolDefinitionFingerprint:`); the inventory compares it with the row of
-today. `Package, definition changed` means the row was edited after the build. A package built before the stamp existed
-shows `Package, built before the definition stamp` - build it once and it is known from then on.
+today. `Outdated, rebuild: definition changed` means the row was edited after the build. A package built before the stamp existed
+shows `Outdated, rebuild: no definition stamp` - build it once and it is known from then on.
 
-Changing the template changes its fingerprint: existing packages show `Package, template outdated` and need
+Changing the template changes its fingerprint: existing packages show `Outdated, rebuild: template changed` and need
 **Build package** (which rebuilds the whole folder, `deploy.ps1` and `detection.ps1` included) before they can be published.
 
 **Delete package** deletes the package folder of the selected rows - with or without a definition in `Apps.csv`

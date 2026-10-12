@@ -459,7 +459,7 @@ hat drei Stufen – Definition, Paket, Intune – und die Knöpfe heißen jetzt 
   das Modul 1.5.0 nimmt die Regel, die es selbst mit `New-IntuneWin32AppRequirementRule` baut, in `Set-IntuneWin32App` nicht an: „missing '@odata.type'“,
   und kennt `applicableArchitectures` / `minimumSupportedWindowsRelease` nicht). Danach liest das Skript die Befehlszeile zurück.
 - **Stempel der Definition:** `Build-AppPackage` schreibt `# ToolDefinitionFingerprint:` in `deploy.ps1` (Hash über die Felder, die in Paket und App
-  eingehen). Das Inventar zeigt `Package, definition changed` (Zeile nach dem Bau geändert) und `Package, built before the definition stamp` (älteres
+  eingehen). Das Inventar zeigt `Outdated, rebuild: definition changed` (Zeile nach dem Bau geändert) und `Outdated, rebuild: no definition stamp` (älteres
   Paket); beides → `Next: build package, then publish`, und Publish überspringt die Zeile mit Grund – sonst ginge der alte Stand nach Intune.
   (Das Erneuern aus der Vorlage, `Update-DeployScript`, gibt es seit dem Nachtrag „Von links nach rechts“ unten nicht mehr.)
 - **Ausgegraut nach Zustand:** `Get-InventoryActionState` (reine Funktion) liefert für die markierten Zeilen, welcher Knopf geht; ein
@@ -484,10 +484,10 @@ hat drei Stufen – Definition, Paket, Intune – und die Knöpfe heißen jetzt 
     einen eigenen grünen Kopf mit Trennlinie, wie `Intune` blau. Open folder, Settings und Close stehen in einer Zeile darunter.
     `Test-MainWindowUi.ps1` prüft die Reihenfolge über die Positionen der Knöpfe.
   - **Im Feld belegt (Test-Tenant, Test-App „ZZ IW32H Feldtest“, am Ende gelöscht, 0 Apps dieses Namens):** Definition ohne Paket → `Definition only` /
-    `build package, then publish`; nach *Build* `publish`; *Publish* legt an (eine Frage); Definition geändert → `Package, definition changed`,
+    `build package, then publish`; nach *Build* `publish`; *Publish* legt an (eine Frage); Definition geändert → `Outdated, rebuild: definition changed`,
     `IntuneDefinition=changed`, *Publish* meldet „Skip … run Build package first“ („Nothing can be published“, nichts hochgeladen); nach *Build* →
     `publish (updates the app in Intune)`; *Publish* aktualisiert (Herausgeber „ZZ Changed Publisher“ in Intune), danach `up to date`. Vorlage geändert →
-    `Package, template outdated`, *Publish* Skip („built from an older template – run Build package first“); nach *Build* wieder `up to date`.
+    `Outdated, rebuild: template changed`, *Publish* Skip („built from an older template – run Build package first“); nach *Build* wieder `up to date`.
     Gegenproben (8 eingebaute Fehler: Vorlage ohne Bauzwang, Publish/Remove ohne `BuildReason`, Build bei aktuellem Paket, Plan ohne Skip, Publish bei
     `up to date`, Build-Aktion ohne `Get-BuildTargets`, `Get-BuildTargets` ohne `BuildReason`): zunächst überlebte die Build-Aktion (ihre Auswahl war nicht
     getestet) – `Get-BuildTargets` und die Prüfung 46 kamen dazu, danach wurden alle erkannt.
@@ -495,12 +495,13 @@ hat drei Stufen – Definition, Paket, Intune – und die Knöpfe heißen jetzt 
     README zeigt noch die alte Leiste; ein Bau und eine Zuweisung zusammen (die Zuweisung blieb in diesem Lauf nicht geprüft – der Update-Zweig mit Zuweisung
     ist am 2026-10-11 belegt); `Remove from Intune` ist bei einer Zeile mit `BuildReason` gesperrt, auch wenn dort Dubletten liegen (nach Vorgabe von links nach
     rechts, die Dubletten lassen sich erst nach dem Bau entfernen).
-- **Löschen wartet auf nichts (Nachtrag, 2026-10-12):** „Wenn ein Bereich vorhanden ist, soll man ihn auch stets löschen können“ - Bereiche A
-  Definition, B Paket, C Intune. `Remove from Intune` ist nicht mehr an den Bauzwang gebunden (ein veraltetes Paket sperrt nur Anlegen und Ändern, nie
-  das Entfernen; Dubletten lassen sich also sofort entfernen). `Remove orphan folder` ist zu **`Delete package`** geworden, steht in der Zone
-  Package und gilt für jedes vorhandene Paket, auch eines mit Definition (`Remove-OrphanPackages` → `Remove-AppPackages`; die Schutzregeln für fremde
-  Ordner bleiben: Name `<Name> - <Version>`, `deploy.ps1`, unter der Wurzel). Jeder Knopf ist nur aktiv, wenn es sein Ding gibt, und sagt sonst im Tooltip
-  warum nicht (`RemoveFolderWhy`).
+- **Löschen wartet auf nichts (Nachtrag, 2026-10-12):** „Wenn ein Bereich vorhanden ist, soll man ihn auch stets löschen können“ - Bereiche A
+  Definition, B Paket, C Intune. `Remove from Intune` ist nicht mehr an den Bauzwang gebunden (ein veraltetes Paket sperrt nur Anlegen und Ändern, nie
+  das Entfernen; Dubletten lassen sich also sofort entfernen). `Remove orphan folder` ist zu **`Delete package`** geworden, steht in der Zone
+  Package und gilt für jedes vorhandene Paket, auch eines mit Definition (`Remove-OrphanPackages` → `Remove-AppPackages`; die Schutzregeln für fremde
+  Ordner bleiben: Name `<Name> - <Version>`, `deploy.ps1`, unter der Wurzel). Jeder Knopf ist nur aktiv, wenn es sein Ding gibt, und sagt sonst im Tooltip
+  warum nicht (`RemoveFolderWhy`).
+- **Texte der Spalte Package (Nachtrag, 2026-10-12):** `Ready` statt `Package`; ein Paket, das neu gebaut werden sollte, heißt `Outdated, rebuild: definition changed` / `no definition stamp` / `template changed` / `template unstamped`. Die Ursache steht hinter dem Doppelpunkt, der nächste Schritt in `Next step`.
 - **„up to date“ nur mit Beleg (Nachtrag, 2026-10-11):** „up to date“ stand bei einem neu gebauten 7-Zip, dessen App in Intune noch vom alten
   Werkzeug stammte – das Inventar prüfte Paket gegen Definition und ob die App da ist, aber nie, ob die App in Intune der Definition entspricht
   (der Vermerk war nur „Created by IntuneWin32Helper“), und *Publish* war trotzdem frei. Jetzt schreibt `deploy.ps1` beim Anlegen **und** beim Update
@@ -883,7 +884,7 @@ Belegt ist **offline**:
   unsichtbar).
 
 **Folge der Template-Änderung:** der Vorlagen-Fingerabdruck hat sich geändert; jedes vorhandene
-Paket steht einmal als `Package, template outdated` da und wird beim nächsten Deploy erneuert
+Paket steht einmal als `Outdated, rebuild: template changed` da und wird beim nächsten Deploy erneuert
 (mit `.bak`). Das ist der vorgesehene Weg, aber im Feld noch nicht gelaufen.
 
 **Nicht belegt:**

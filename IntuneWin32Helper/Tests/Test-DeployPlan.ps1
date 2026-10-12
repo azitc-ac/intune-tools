@@ -117,7 +117,7 @@ try {
     [IO.File]::WriteAllText($noStampScript, ([IO.File]::ReadAllText($noStampScript) -replace '(?m)^# ToolDefinitionFingerprint:.*\r?\n', ''), (New-Object System.Text.UTF8Encoding $true))
     $staleInv = @(Get-AppInventory -Definitions @([pscustomobject]@{ DisplayName = 'StalePkg'; Version = '1.0' }, [pscustomobject]@{ DisplayName = 'NoStamp'; Version = '1.0' }) -PacketRoot $packets -RootDir $rootDir `
         -IntuneApps @((New-App 'StalePkg' '1.0')) 6>$null)
-    Test-That ($staleInv[0].PackageDefinition -eq 'changed' -and $staleInv[0].Status -eq 'Package, definition changed' -and $staleInv[0].Next -eq 'build package, then publish') "inventory: package built from another definition: '$($staleInv[0].PackageDefinition)' / '$($staleInv[0].Status)' / '$($staleInv[0].Next)'"
+    Test-That ($staleInv[0].PackageDefinition -eq 'changed' -and $staleInv[0].Status -eq 'Outdated, rebuild: definition changed' -and $staleInv[0].Next -eq 'build package, then publish') "inventory: package built from another definition: '$($staleInv[0].PackageDefinition)' / '$($staleInv[0].Status)' / '$($staleInv[0].Next)'"
     Test-That ($staleInv[1].PackageDefinition -eq 'unknown' -and $staleInv[1].Next -eq 'build package, then publish') "inventory: package without a definition stamp: '$($staleInv[1].PackageDefinition)' / '$($staleInv[1].Next)'"
     $stalePlan = @(Get-DeployPlan -Rows $staleInv)
     Test-That ($stalePlan[0].Action -eq 'Skip' -and $stalePlan[0].Reason -match 'definition was changed after the package was built - run Build package first') "plan: changed package is '$($stalePlan[0].Action)' / '$($stalePlan[0].Reason)', expected Skip (also for an app that is in Intune)"
@@ -129,7 +129,7 @@ try {
     $buildInv = @(Get-AppInventory -Definitions @([pscustomobject]@{ DisplayName = 'OldTpl'; Version = '1.0' }, [pscustomobject]@{ DisplayName = 'NoPkg'; Version = '1.0' }) -PacketRoot $packets -RootDir $rootDir `
         -IntuneApps @((New-App 'OldTpl' '1.0'), (New-App 'NoPkg' '1.0')) 6>$null)
     $byBuild = @{}; foreach ($x in $buildInv) { $byBuild[$x.Key] = $x }
-    Test-That ($byBuild['OldTpl - 1.0'].Status -eq 'Package, template outdated' -and $byBuild['OldTpl - 1.0'].Next -eq 'build package, then publish' -and $byBuild['OldTpl - 1.0'].BuildReason -match 'older template') "inventory: package from an older template: '$($byBuild['OldTpl - 1.0'].Status)' / '$($byBuild['OldTpl - 1.0'].Next)' / '$($byBuild['OldTpl - 1.0'].BuildReason)'"
+    Test-That ($byBuild['OldTpl - 1.0'].Status -eq 'Outdated, rebuild: template changed' -and $byBuild['OldTpl - 1.0'].Next -eq 'build package, then publish' -and $byBuild['OldTpl - 1.0'].BuildReason -match 'older template') "inventory: package from an older template: '$($byBuild['OldTpl - 1.0'].Status)' / '$($byBuild['OldTpl - 1.0'].Next)' / '$($byBuild['OldTpl - 1.0'].BuildReason)'"
     Test-That ($byBuild['NoPkg - 1.0'].Next -eq 'build package, then publish' -and $byBuild['NoPkg - 1.0'].BuildReason -match 'no package yet') "inventory: definition without a package: '$($byBuild['NoPkg - 1.0'].Next)' / '$($byBuild['NoPkg - 1.0'].BuildReason)'"
     $buildPlan = @{}; foreach ($p in @(Get-DeployPlan -Rows $buildInv)) { $buildPlan[$p.Key] = $p }
     Test-That ($buildPlan['OldTpl - 1.0'].Action -eq 'Skip' -and $buildPlan['OldTpl - 1.0'].Reason -match 'older template - run Build package first') "plan: package from an older template: '$($buildPlan['OldTpl - 1.0'].Action)' / '$($buildPlan['OldTpl - 1.0'].Reason)'"

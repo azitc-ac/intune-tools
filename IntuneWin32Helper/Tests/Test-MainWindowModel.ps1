@@ -83,13 +83,13 @@ try {
         if (-not [object]::ReferenceEquals($d.DefinitionRecord, $defs[0])) { $problems += "DefOnly: DefinitionRecord is not the input record (edit/delete could not find the row again)" }
 
         $w = $row['WithPkg']
-        if ($w.Status -ne 'Package')               { $problems += "WithPkg: Status '$($w.Status)'" }
+        if ($w.Status -ne 'Ready')               { $problems += "WithPkg: Status '$($w.Status)'" }
         if (-not $w.HasDefinition -or -not $w.HasPackage) { $problems += "WithPkg: flags HasDefinition=$($w.HasDefinition) HasPackage=$($w.HasPackage)" }
         if ($w.FullPath -notmatch 'deploy\.ps1$')  { $problems += "WithPkg: FullPath '$($w.FullPath)'" }
         if ($w.Intune -ne 'yes')                   { $problems += "WithPkg: Intune '$($w.Intune)'" }
 
         $o = $row['Old']
-        if ($o.Status -ne 'Package, template outdated') { $problems += "Old: Status '$($o.Status)'" }
+        if ($o.Status -ne 'Outdated, rebuild: template changed') { $problems += "Old: Status '$($o.Status)'" }
         if ($o.Next -ne 'build package, then publish' -or $o.BuildReason -notmatch 'older template') { $problems += "Old: a package from an older template must be built again first: Next '$($o.Next)' BuildReason '$($o.BuildReason)'" }
         # Echte Zeilen durch Get-InventoryActionState: Definition ohne Paket und Paket aus aelterer Vorlage - Build ja, Publish und Remove nein.
         foreach ($name in 'DefOnly', 'Old') {

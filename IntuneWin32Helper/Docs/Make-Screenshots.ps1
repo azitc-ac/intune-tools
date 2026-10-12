@@ -130,12 +130,12 @@ if ($Child) {
                 }
             }
             $rows = @(
-                (New-Row '7-Zip'              '24.09'           'Igor Pavlov'    'Package'                    $true  $true  'yes'                   'up to date'                                     'current' '' '' 'current'),
-                (New-Row 'Git'                '2.47.1'          'Git'            'Package'                    $true  $true  'yes'                   'up to date'                                     'current' '' '' 'current'),
-                (New-Row 'Greenshot'          '1.3.290'         'Greenshot'      'Package, template outdated' $true  $true  'yes'                   'build package, then publish'                    'outdated' '' 'the package was built from an older template' 'unknown'),
+                (New-Row '7-Zip'              '24.09'           'Igor Pavlov'    'Ready'                      $true  $true  'yes'                   'up to date'                                     'current' '' '' 'current'),
+                (New-Row 'Git'                '2.47.1'          'Git'            'Ready'                      $true  $true  'yes'                   'up to date'                                     'current' '' '' 'current'),
+                (New-Row 'Greenshot'          '1.3.290'         'Greenshot'      'Outdated, rebuild: template changed' $true  $true  'yes'                   'build package, then publish'                    'outdated' '' 'the package was built from an older template' 'unknown'),
                 (New-Row 'Notepad++'          '8.7.5'           'Notepad++ Team' 'Definition only'            $true  $false '-'                     'build package, then publish'                    '-' '' 'there is no package yet'),
-                (New-Row 'VLC media player'   '3.0.21'          'VideoLAN'       'Package'                    $true  $true  'other version: 3.0.20' 'publish (new version)'                          'current'),
-                (New-Row 'Visual Studio Code' 'LatestAvailable' 'Microsoft'      'Package'                    $true  $true  '-'                     'publish'                                        'current'),
+                (New-Row 'VLC media player'   '3.0.21'          'VideoLAN'       'Ready'                      $true  $true  'other version: 3.0.20' 'publish (new version)'                          'current'),
+                (New-Row 'Visual Studio Code' 'LatestAvailable' 'Microsoft'      'Ready'                      $true  $true  '-'                     'publish'                                        'current'),
                 (New-Row 'Old Tool'           '1.0'             ''               'No definition'              $false $true  '-'                     'package without a row in Apps.csv'              'current'),
                 (New-Row 'Contoso Kiosk'      '2.1'             'Contoso'        'Intune only'                $false $false 'yes'                   'in Intune only - no definition or package here' '-' 'tool'),
                 (New-Row 'Company Portal'     '11.2'            'Microsoft'      'Foreign app'                $false $false 'yes'                   'not created by this tool'                       '-' 'foreign')

@@ -169,9 +169,11 @@ function Show-InventoryDialog {
     # Farben je Zustand: gruen ist erledigt, blau der naechste Schritt, orange
     # will angesehen werden, rot stimmt nicht, grau fehlt noch.
     $statusColors = @(
-        @('Package',                      'DarkGreen'),
-        @('Package, template outdated',   'DarkOrange'),
-        @('Package, template unstamped',  'DarkOrange'),
+        @('Ready',                      'DarkGreen'),
+        @('Outdated, rebuild: definition changed',  'DarkOrange'),
+        @('Outdated, rebuild: no definition stamp', 'DarkOrange'),
+        @('Outdated, rebuild: template changed',   'DarkOrange'),
+        @('Outdated, rebuild: template unstamped',  'DarkOrange'),
         @('Definition only',              'Gray'),
         @('No definition',                'Firebrick')
     )
