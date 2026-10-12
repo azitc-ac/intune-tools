@@ -41,24 +41,24 @@ function New-Row([string]$name, [bool]$def, [bool]$pkg, [string]$buildReason, [s
 # Spalten: Edit NewVersion Delete Build Publish Remove RemoveFolder (T = moeglich)
 $cases = @(
     @{ Name = 'definition only (no package, not in Intune)';        Rows = @(New-Row 'a' $true  $false $noPkg   '-');                         Want = 'T T T T F F F' }
-    @{ Name = 'definition only, but the app is in Intune';          Rows = @(New-Row 'a' $true  $false $noPkg   'yes');                       Want = 'T T T T F F F' }
-    @{ Name = 'package current, not in Intune';                     Rows = @(New-Row 'a' $true  $true  ''       '-');                         Want = 'T T T F T F F' }
-    @{ Name = 'package current, in Intune once, state unknown';     Rows = @(New-Row 'a' $true  $true  ''       'yes' 'unknown');             Want = 'T T T F T T F' }
-    @{ Name = 'package current, in Intune once, differs';           Rows = @(New-Row 'a' $true  $true  ''       'yes' 'changed');             Want = 'T T T F T T F' }
-    @{ Name = 'package current, in Intune once, up to date';        Rows = @(New-Row 'a' $true  $true  ''       'yes' 'current');             Want = 'T T T F F T F' }
-    @{ Name = 'package current, other version in Intune';           Rows = @(New-Row 'a' $true  $true  ''       'other version: 0.9');        Want = 'T T T F T F F' }
-    @{ Name = 'package older than the definition (changed)';        Rows = @(New-Row 'a' $true  $true  $changed 'yes' 'current');             Want = 'T T T T F F F' }
-    @{ Name = 'package without a definition stamp (unknown)';       Rows = @(New-Row 'a' $true  $true  $unknown '-');                         Want = 'T T T T F F F' }
-    @{ Name = 'package from an older template';                     Rows = @(New-Row 'a' $true  $true  $oldTpl  'yes' 'unknown');             Want = 'T T T T F F F' }
-    @{ Name = 'in Intune more than once (package current)';         Rows = @(New-Row 'a' $true  $true  ''       'yes (2x)');                  Want = 'T T T F F T F' }
-    @{ Name = 'entry in Intune without content (package current)';  Rows = @(New-Row 'a' $true  $true  ''       'no content');                Want = 'T T T F F T F' }
-    @{ Name = 'package without a definition (orphan)';              Rows = @(New-Row 'a' $false $true  ''       '-');                         Want = 'F F F F T F T' }
-    @{ Name = 'orphan that is in Intune too';                       Rows = @(New-Row 'a' $false $true  ''       'yes' '-' 'tool');            Want = 'F F F F T T T' }
+    @{ Name = 'definition only, but the app is in Intune';          Rows = @(New-Row 'a' $true  $false $noPkg   'yes');                       Want = 'T T T T F T F' }
+    @{ Name = 'package current, not in Intune';                     Rows = @(New-Row 'a' $true  $true  ''       '-');                         Want = 'T T T F T F T' }
+    @{ Name = 'package current, in Intune once, state unknown';     Rows = @(New-Row 'a' $true  $true  ''       'yes' 'unknown');             Want = 'T T T F T T T' }
+    @{ Name = 'package current, in Intune once, differs';           Rows = @(New-Row 'a' $true  $true  ''       'yes' 'changed');             Want = 'T T T F T T T' }
+    @{ Name = 'package current, in Intune once, up to date';        Rows = @(New-Row 'a' $true  $true  ''       'yes' 'current');             Want = 'T T T F F T T' }
+    @{ Name = 'package current, other version in Intune';           Rows = @(New-Row 'a' $true  $true  ''       'other version: 0.9');        Want = 'T T T F T F T' }
+    @{ Name = 'package older than the definition (changed)';        Rows = @(New-Row 'a' $true  $true  $changed 'yes' 'current');             Want = 'T T T T F T T' }
+    @{ Name = 'package without a definition stamp (unknown)';       Rows = @(New-Row 'a' $true  $true  $unknown '-');                         Want = 'T T T T F F T' }
+    @{ Name = 'package from an older template';                     Rows = @(New-Row 'a' $true  $true  $oldTpl  'yes' 'unknown');             Want = 'T T T T F T T' }
+    @{ Name = 'in Intune more than once (package current)';         Rows = @(New-Row 'a' $true  $true  ''       'yes (2x)');                  Want = 'T T T F F T T' }
+    @{ Name = 'entry in Intune without content (package current)';  Rows = @(New-Row 'a' $true  $true  ''       'no content');                Want = 'T T T F F T T' }
+    @{ Name = 'package without a definition';              Rows = @(New-Row 'a' $false $true  ''       '-');                         Want = 'F F F F T F T' }
+    @{ Name = 'package without a definition, app in Intune too';                       Rows = @(New-Row 'a' $false $true  ''       'yes' '-' 'tool');            Want = 'F F F F T T T' }
     @{ Name = 'only in Intune, created by the tool';                Rows = @(New-Row 'a' $false $false ''       'yes' '-' 'tool');            Want = 'F F F F F T F' }
     @{ Name = 'only in Intune, foreign app';                        Rows = @(New-Row 'a' $false $false ''       'yes' '-' 'foreign');         Want = 'F F F F F F F' }
     @{ Name = 'nothing selected';                                   Rows = @();                                                                Want = 'F F F F F F F' }
-    @{ Name = 'two rows: one ready to publish, one to build';       Rows = @((New-Row 'a' $true $true '' '-'), (New-Row 'b' $true $true $changed 'yes')); Want = 'F F T T T F F' }
-    @{ Name = 'two rows: both to build';                            Rows = @((New-Row 'a' $true $true $changed '-'), (New-Row 'b' $true $true $unknown '-')); Want = 'F F T T F F F' }
+    @{ Name = 'two rows: one ready to publish, one to build';       Rows = @((New-Row 'a' $true $true '' '-'), (New-Row 'b' $true $true $changed 'yes')); Want = 'F F T T T T T' }
+    @{ Name = 'two rows: both to build';                            Rows = @((New-Row 'a' $true $true $changed '-'), (New-Row 'b' $true $true $unknown '-')); Want = 'F F T T F F T' }
     @{ Name = 'two rows: definition only and orphan';               Rows = @((New-Row 'a' $true $false $noPkg '-'), (New-Row 'b' $false $true '' '-'));       Want = 'F F T T T F T' }
 )
 $labels = 'Edit', 'NewVersion', 'Delete', 'Build', 'Publish', 'Remove', 'RemoveFolder'
@@ -69,6 +69,7 @@ foreach ($case in $cases) {
     # Ein ausgegrauter Build/Publish/Remove nennt den Grund, ein aktiver keinen.
     Test-That ($state.Publish -eq [string]::IsNullOrEmpty($state.PublishWhy)) "$($case.Name): Publish=$($state.Publish) but PublishWhy='$($state.PublishWhy)'"
     Test-That ($state.Remove -eq [string]::IsNullOrEmpty($state.RemoveWhy)) "$($case.Name): Remove=$($state.Remove) but RemoveWhy='$($state.RemoveWhy)'"
+    Test-That ($state.RemoveFolder -eq [string]::IsNullOrEmpty($state.RemoveFolderWhy)) "$($case.Name): RemoveFolder=$($state.RemoveFolder) but RemoveFolderWhy='$($state.RemoveFolderWhy)'"
     Test-That ($state.Build -eq [string]::IsNullOrEmpty($state.BuildWhy)) "$($case.Name): Build=$($state.Build) but BuildWhy='$($state.BuildWhy)'"
 }
 
@@ -83,7 +84,7 @@ Test-That ((& $why @(New-Row 'a' $true $true '' 'no content')) -match 'no conten
 Test-That ((& $why @(New-Row 'a' $false $false '' 'yes' '-' 'tool')) -match 'no definition and no package') 'reason for an app that exists only in Intune'
 Test-That ((& $why @()) -match 'select an app') 'reason when nothing is selected'
 Test-That ((Get-InventoryActionState -Rows @(New-Row 'a' $false $false '' 'yes' '-' 'foreign')).RemoveWhy -match 'may remove') 'reason for a foreign app'
-Test-That ((Get-InventoryActionState -Rows @(New-Row 'a' $true $true $changed 'yes')).RemoveWhy -match 'run Build package first') 'reason for Remove while the package must be built'
+Test-That ((Get-InventoryActionState -Rows @(New-Row 'a' $true $true $changed 'yes')).Remove) 'Remove from Intune stays possible while the package must be built (what exists can always be deleted)'
 Test-That ((Get-InventoryActionState -Rows @(New-Row 'a' $true $true '' 'yes' 'unknown')).BuildWhy -match 'already built') 'reason for Build when the package is current'
 Test-That ((Get-InventoryActionState -Rows @(New-Row 'a' $false $true '' '-')).BuildWhy -match 'no definition') 'reason for Build without a definition'
 

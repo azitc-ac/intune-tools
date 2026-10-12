@@ -384,7 +384,6 @@ function Show-InventoryDialog {
     $null = $left.Children.Add($settingsButton)
 
     $folderButton  = & $newButton 'Open folder'      'OpenFolder' 'The package folder of the selected row, or the package root' $left
-    $orphanButton  = & $newButton 'Remove orphan folder' 'RemoveFolder' 'Delete the package folder of selected rows that have no definition in Apps.csv - the app in Intune stays' $left
 
     # Die drei Zonen, von links nach rechts: Definition, Paket, Intune.
     $baseTips = @{}
@@ -394,7 +393,8 @@ function Show-InventoryDialog {
     $deleteButton  = & $newButton 'Delete definition' 'Delete'     'Remove the row from Apps.csv - the package folder and the app in Intune stay' $definitionPanel
     $deleteButton.Margin = '0'
     $buildButton   = & $newButton 'Build package'     'Build'      'Create the package folder on disk from the definition and the current template (replaces the one that is there). Possible when the package is missing or no longer matches the definition or the template' $packagePanel
-    $buildButton.Margin = '0'
+    $packageDeleteButton  = & $newButton 'Delete package' 'RemoveFolder' 'Delete the package folder of the selected rows from disk - the definition and the app in Intune stay. Possible when a package exists' $packagePanel
+    $packageDeleteButton.Margin = '0'
     $publishButton = & $newButton 'Publish to Intune' 'Publish'    'Put the app into Intune: create it, or - if it is already there - bring it up to date (package, detection, commands, requirement, icon; the assignments stay). Needs a package that matches the definition - Build package comes first' $intunePanel
     $publishButton.Margin = '0,0,24,0'
     $removeButton = & $newButton 'Remove from Intune' 'Remove' 'Delete the app of the selected row in Intune (name AND version) - with its assignments. The definition and the package folder stay' $intunePanel
@@ -402,7 +402,7 @@ function Show-InventoryDialog {
     $closeButton   = & $newButton 'Close'             'Cancel'     'Close the tool' $right
     $closeButton.Margin = '0'
     $closeButton.IsCancel = $true
-    foreach ($b in $removeButton, $addButton, $versionButton, $editButton, $deleteButton, $buildButton, $publishButton) { $baseTips[$b] = [string]$b.ToolTip }
+    foreach ($b in $packageDeleteButton, $removeButton, $addButton, $versionButton, $editButton, $deleteButton, $buildButton, $publishButton) { $baseTips[$b] = [string]$b.ToolTip }
 
     $settingsButton.Add_Click({
         try {
@@ -415,7 +415,7 @@ function Show-InventoryDialog {
         & $choose 'Refresh'
     })
     $folderButton.Add_Click({  & $choose 'OpenFolder' })
-    $orphanButton.Add_Click({  & $choose 'RemoveFolder' })
+    $packageDeleteButton.Add_Click({  & $choose 'RemoveFolder' })
     $addButton.Add_Click({     & $choose 'Add' })
     $versionButton.Add_Click({ & $choose 'NewVersion' })
     $editButton.Add_Click({    & $choose 'Edit' })
@@ -452,8 +452,9 @@ function Show-InventoryDialog {
         # Remove loescht in Intune, was zu Name UND Version der Zeile gehoert; fremde Apps nie.
         $removeButton.IsEnabled  = $state.Remove
         $removeButton.ToolTip    = $(if ($state.Remove) { $baseTips[$removeButton] } else { 'Not possible now: ' + $state.RemoveWhy })
-        # Nur ein Ordner ohne Definition ist verwaist - alles andere loescht dieser Weg nie.
-        $orphanButton.IsEnabled  = $state.RemoveFolder
+        # Delete package: sobald ein Paket da ist (mit oder ohne Definition).
+        $packageDeleteButton.IsEnabled  = $state.RemoveFolder
+        $packageDeleteButton.ToolTip    = $(if ($state.RemoveFolder) { $baseTips[$packageDeleteButton] } else { 'Not possible now: ' + $state.RemoveFolderWhy })
     }
     & $syncButtons
     $dataGrid.Add_SelectionChanged($syncButtons)
@@ -689,24 +690,23 @@ function Start-InventoryLoop {
                 }
 
                 'RemoveFolder' {
-                    # Nur Ordner ohne Definition. Die Auswahl der Zeilen entscheidet der Knopf, die
-                    # Verweigerung liegt in Remove-OrphanPackages: ein Ordner MIT Definition wird dort
-                    # auch dann nicht angefasst, wenn er hier durchrutschte.
-                    $orphans = @($selection | Where-Object { $_.HasPackage -and -not $_.HasDefinition })
-                    if ($orphans.Count -eq 0) {
-                        $null = Show-ConfirmDialog -Text 'None of the selected rows is an orphan: only a package folder without a row in Apps.csv can be removed here.' -Title 'Remove orphan folder' -Buttons OK -Icon Information -Default OK
+                    # Delete package: jedes vorhandene Paket. Die Auswahl der Zeilen entscheidet der Knopf, die
+                    # Verweigerung (nicht vom Tool angelegt, ausserhalb der Wurzel) liegt in Remove-AppPackages.
+                    $packages = @($selection | Where-Object { $_.HasPackage })
+                    if ($packages.Count -eq 0) {
+                        $null = Show-ConfirmDialog -Text 'None of the selected rows has a package folder.' -Title 'Delete package' -Buttons OK -Icon Information -Default OK
                     }
                     else {
-                        $lines = foreach ($orphan in $orphans) {
-                            $folder  = Split-Path -Parent ([string]$orphan.FullPath)
+                        $lines = foreach ($package in $packages) {
+                            $folder  = Split-Path -Parent ([string]$package.FullPath)
                             $summary = Get-PackageFolderSummary -Path $folder
-                            $stays   = $(if ($orphan.Intune -like 'yes*' -or $orphan.Intune -eq 'no content') { '  (the app stays in Intune)' } else { '' })
-                            ("{0}`n    {1}  -  {2} file(s), {3:N1} MB{4}" -f $orphan.Key, $folder, $summary.Files, ($summary.Bytes / 1MB), $stays)
+                            $stays   = $(if ($package.Intune -like 'yes*' -or $package.Intune -eq 'no content') { '  (the app stays in Intune)' } else { '' })
+                            ("{0}`n    {1}  -  {2} file(s), {3:N1} MB{4}" -f $package.Key, $folder, $summary.Files, ($summary.Bytes / 1MB), $stays)
                         }
-                        $answer = Show-ConfirmDialog -Text ("Delete {0} package folder(s) that have no definition in Apps.csv?`n`n{1}`n`nThis cannot be undone. The apps in Intune are not touched." -f $orphans.Count, ($lines -join "`n`n")) -Title 'Remove orphan folder' -Buttons YesNo -Icon Warning -Default No
+                        $answer = Show-ConfirmDialog -Text ("Delete {0} package folder(s) from disk?`n`n{1}`n`nThis cannot be undone. The definitions in Apps.csv and the apps in Intune are not touched." -f $packages.Count, ($lines -join "`n`n")) -Title 'Delete package' -Buttons YesNo -Icon Warning -Default No
                         if ($answer -eq 'Yes') {
-                            $outcome = Remove-OrphanPackages -Rows $orphans -PacketRoot $packetRoot
-                            Write-Host ("Orphan folders: {0} removed, {1} skipped, {2} failed." -f $outcome.Removed.Count, $outcome.Skipped.Count, $outcome.Failed.Count) -ForegroundColor Cyan
+                            $outcome = Remove-AppPackages -Rows $packages -PacketRoot $packetRoot
+                            Write-Host ("Package folders: {0} removed, {1} skipped, {2} failed." -f $outcome.Removed.Count, $outcome.Skipped.Count, $outcome.Failed.Count) -ForegroundColor Cyan
                             foreach ($name in $outcome.Removed) { Write-Host ("  REMOVED  {0}" -f $name) -ForegroundColor Green }
                             foreach ($name in $outcome.Skipped) { Write-Host ("  SKIPPED  {0}" -f $name) -ForegroundColor Yellow }
                             foreach ($name in $outcome.Failed)  { Write-Host ("  FAILED   {0}" -f $name) -ForegroundColor Red }

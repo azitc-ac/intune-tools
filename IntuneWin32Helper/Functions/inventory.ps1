@@ -317,7 +317,9 @@ function Get-InventoryActionState {
           Definition  Add / New version / Edit / Delete definition
           Paket       Build package
           Intune      Publish to Intune / Remove from Intune
-        dazu Remove orphan folder fuer einen Paketordner ohne Definition.
+        und Delete package (Paket), das jedes vorhandene Paket entfernt.
+        Bauen und Veroeffentlichen haengen von links nach rechts zusammen; LOESCHEN nicht: was es gibt, kann man
+        stets entfernen (Delete definition, Remove from Intune), auch wenn das Paket erst gebaut werden muss.
 
         Publish ist moeglich, wenn mindestens eine markierte Zeile veroeffentlicht werden kann; was nicht geht,
         meldet der Plan beim Klick (Skip mit Grund). PublishWhy sagt, warum NICHTS davon geht (leer, wenn es
@@ -350,9 +352,10 @@ function Get-InventoryActionState {
     if ($rows.Count -eq 0) { $publishWhy = 'select an app first' }
     elseif ($publishable.Count -eq 0) { $publishWhy = [string](@($publishReasons | Where-Object { $_ })[0]) }
 
-    # Remove from Intune liegt rechts von Build package: bei einer Zeile, die erst gebaut werden muss, gesperrt.
-    $removable = @($rows | Where-Object { ([string]$_.Intune -like 'yes*' -or [string]$_.Intune -eq 'no content') -and [string]$_.Origin -ne 'foreign' -and -not ([string]$_.BuildReason) })
-    $orphans = @($rows | Where-Object { $_.HasPackage -and -not $_.HasDefinition })
+    # Was es gibt, laesst sich loeschen - unabhaengig vom Stand des Pakets (ein Bauzwang sperrt nur das Anlegen
+    # und Aendern, nie das Entfernen). Fremde Apps schuetzt die Herkunft.
+    $removable = @($rows | Where-Object { ([string]$_.Intune -like 'yes*' -or [string]$_.Intune -eq 'no content') -and [string]$_.Origin -ne 'foreign' })
+    $withPackage = @($rows | Where-Object { $_.HasPackage })
 
     $buildWhy = ''
     if ($rows.Count -eq 0) { $buildWhy = 'select an app first' }
@@ -361,11 +364,7 @@ function Get-InventoryActionState {
 
     $removeWhy = ''
     if ($rows.Count -eq 0) { $removeWhy = 'select an app first' }
-    elseif ($removable.Count -eq 0) {
-        $removeWhy = 'no app of this name and version in Intune that this tool may remove'
-        $stale = @($rows | Where-Object { [string]$_.BuildReason })
-        if ($stale.Count -gt 0) { $removeWhy = ('run Build package first - {0}' -f $stale[0].BuildReason) }
-    }
+    elseif ($removable.Count -eq 0) { $removeWhy = 'no app of this name and version in Intune that this tool may remove' }
 
     [pscustomobject]@{
         Edit         = ($one -and $withDefinition.Count -eq 1)
@@ -377,7 +376,8 @@ function Get-InventoryActionState {
         PublishWhy   = $publishWhy
         Remove       = ($removable.Count -gt 0)
         RemoveWhy    = $removeWhy
-        RemoveFolder = ($orphans.Count -gt 0)
+        RemoveFolder = ($withPackage.Count -gt 0)
+        RemoveFolderWhy = $(if ($rows.Count -eq 0) { 'select an app first' } elseif ($withPackage.Count -eq 0) { 'there is no package folder to delete' } else { '' })
     }
 }
 

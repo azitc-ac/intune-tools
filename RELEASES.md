@@ -481,7 +481,7 @@ hat drei Stufen – Definition, Paket, Intune – und die Knöpfe heißen jetzt 
     Definition und der aktuellen Vorlage. Prüfungen: 30 (`Update-DeployScript` darf nicht zurückkehren), 32 (`Invoke-InventoryDeploy`, `Invoke-PackageDeploy`
     und `Get-DeployPlan` rufen keinen Paket-Hersteller), 46 (Build-Aktion und -Knopf über `Get-BuildTargets`), 47 (`Write-DeployScript` nur in `Build-AppPackage`).
   - **Drei Zonen im Fenster:** Definition (links), Paket (Mitte), Intune (rechts) mit Überschrift und Farbe (grau, grün, blau); die Spalte `Package` hat
-    einen eigenen grünen Kopf mit Trennlinie, wie `Intune` blau. Open folder, Remove orphan folder, Settings und Close stehen in einer Zeile darunter.
+    einen eigenen grünen Kopf mit Trennlinie, wie `Intune` blau. Open folder, Settings und Close stehen in einer Zeile darunter.
     `Test-MainWindowUi.ps1` prüft die Reihenfolge über die Positionen der Knöpfe.
   - **Im Feld belegt (Test-Tenant, Test-App „ZZ IW32H Feldtest“, am Ende gelöscht, 0 Apps dieses Namens):** Definition ohne Paket → `Definition only` /
     `build package, then publish`; nach *Build* `publish`; *Publish* legt an (eine Frage); Definition geändert → `Package, definition changed`,
@@ -495,6 +495,12 @@ hat drei Stufen – Definition, Paket, Intune – und die Knöpfe heißen jetzt 
     README zeigt noch die alte Leiste; ein Bau und eine Zuweisung zusammen (die Zuweisung blieb in diesem Lauf nicht geprüft – der Update-Zweig mit Zuweisung
     ist am 2026-10-11 belegt); `Remove from Intune` ist bei einer Zeile mit `BuildReason` gesperrt, auch wenn dort Dubletten liegen (nach Vorgabe von links nach
     rechts, die Dubletten lassen sich erst nach dem Bau entfernen).
+- **Löschen wartet auf nichts (Nachtrag, 2026-10-12):** „Wenn ein Bereich vorhanden ist, soll man ihn auch stets löschen können“ - Bereiche A
+  Definition, B Paket, C Intune. `Remove from Intune` ist nicht mehr an den Bauzwang gebunden (ein veraltetes Paket sperrt nur Anlegen und Ändern, nie
+  das Entfernen; Dubletten lassen sich also sofort entfernen). `Remove orphan folder` ist zu **`Delete package`** geworden, steht in der Zone
+  Package und gilt für jedes vorhandene Paket, auch eines mit Definition (`Remove-OrphanPackages` → `Remove-AppPackages`; die Schutzregeln für fremde
+  Ordner bleiben: Name `<Name> - <Version>`, `deploy.ps1`, unter der Wurzel). Jeder Knopf ist nur aktiv, wenn es sein Ding gibt, und sagt sonst im Tooltip
+  warum nicht (`RemoveFolderWhy`).
 - **„up to date“ nur mit Beleg (Nachtrag, 2026-10-11):** „up to date“ stand bei einem neu gebauten 7-Zip, dessen App in Intune noch vom alten
   Werkzeug stammte – das Inventar prüfte Paket gegen Definition und ob die App da ist, aber nie, ob die App in Intune der Definition entspricht
   (der Vermerk war nur „Created by IntuneWin32Helper“), und *Publish* war trotzdem frei. Jetzt schreibt `deploy.ps1` beim Anlegen **und** beim Update

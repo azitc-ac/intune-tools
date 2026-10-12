@@ -246,16 +246,17 @@ try {
         # Die drei Zonen stehen von links nach rechts: Definition (Add, New version, Edit, Delete definition), Paket (Build package),
         # Intune (Publish, Remove from Intune) - jede Zone ganz rechts von der vorigen.
         $rects = @{}
-        foreach ($id in 'Add', 'NewVersion', 'Edit', 'Delete', 'Build', 'Publish', 'Remove') {
+        foreach ($id in 'Add', 'NewVersion', 'Edit', 'Delete', 'Build', 'Publish', 'Remove', 'RemoveFolder') {
             $rects[$id] = (Find-UiaElement -Root $window -AutomationId $id -TimeoutSeconds 5).Current.BoundingRectangle
         }
-        $finite = @($rects.Values | Where-Object { -not [double]::IsInfinity($_.X) -and $_.Width -gt 0 }).Count -eq 7
+        $finite = @($rects.Values | Where-Object { -not [double]::IsInfinity($_.X) -and $_.Width -gt 0 }).Count -eq 8
         Test-That 'the buttons have a position (the window is rendered)' $finite
         if ($finite) {
             $definitionRight = (@('Add', 'NewVersion', 'Edit', 'Delete') | ForEach-Object { $rects[$_].Right } | Measure-Object -Maximum).Maximum
             Test-That 'definition buttons: Add, New version, Edit, Delete definition in this order' ($rects.Add.X -lt $rects.NewVersion.X -and $rects.NewVersion.X -lt $rects.Edit.X -and $rects.Edit.X -lt $rects.Delete.X)
             Test-That 'zones: Build package is right of every definition button' ($rects.Build.X -gt $definitionRight) "Build.X=$($rects.Build.X) definition right=$definitionRight"
             Test-That 'zones: Publish and Remove from Intune are right of Build package' ($rects.Publish.X -gt $rects.Build.Right -and $rects.Remove.X -gt $rects.Publish.X) "Publish.X=$($rects.Publish.X) Build.Right=$($rects.Build.Right)"
+            Test-That 'zones: Delete package belongs to the package zone (right of Build package, left of Publish)' ($rects.RemoveFolder.X -gt $rects.Build.X -and $rects.RemoveFolder.Right -lt $rects.Publish.X -and [Math]::Abs($rects.RemoveFolder.Y - $rects.Build.Y) -lt 4)
             Test-That 'zones: the definition buttons are the left group, the Intune buttons the right group of one row' ([Math]::Abs($rects.Add.Y - $rects.Publish.Y) -lt 4 -and [Math]::Abs($rects.Add.Y - $rects.Build.Y) -lt 4)
         }
 
@@ -275,7 +276,7 @@ try {
             # Eine Zeile MIT Definition und Paket ist nicht verwaist: der Knopf bleibt aus.
             $null = Select-GridRowByCell $grid 'Both'
             Start-Sleep -Milliseconds 300
-            Test-ButtonStates $window @{ RemoveFolder = $false; Remove = $true; Build = $false; Publish = $true; Edit = $true } 'Both (package current, app in Intune unstamped: Build package is done, Publish is next)'
+            Test-ButtonStates $window @{ RemoveFolder = $true; Remove = $true; Build = $false; Publish = $true; Edit = $true } 'Both (package current, app in Intune unstamped: Build package is done, Publish is next)'
             # Eine App nur in Intune, vom Tool angelegt: loeschen ja, alles andere nein.
             $null = Select-GridRowByCell $grid 'ToolOnly'
             Start-Sleep -Milliseconds 300

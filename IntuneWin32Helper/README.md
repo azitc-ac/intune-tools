@@ -17,8 +17,8 @@ Tenant [xyz.onmicrosoft.com v]  Show [All (foreign Intune apps hidden) v]  [Filt
  (grey: definition)                 || (green: package) || (blue: tenant)
  1 Definition                          2 Package                            3 Intune
  [Add...] [New version...] [Edit...]   [Build package]                      [Publish to Intune] [Remove from Intune]
- [Delete definition]
-[gear] [Open folder] [Remove orphan folder]                                                                  [Close]
+ [Delete definition]                   [Delete package]
+[gear] [Open folder]                                                                                         [Close]
 ```
 
 | Column | Meaning |
@@ -52,15 +52,18 @@ tenant); the permission is read from the token. After a failed check the previou
 
 An app has three things - the **definition** (a row in `Apps.csv`), the **package** (the folder with the PSADT
 files) and the **app in Intune** - and the buttons follow them, left to right, in three coloured zones that match
-the colours of the columns: **1 Definition** (Add / New version / Edit / Delete definition), **2 Package** (Build package),
+the colours of the columns: **1 Definition** (Add / New version / Edit / Delete definition), **2 Package** (Build package, Delete package),
 **3 Intune** (Publish to Intune, Remove from Intune). The steps depend on each other from left to right:
 
 - A change on the left makes everything to its right wait. If the package is missing or no longer matches the definition
   or the template (`Definition only`, `Package, definition changed`, `Package, built before the definition stamp`,
   `Package, template outdated` / `unstamped`), **Build package** is the only button right of the definition that works;
-  **Publish to Intune** and **Remove from Intune** are greyed out.
+  **Publish to Intune** is greyed out.
 - Once the package is built, **Build package** is greyed out and **Publish to Intune** is the next step. When the app in Intune
   is already up to date, Publish is greyed out too.
+- **Deleting does not wait for anything.** What exists can always be deleted, whatever the state of the others: **Delete definition**
+  as soon as there is a definition, **Delete package** as soon as there is a package folder, **Remove from Intune** as soon as the app
+  is in Intune (and was created by this tool). A button for a thing that is not there is greyed out.
 
 Greyed-out buttons say why in their tooltip. The rule is one function (`Get-InventoryActionState`, with `Get-BuildTargets`
 choosing the rows to build) with a test that lists every state, and a check that the window has no rule of its own.
@@ -72,7 +75,7 @@ choosing the rows to build) with a test that lists every state, and a check that
 | **A new version** of an app (another version number, the old one goes away) | **New version...**, put the installer into `Files\`, **Build package**, **Publish to Intune**; then select the old version and **Remove from Intune**. The two versions are two apps in Intune; assignments are not carried over |
 | **The same version, brought up to date** (the definition was edited, an older package, a new template) | **Edit...** the definition if needed, **Build package**, **Publish to Intune** - the app in Intune is updated in place and its assignments stay |
 | **Take an app out** | **Remove from Intune** (asks first; definition and package stay) |
-| **Tidy up** | **Delete definition** (the row only), **Remove orphan folder** (a package folder without a row) |
+| **Tidy up** | **Delete definition** (the row only), **Delete package** (the package folder, with or without a row) |
 
 | Button | Possible when |
 | --- | --- |
@@ -80,8 +83,8 @@ choosing the rows to build) with a test that lists every state, and a check that
 | **Delete definition** | the selection has a row with a definition |
 | **Build package** | a selected row has a definition and its package is missing or no longer matches the definition or the template |
 | **Publish to Intune** | a selected row can be published: its package matches the definition and the template (or it is a package without a definition), the app is not in Intune twice, has no empty entry there and is not already up to date |
-| **Remove from Intune** | an app of this name **and** version is in Intune and was created by this tool, and its package does not have to be built first |
-| **Remove orphan folder** | a selected row is a package folder without a definition |
+| **Delete package** | a selected row has a package folder |
+| **Remove from Intune** | an app of this name **and** version is in Intune and was created by this tool |
 
 The row tooltip spells out all three states, and the selection survives every action.
 
@@ -143,13 +146,12 @@ shows `Package, built before the definition stamp` - build it once and it is kno
 Changing the template changes its fingerprint: existing packages show `Package, template outdated` and need
 **Build package** (which rebuilds the whole folder, `deploy.ps1` and `detection.ps1` included) before they can be published.
 
-**Remove orphan folder** deletes the package folder of selected rows that have **no definition** in
-`Apps.csv` (status `No definition` - typically what is left after a rename or a deleted definition).
-It asks first, listing every folder with its file count and size, and says that the apps in Intune
-are not touched. The button is only enabled when the selection contains such a row, and the deletion
-itself (`Remove-OrphanPackages`) refuses on its own anything that is not clearly an orphan: a folder
-with a definition, a folder not named `<Name> - <Version>`, a folder without `deploy.ps1`, and
-anything outside `packetRoot`. Use *Show: Package without definition* and select all to clean up in
+**Delete package** deletes the package folder of the selected rows - with or without a definition in `Apps.csv`
+(a row without one has the status `No definition`, typically what is left after a rename or a deleted definition).
+It asks first, listing every folder with its file count and size, and says that the definitions and the apps in Intune
+are not touched. The button is only enabled when the selection contains a row with a package, and the deletion
+itself (`Remove-AppPackages`) refuses on its own anything the tool did not make: a folder not named
+`<Name> - <Version>`, a folder without `deploy.ps1`, and anything outside `packetRoot`. Use *Show: Package without definition* and select all to clean up in
 one go.
 
 **WinGet search.** *From WinGet...* in the editor opens a search dialog (pattern from SCCMAppHelper). The front

@@ -207,22 +207,23 @@ try {
         (New-FakeRow 'Outside - 1.0'      $outside  $true)
     )
 
-    # ALLE Zeilen uebergeben, auch die mit Definition: der Schutz liegt in der Funktion, nicht im Knopf.
-    $outcome = Remove-OrphanPackages -Rows (@($inv2) + $extra) -PacketRoot $packets 6>$null
+    # ALLE Zeilen uebergeben: ein vorhandenes Paket ist loeschbar, mit oder ohne Definition; der Schutz vor
+    # fremden Ordnern liegt in der Funktion, nicht im Knopf.
+    $outcome = Remove-AppPackages -Rows (@($inv2) + $extra) -PacketRoot $packets 6>$null
     $orphanFolder = Join-Path $packets 'Orphan - 1.0'
     if (Test-Path -LiteralPath $orphanFolder)                 { $problems += "orphans: the orphan folder 'Orphan - 1.0' was not removed" }
     if (@($outcome.Removed) -notcontains 'Orphan - 1.0')      { $problems += "orphans: Removed does not list 'Orphan - 1.0': $(@($outcome.Removed) -join ', ')" }
-    if (@($outcome.Removed).Count -ne 1)                      { $problems += "orphans: expected exactly 1 removed, got $(@($outcome.Removed).Count): $(@($outcome.Removed) -join ', ')" }
-    foreach ($keep in 'WithPkg - 1.0', 'Old - 1.0') {
-        if (-not (Test-Path -LiteralPath (Join-Path $packets $keep))) { $problems += "orphans: '$keep' HAS a definition and was deleted" }
+    if (@($outcome.Removed).Count -ne 3)                      { $problems += "packages: expected 3 removed (Orphan, WithPkg, Old), got $(@($outcome.Removed).Count): $(@($outcome.Removed) -join ', ')" }
+    foreach ($gone in 'WithPkg - 1.0', 'Old - 1.0') {
+        if (Test-Path -LiteralPath (Join-Path $packets $gone)) { $problems += "packages: '$gone' has a package and it was not deleted" }
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $packets 'WithPkg - 1.0\deploy.ps1'))) { $problems += "orphans: deploy.ps1 of a defined package is gone" }
+    if ($defs.Count -lt 3) { $problems += "packages: the definitions must stay (Apps.csv rows are not touched)" }
     if (-not (Test-Path -LiteralPath $weird))                 { $problems += "orphans: folder not named '<Name> - <Version>' was deleted" }
     if (-not (Test-Path -LiteralPath $noScript))              { $problems += "orphans: folder without deploy.ps1 was deleted" }
     if (-not (Test-Path -LiteralPath $outside))               { $problems += "orphans: folder OUTSIDE the package root was deleted" }
     if (@($outcome.Failed | Where-Object { $_ -match 'Outside - 1.0' }).Count -ne 1) { $problems += "orphans: the outside folder should be reported as failed: $(@($outcome.Failed) -join ' | ')" }
     if (-not (Test-Path -LiteralPath $packets))               { $problems += "orphans: the package root itself is gone" }
-    if (@($outcome.Skipped | Where-Object { $_ -match 'has a definition' }).Count -ne 3) { $problems += "orphans: expected 3 skipped for 'has a definition' (DefOnly, WithPkg, Old), got: $(@($outcome.Skipped) -join ' | ')" }
+    if (@($outcome.Skipped | Where-Object { $_ -match 'DefOnly - 1.0: no package folder' }).Count -ne 1) { $problems += "packages: a row without a package folder must be skipped, got: $(@($outcome.Skipped) -join ' | ')" }
 
     # Zeileninfo fuer den Dialogkopf
     $info = Get-InventoryRowInfo -Row $row['WithPkg']
@@ -257,5 +258,5 @@ if ($problems.Count -gt 0) {
     foreach ($pr in $problems) { [Console]::WriteLine("FAIL: $pr") }
     exit 1
 }
-[Console]::WriteLine("Main window model: row states and flags, Apps.csv roundtrip (values, own columns, BOM, header), record validation, orphan folder removal with its guards, requirement choices. PASS")
+[Console]::WriteLine("Main window model: row states and flags, Apps.csv roundtrip (values, own columns, BOM, header), record validation, package folder removal with its guards, requirement choices. PASS")
 exit 0

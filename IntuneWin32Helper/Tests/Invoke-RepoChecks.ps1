@@ -1315,24 +1315,24 @@ if ($functionsFile) {
     }
 }
 # ---------------------------------------------------------------------------
-# 33) Verwaiste Paketordner werden nur ueber Remove-OrphanPackages geloescht, und
+# 33) Verwaiste Paketordner werden nur ueber Remove-AppPackages geloescht, und
 #     die verweigert, was nicht eindeutig verwaist ist. Der Schutz liegt in der
 #     Funktion, nicht im Knopf: ein Fehler beim Aktivieren des Knopfes darf keinen
 #     Ordner treffen, der eine Definition hat. Dazu: Remove-PackageFolder (der
 #     Wurzel-Schutz) hat nur diese beiden Aufrufer - Build-AppPackage (alten Ordner
-#     vor dem Neubau entfernen) und Remove-OrphanPackages.
+#     vor dem Neubau entfernen) und Remove-AppPackages.
 # ---------------------------------------------------------------------------
 $checked++
 if ($functionsFile) {
-    $orphanFn = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-OrphanPackages' }, $true)
+    $orphanFn = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-AppPackages' }, $true)
     $loopFn3  = $functionsFile.Ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Start-InventoryLoop' }, $true)
     if (-not $orphanFn) {
-        Add-Failure "OrphanRemovalGuarded" "Remove-OrphanPackages fehlt"
+        Add-Failure "OrphanRemovalGuarded" "Remove-AppPackages fehlt"
     }
     else {
-        foreach ($guard in 'HasDefinition', 'deploy.ps1', 'Remove-PackageFolder', 'Split-Path -Leaf') {
+        foreach ($guard in 'HasPackage', 'deploy.ps1', 'Remove-PackageFolder', 'Split-Path -Leaf') {
             if ($orphanFn.Extent.Text -notmatch [regex]::Escape($guard)) {
-                Add-Failure "OrphanRemovalGuarded" ("Remove-OrphanPackages prueft/benutzt '{0}' nicht - der Schutz vor dem Loeschen eines Ordners mit Definition fehlt" -f $guard)
+                Add-Failure "OrphanRemovalGuarded" ("Remove-AppPackages prueft/benutzt '{0}' nicht - der Schutz vor dem Loeschen fremder Ordner fehlt" -f $guard)
             }
         }
     }
@@ -1343,8 +1343,8 @@ if ($functionsFile) {
     }, $true)
     foreach ($call in $removeCalls) {
         $owner = & $enclosingFunction $call
-        if ($owner -notin @('Build-AppPackage', 'Remove-OrphanPackages')) {
-            Add-Failure "OrphanRemovalGuarded" ("{0} Remove-PackageFolder in '{1}' - Ordner werden nur in Build-AppPackage und Remove-OrphanPackages entfernt" -f (Get-NodePlace $call), $owner)
+        if ($owner -notin @('Build-AppPackage', 'Remove-AppPackages')) {
+            Add-Failure "OrphanRemovalGuarded" ("{0} Remove-PackageFolder in '{1}' - Ordner werden nur in Build-AppPackage und Remove-AppPackages entfernt" -f (Get-NodePlace $call), $owner)
         }
     }
 
@@ -1357,7 +1357,7 @@ if ($functionsFile) {
         }
         else {
             $clauseText = $clause.Item2.Extent.Text
-            if ($clauseText -notmatch 'Remove-OrphanPackages') { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder loescht nicht ueber Remove-OrphanPackages" }
+            if ($clauseText -notmatch 'Remove-AppPackages') { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder loescht nicht ueber Remove-AppPackages" }
             if ($clauseText -match 'Remove-Item|Remove-PackageFolder') { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder loescht direkt (Remove-Item/Remove-PackageFolder) und umgeht die Verweigerungsregeln" }
             if ($clauseText -notmatch "Show-ConfirmDialog[^\r\n]*-Buttons\s+'?YesNo")                       { Add-Failure "OrphanRemovalGuarded" "Der Zweig RemoveFolder fragt nicht vor dem Loeschen (YesNo)" }
         }
@@ -1682,7 +1682,7 @@ if (Test-Path -LiteralPath $gitignorePath) {
 $checked++
 if ($functionsFile) {
     $flow39 = 'Read-TenantWin32Apps', 'Connect-InventoryTenant', 'Invoke-PackageBuild', 'Invoke-PackageDeploy', 'Remove-TenantWin32Apps',
-              'Show-InventoryDialog', 'Start-InventoryLoop', 'Remove-OrphanPackages', 'Open-EditDialog', 'Show-WinGetSearchDialog',
+              'Show-InventoryDialog', 'Start-InventoryLoop', 'Remove-AppPackages', 'Open-EditDialog', 'Show-WinGetSearchDialog',
               'Edit-TenantDialog', 'Get-DeployScripts'
     if (-not ($functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Format-ErrorDetail' }, $true))) {
         Add-Failure "ErrorOrigin" "Format-ErrorDetail fehlt in functions.ps1"

@@ -271,16 +271,16 @@ function Get-PackageFolderSummary {
     return [pscustomobject]@{ Files = $files.Count; Bytes = [long]$bytes }
 }
 
-function Remove-OrphanPackages {
+function Remove-AppPackages {
     <#
         .SYNOPSIS
-        Loescht Paketordner, zu denen es keine Definition in Apps.csv gibt.
+        Loescht die Paketordner der uebergebenen Zeilen (Delete package).
 
         .DESCRIPTION
-        Der einzige Weg dafuer. Er verweigert, was nicht eindeutig verwaist ist - der
-        Schutz liegt hier und nicht im Knopf, denn ein Fehler beim Aktivieren des
-        Knopfes darf keinen Ordner treffen, der eine Definition hat:
-          - eine Zeile MIT Definition wird uebersprungen,
+        Der einzige Weg dafuer. Ein Paket ist loeschbar, sobald es da ist - mit oder ohne
+        Definition (Definition und App in Intune bleiben). Er verweigert, was das Tool nicht
+        angelegt hat - der Schutz liegt hier und nicht im Knopf:
+          - eine Zeile ohne Paketordner wird uebersprungen,
           - ein Ordner, dessen Name nicht "<Name> - <Version>" ist, wird uebersprungen
             (das hat das Tool nicht angelegt),
           - ein Ordner ohne deploy.ps1 wird uebersprungen,
@@ -297,7 +297,6 @@ function Remove-OrphanPackages {
     $removed = @(); $skipped = @(); $failed = @()
     foreach ($row in @($Rows)) {
         $key = [string]$row.Key
-        if ($row.HasDefinition)                              { $skipped += ("{0}: has a definition in Apps.csv" -f $key); continue }
         if (-not $row.HasPackage -or -not $row.FullPath)     { $skipped += ("{0}: no package folder" -f $key); continue }
 
         $folder = Split-Path -Parent ([string]$row.FullPath)
