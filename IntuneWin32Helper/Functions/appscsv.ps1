@@ -18,7 +18,7 @@ function Get-AppsCsvColumns {
     $retired = @('PackageName')
     $columns = New-Object System.Collections.ArrayList
     foreach ($name in @('ProgramID', 'Publisher', 'DisplayName', 'Version', 'WinGetParams', 'SingleMSI',
-                        'InstallCmd', 'UninstallCmd', 'logoURL', 'Architecture', 'MinimumOS', 'MsiProductCode', 'Interactive', 'ArpName')) {
+                        'InstallCmd', 'UninstallCmd', 'logoURL', 'Architecture', 'MinimumOS', 'MsiProductCode', 'Interactive', 'ArpName', 'DetectionScript')) {
         $null = $columns.Add($name)
     }
     foreach ($definition in @($Definitions)) {
@@ -93,6 +93,9 @@ function Test-AppRecord {
     $version = ([string]$Record.Version).Trim()
     if (-not $name)    { return 'DisplayName is empty - the application name and the package folder come from it.' }
     if (-not $version) { return 'Version is empty - use LatestAvailable for a WinGet app.' }
+
+    $conflict = Get-DetectionConflict -Record $Record
+    if ($conflict) { return $conflict }
 
     $clash = @(@($Others) | Where-Object { ([string]$_.DisplayName).Trim() -eq $name -and ([string]$_.Version).Trim() -eq $version })
     if ($clash.Count -gt 0) {

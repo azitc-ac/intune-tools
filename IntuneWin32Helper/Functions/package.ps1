@@ -125,11 +125,19 @@ function Build-AppPackage {
 
     # für normale Pakete
     # kopieren von detect.ps1 und anpassen
-    # Einziger Aufrufer von Write-DetectionScript.
-    Write-Host "Writing detection.ps1 from template"
+    # Einzige Aufrufer von Write-DetectionScript (Vorlage) und Copy-DetectionScript (fertiges Skript aus Apps.csv).
     $arpSearchName = Get-ArpSearchName -DisplayName $AppName -ArpName ([string]$App.ArpName)
-    $null = Write-DetectionScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion -RootDir $RootDir `
-        -ProgramId $ProgramId -ArpName $arpSearchName
+    $detectionConflict = Get-DetectionConflict -Record $App
+    if ($detectionConflict) { throw $detectionConflict }
+    if (-not [string]::IsNullOrWhiteSpace([string]$App.DetectionScript)) {
+        Write-Host ("Copying detection.ps1 from DetectionScript: {0}" -f $App.DetectionScript)
+        $null = Copy-DetectionScript -AppFolder $SourcePath -ScriptPath ([string]$App.DetectionScript) -RootDir $RootDir
+    }
+    else {
+        Write-Host "Writing detection.ps1 from template"
+        $null = Write-DetectionScript -AppFolder $SourcePath -AppName $AppName -AppVersion $AppVersion -RootDir $RootDir `
+            -ProgramId $ProgramId -ArpName $arpSearchName
+    }
     # ServiceUI.exe nur fuer Pakete, die Dialoge zeigen sollen (Apps.csv
     # "Interactive"). Dieselbe Entscheidung wie im Installationsbefehl.
     if ((Get-DeployCommandLine -Interactive ([string]$App.Interactive)).NeedsServiceUI) {
@@ -177,7 +185,7 @@ function Build-AppPackage {
         -Publisher $AppPublisher -Description $desc -RootDir $RootDir -ToolVersion $ToolVersion `
         -Architecture ([string]$App.Architecture) -MinimumOS ([string]$App.MinimumOS) `
         -MsiProductCode ([string]$App.MsiProductCode) -Interactive ([string]$App.Interactive) `
-        -DefinitionFingerprint (Get-DefinitionFingerprint -Record $App)
+        -DefinitionFingerprint (Get-DefinitionFingerprint -Record $App -RootDir $RootDir)
 
     # Dateien muss weiterhin ein Mensch bereitstellen - fuer eine
     # Nicht-WinGet-App gibt es keine Quelle, aus der das Tool sie holen

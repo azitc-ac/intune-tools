@@ -38,7 +38,7 @@ try {
         $null = New-Item -ItemType Directory -Force -Path $folder
         Write-DeployScript -AppFolder $folder -AppName $name -AppVersion '1.0' -Publisher 'Test' -Description 'Installed using PSADT' `
             -RootDir $rootDir -ToolVersion '0.0.1' -Architecture 'arm64' -MinimumOS 'W11_22H2' -MsiProductCode '{11111111-2222-3333-4444-555555555555}' `
-            -DefinitionFingerprint (Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = '1.0' }))
+            -DefinitionFingerprint (Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = '1.0' }) -RootDir $rootDir)
         $path = Join-Path $folder 'deploy.ps1'
         # Stempel wie bei einem Paket aus einer anderen Vorlage setzen/entfernen.
         # Das Skript kennt -Tenant (wie jede Vorlage seit 2.0.0).
@@ -72,7 +72,7 @@ try {
     # 4) Inventar: Inhaltsloser Eintrag faellt auf
     # Was die Zeile "up to date" nennen darf: nur eine App, deren Vermerk den Stempel der Definition von heute traegt.
     # Eine App ohne Stempel (vom alten Werkzeug, von Hand) oder mit dem Stempel einer anderen Definition ist es nicht.
-    $stampOf = { param($name) Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = '1.0' }) }
+    $stampOf = { param($name) Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = '1.0' }) -RootDir $rootDir }
     $null = New-Package 'IntNoStamp' ("# ToolTemplateFingerprint: $current")
     $null = New-Package 'IntOldStamp' ("# ToolTemplateFingerprint: $current")
     $null = New-Package 'IntForeignNote' ("# ToolTemplateFingerprint: $current")
@@ -102,7 +102,7 @@ try {
     if ($row['Twice'].Intune -ne 'yes (2x, 1 without content)')                     { $problems += "inventory Twice: Intune '$($row['Twice'].Intune)'" }
 
     # 5) Der Vermerk der App: schreiben und zuruecklesen; der Anfang bleibt das Kennzeichen "von diesem Werkzeug".
-    $fp = Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = 'X'; Version = '1' })
+    $fp = Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = 'X'; Version = '1' }) -RootDir $rootDir
     $notes = Format-IntuneAppNotes -ToolVersion '2.1.1' -DefinitionFingerprint $fp
     if ($notes -notlike 'Created by IntuneWin32Helper 2.1.1*')                                  { $problems += "notes: '$notes' does not start with the tool marker" }
     if ((Get-IntuneAppDefinitionFingerprint -App ([pscustomobject]@{ notes = $notes })) -ne $fp) { $problems += "notes: stamp not read back from '$notes'" }

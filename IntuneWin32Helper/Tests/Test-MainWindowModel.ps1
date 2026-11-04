@@ -50,7 +50,7 @@ try {
         # Das Paket spiegelt die Definition (Name, Version, Herausgeber) - wie nach einem Bau von heute
         Write-DeployScript -AppFolder $folder -AppName $name -AppVersion '1.0' -Publisher 'Test' -Description 'Installed using PSADT' `
             -RootDir $rootDir -ToolVersion '0.0.1' -Architecture 'x64' -MinimumOS 'W10_20H2' -MsiProductCode '' `
-            -DefinitionFingerprint (Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = '1.0'; Publisher = $publisher })) 6>$null
+            -DefinitionFingerprint (Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = '1.0'; Publisher = $publisher }) -RootDir $rootDir) 6>$null
         $path = Join-Path $folder 'deploy.ps1'
         $text = [IO.File]::ReadAllText($path)
         $text = [regex]::Replace($text, '(?m)^#\s*ToolTemplateFingerprint:.*$', $stampLine)

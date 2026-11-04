@@ -86,7 +86,12 @@ function Get-DefinitionFingerprint {
         spiegelt sie nicht mehr. Eigene Spalten und die Reihenfolge der Spalten zaehlen nicht.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)]$Record)
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        # Tool-Ordner: loest einen relativen DetectionScript-Pfad auf, damit der INHALT des Skripts in den Stempel
+        # eingeht (sonst bliebe ein geaendertes Erkennungsskript unbemerkt: "Ready" mit dem alten detection.ps1).
+        [Parameter(Mandatory = $true)][string]$RootDir
+    )
 
     $fields = @('DisplayName', 'Version', 'Publisher', 'ProgramID', 'WinGetParams', 'SingleMSI', 'MsiProductCode', 'logoURL',
                 'InstallCmd', 'UninstallCmd', 'Interactive', 'Architecture', 'MinimumOS', 'ArpName')
@@ -96,6 +101,19 @@ function Get-DefinitionFingerprint {
         # Wahrheitswerte: "true", "TRUE" und "True" sind dieselbe Aussage
         if ($field -in 'SingleMSI', 'Interactive') { $value = $value.ToLowerInvariant() }
         $null = $builder.Append($field).Append('=').Append($value).Append("`n")
+    }
+    # Nur bei gesetztem DetectionScript: der Stempel jeder bisherigen Definition bleibt so unveraendert (sonst
+    # waere jedes vorhandene Paket auf einmal "definition changed").
+    $detectionPath = Resolve-DetectionScriptPath -Path ([string]$Record.DetectionScript) -RootDir $RootDir
+    if ($detectionPath) {
+        $null = $builder.Append('DetectionScript=').Append(([string]$Record.DetectionScript).Trim()).Append("`n")
+        $content = 'missing'
+        if (Test-Path -LiteralPath $detectionPath -PathType Leaf) {
+            $contentHash = [System.Security.Cryptography.SHA256]::Create()
+            try { $content = [BitConverter]::ToString($contentHash.ComputeHash([System.IO.File]::ReadAllBytes($detectionPath))).Replace('-', '') }
+            finally { $contentHash.Dispose() }
+        }
+        $null = $builder.Append('DetectionScriptContent=').Append($content).Append("`n")
     }
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
@@ -195,6 +213,60 @@ function Write-DetectionScript {
             -replace "#ARPNAME#", (Get-ArpSearchName -DisplayName $AppName -ArpName $ArpName) |
             Out-File $target -Encoding utf8 -Force
     }
+}
+
+function Resolve-DetectionScriptPath {
+    <#
+        Apps.csv-Spalte "DetectionScript": der Pfad eines fertigen Erkennungsskripts, absolut oder relativ zum
+        Tool-Ordner. Leer heisst: kein eigenes Skript, detection.ps1 entsteht aus der Vorlage (ArpName / WinGet).
+        Gibt den aufgeloesten Pfad zurueck, bei leerem Wert ''.
+    #>
+    param(
+        [AllowEmptyString()][AllowNull()][string]$Path,
+        [Parameter(Mandatory = $true)][string]$RootDir
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    $clean = $Path.Trim().Trim('"')
+    if ([System.IO.Path]::IsPathRooted($clean)) { return $clean }
+    return (Join-Path $RootDir $clean)
+}
+
+function Get-DetectionConflict {
+    <#
+        Eine App hat EINE Erkennungsregel: ein eigenes Skript (DetectionScript) oder der MSI-ProductCode (nativ).
+        Beides gesetzt ist ein Widerspruch - deploy.ps1 liesse still den ProductCode gewinnen. Liefert den Grund
+        oder $null. Gemeinsam benutzt von Test-AppRecord (Editor) und Build-AppPackage (von Hand editierte CSV).
+    #>
+    param([Parameter(Mandatory = $true)]$Record)
+    if (-not [string]::IsNullOrWhiteSpace([string]$Record.DetectionScript) -and -not [string]::IsNullOrWhiteSpace([string]$Record.MsiProductCode)) {
+        return 'DetectionScript and MsiProductCode are both set - an app has one detection rule. Empty one of them.'
+    }
+    return $null
+}
+
+function Copy-DetectionScript {
+    <#
+        Legt ein fertiges Erkennungsskript als detection.ps1 in den Paketordner - der Gegenpart zu
+        Write-DetectionScript (Vorlage). Build-AppPackage ist der einzige Aufrufer. Das Skript wird unveraendert
+        kopiert (Bytes, Kodierung). Es muss existieren und sich parsen lassen: ein Skript mit Syntaxfehler
+        meldete in Intune immer "nicht installiert" und die App wuerde endlos neu installiert.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$AppFolder,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string]$RootDir
+    )
+
+    $source = Resolve-DetectionScriptPath -Path $ScriptPath -RootDir $RootDir
+    if (-not $source) { throw 'Copy-DetectionScript: DetectionScript is empty.' }
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw ("DetectionScript '{0}' does not exist (Apps.csv column DetectionScript; a relative path starts at the tool folder)." -f $source) }
+    $parseErrors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseFile($source, [ref]$null, [ref]$parseErrors)
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        throw ("DetectionScript '{0}' has a syntax error (line {1}): {2}" -f $source, $parseErrors[0].Extent.StartLineNumber, $parseErrors[0].Message)
+    }
+    Copy-Item -LiteralPath $source -Destination (Join-Path $AppFolder 'detection.ps1') -Force
 }
 
 function ConvertTo-InteractiveFlag {

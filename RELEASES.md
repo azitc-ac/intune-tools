@@ -388,6 +388,31 @@ Sobald ein Lauf auf `main` gegen einen echten Tenant durch ist, gehört ein neue
 Abschnitt nach oben in diese Datei — mit Commit, Tag und Transcript-Datum.
 
 
+## Eigenes Erkennungsskript: Apps.csv-Spalte `DetectionScript` (2026-11-04)
+
+Anlass: das Paket „CbaHeartbeat“ (Aufgabe + Skript, kein Eintrag in „Apps & features“) ließ sich mit der ARP-Erkennung nicht
+beschreiben. Statt eines Sonderwegs bekommt das Werkzeug die Alternative zur Namens-/WinGet-Erkennung.
+
+- **Neue Spalte `DetectionScript`** (Pfad eines fertigen Skripts, absolut oder relativ zum Tool-Ordner; leer = wie bisher). *Build package*
+  kopiert es unverändert als `detection.ps1` ins Paket (`Copy-DetectionScript`, neben `Write-DetectionScript` aus der Vorlage; beide
+  nur aus `Build-AppPackage`), *Publish to Intune* nimmt es als Skript-Erkennungsregel. Die Datei muss existieren und sich parsen
+  lassen, sonst scheitert nur diese Zeile des Baus, ohne `detection.ps1` zu hinterlassen.
+- **Eine Regel je App:** `DetectionScript` zusammen mit `MsiProductCode` lehnen Editor (`Test-AppRecord`) und Bau (`Get-DetectionConflict`) ab.
+- **Definitionsstempel:** `Get-DefinitionFingerprint` nimmt Pfad **und Inhalt** des Skripts auf (neuer Pflichtparameter `-RootDir`). Bei leerer
+  Spalte bleibt der Stempel jeder bisherigen Definition gleich (festgeschriebener Wert `760eac61ad07`, mit der Fassung davor berechnet) –
+  sonst stünde jedes vorhandene Paket auf einmal auf „definition changed“.
+- **Editor:** Feld unter *Intune*, mitlaufender Hinweis (leer / gefunden / nicht gefunden / Widerspruch); der `ArpName`-Hinweis sagt, dass
+  er dann nur noch die abgeleitete Deinstallation steuert. `Apps.csv` im Repo trägt die neue (leere) Spalte.
+- **Prüfung 48** (`DetectionScriptOnePath`): `Write-`/`Copy-DetectionScript` nur in `Build-AppPackage`, jeder Aufruf von
+  `Get-DefinitionFingerprint` mit `-RootDir`, der Stempel enthält den Inhalt, Bau und Editor fragen `Get-DetectionConflict`, Spalte in
+  Spaltenliste, Editor und README. Neuer Test `Test-DetectionScript.ps1`; `Test-DefinitionFingerprint.ps1` um den festen Wert und die
+  Inhaltsfälle erweitert.
+- **Beifund (Linux-Klon):** drei Prüfungen in `Invoke-RepoChecks.ps1` (5, 40, 42) verglichen Pfade mit `\`; unter Linux griff die Prüfung 42 gar
+  nicht und Attrappen aus `Tests\` überdeckten die echte Signatur von `Invoke-RestMethod` (zwei falsche Befunde). Trenner-unabhängig gemacht.
+- **Nicht belegt:** *Build package* und *Publish to Intune* mit einer Zeile mit `DetectionScript` gegen einen echten Tenant und ein Paket auf
+  einem Client (Bau und Veröffentlichen laufen hier nur als Tests auf Funktionsebene, Windows-only-Tests wie `Test-MainWindowUi.ps1` und
+  die Editor-Oberfläche wurden unter Linux nicht ausgeführt); ob der Editor das Feld wie erwartet zeigt.
+
 ## Offene Feldprüfung: Hauptfenster (Stufe 1, 2026-10-09)
 
 Das Hauptfenster ersetzt die Startkacheln samt `createApps`, `deployApps` und der beiden

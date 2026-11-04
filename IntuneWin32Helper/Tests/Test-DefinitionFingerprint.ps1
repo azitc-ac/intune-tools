@@ -29,7 +29,7 @@ function Test-That([bool]$condition, [string]$what) { if (-not $condition) { $sc
 $base = [ordered]@{
     DisplayName = 'App'; Version = '1.0'; Publisher = 'Pub'; ProgramID = 'Pub.App'; WinGetParams = '--scope=machine'
     SingleMSI = ''; MsiProductCode = ''; logoURL = 'https://x/y.png'; InstallCmd = 'Start-ADTProcess -FilePath a.exe'
-    UninstallCmd = 'Uninstall-ADTApplication -Name App'; Interactive = ''; Architecture = 'x64'; MinimumOS = 'W10_20H2'; ArpName = ''
+    UninstallCmd = 'Uninstall-ADTApplication -Name App'; Interactive = ''; Architecture = 'x64'; MinimumOS = 'W10_20H2'; ArpName = ''; DetectionScript = ''
 }
 function New-Record([hashtable]$change = @{}) {
     $copy = [ordered]@{}
@@ -37,26 +37,57 @@ function New-Record([hashtable]$change = @{}) {
     foreach ($k in $change.Keys) { $copy[$k] = $change[$k] }
     [pscustomobject]$copy
 }
-$reference = Get-DefinitionFingerprint -Record (New-Record)
+$reference = Get-DefinitionFingerprint -Record (New-Record) -RootDir $rootDir
 Test-That ($reference -match '^[0-9a-f]{12}$') "fingerprint is '$reference', expected 12 hex characters"
 
 # 1) jedes Feld zaehlt
 foreach ($field in $base.Keys) {
-    $changed = Get-DefinitionFingerprint -Record (New-Record @{ $field = ([string]$base[$field] + 'x') })
+    $changed = Get-DefinitionFingerprint -Record (New-Record @{ $field = ([string]$base[$field] + 'x') }) -RootDir $rootDir
     Test-That ($changed -ne $reference) "changing $field does not change the fingerprint - a package built before that edit would pass as current"
 }
 
 # 2) was nicht zaehlt
 $withCustom = New-Record; $withCustom | Add-Member -NotePropertyName MyColumn -NotePropertyValue 'anything'
-Test-That ((Get-DefinitionFingerprint -Record $withCustom) -eq $reference) 'a custom column changed the fingerprint'
+Test-That ((Get-DefinitionFingerprint -Record $withCustom -RootDir $rootDir) -eq $reference) 'a custom column changed the fingerprint'
 $reordered = [pscustomobject][ordered]@{ ArpName = ''; MinimumOS = 'W10_20H2'; Architecture = 'x64'; Interactive = ''; UninstallCmd = $base.UninstallCmd; InstallCmd = $base.InstallCmd; logoURL = $base.logoURL; MsiProductCode = ''; SingleMSI = ''; WinGetParams = $base.WinGetParams; ProgramID = 'Pub.App'; Publisher = 'Pub'; Version = '1.0'; DisplayName = 'App' }
-Test-That ((Get-DefinitionFingerprint -Record $reordered) -eq $reference) 'the column order changed the fingerprint'
-Test-That ((Get-DefinitionFingerprint -Record (New-Record @{ DisplayName = '  App  ' })) -eq $reference) 'spaces around a value changed the fingerprint'
-$lower = Get-DefinitionFingerprint -Record (New-Record @{ Interactive = 'true'; SingleMSI = 'true' })
-Test-That ((Get-DefinitionFingerprint -Record (New-Record @{ Interactive = 'TRUE'; SingleMSI = 'True' })) -eq $lower) 'true/TRUE/True are not the same statement for Interactive and SingleMSI'
+Test-That ((Get-DefinitionFingerprint -Record $reordered -RootDir $rootDir) -eq $reference) 'the column order changed the fingerprint'
+Test-That ((Get-DefinitionFingerprint -Record (New-Record @{ DisplayName = '  App  ' }) -RootDir $rootDir) -eq $reference) 'spaces around a value changed the fingerprint'
+$lower = Get-DefinitionFingerprint -Record (New-Record @{ Interactive = 'true'; SingleMSI = 'true' }) -RootDir $rootDir
+Test-That ((Get-DefinitionFingerprint -Record (New-Record @{ Interactive = 'TRUE'; SingleMSI = 'True' }) -RootDir $rootDir) -eq $lower) 'true/TRUE/True are not the same statement for Interactive and SingleMSI'
 Test-That ($lower -ne $reference) 'Interactive/SingleMSI = true is the same as empty'
 $sparse = [pscustomobject]@{ DisplayName = 'App'; Version = '1.0' }
-Test-That ((Get-DefinitionFingerprint -Record $sparse) -match '^[0-9a-f]{12}$') 'a record with only name and version has no fingerprint'
+Test-That ((Get-DefinitionFingerprint -Record $sparse -RootDir $rootDir) -match '^[0-9a-f]{12}$') 'a record with only name and version has no fingerprint'
+
+# 2b) DetectionScript: leer aendert den Stempel NICHT (jedes vorhandene Paket bliebe sonst auf einmal "definition changed"),
+#     gesetzt zaehlen Pfad UND Inhalt des Skripts (sonst bliebe ein geaendertes Erkennungsskript unbemerkt).
+#     Der feste Wert ist der Stempel des Basisdatensatzes, berechnet mit der Fassung VOR der Spalte DetectionScript.
+Test-That ($reference -eq '760eac61ad07') "an empty DetectionScript changes the fingerprint of existing definitions: '$reference' (was 760eac61ad07)"
+Test-That ((Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = 'App'; Version = '1.0' }) -RootDir $rootDir) -eq (Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = 'App'; Version = '1.0'; DetectionScript = '  ' }) -RootDir $rootDir)) 'a blank DetectionScript differs from none'
+$detWork = Join-Path ([System.IO.Path]::GetTempPath()) ('iw32h-detstamp-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$null = New-Item -ItemType Directory -Force -Path $detWork
+try {
+    $detFile = Join-Path $detWork 'detect.ps1'
+    [IO.File]::WriteAllText($detFile, "exit 0`r`n")
+    $withScript = Get-DefinitionFingerprint -Record (New-Record @{ DetectionScript = $detFile }) -RootDir $rootDir
+    Test-That ($withScript -ne $reference) 'a DetectionScript did not change the fingerprint'
+    Test-That ($withScript -eq (Get-DefinitionFingerprint -Record (New-Record @{ DetectionScript = "  $detFile  " }) -RootDir $rootDir)) 'spaces around the DetectionScript path changed the fingerprint'
+    [IO.File]::WriteAllText($detFile, "exit 1`r`n")
+    $edited = Get-DefinitionFingerprint -Record (New-Record @{ DetectionScript = $detFile }) -RootDir $rootDir
+    Test-That ($edited -ne $withScript) 'editing the detection script did not change the fingerprint - the package would keep the old detection.ps1 as "Ready"'
+    [IO.File]::WriteAllText($detFile, "exit 0`r`n")
+    Test-That ((Get-DefinitionFingerprint -Record (New-Record @{ DetectionScript = $detFile }) -RootDir $rootDir) -eq $withScript) 'the same content gives another fingerprint'
+    $missing = Get-DefinitionFingerprint -Record (New-Record @{ DetectionScript = (Join-Path $detWork 'gone.ps1') }) -RootDir $rootDir
+    Test-That ($missing -match '^[0-9a-f]{12}$' -and $missing -ne $reference) 'a missing script has no fingerprint of its own (the build, not the inventory, reports it)'
+    # relativer Pfad: wird gegen den Tool-Ordner aufgeloest, der Inhalt geht ein
+    $relBefore = Get-DefinitionFingerprint -Record (New-Record @{ DetectionScript = 'detect.ps1' }) -RootDir $detWork
+    [IO.File]::WriteAllText($detFile, "exit 2`r`n")
+    Test-That ((Get-DefinitionFingerprint -Record (New-Record @{ DetectionScript = 'detect.ps1' }) -RootDir $detWork) -ne $relBefore) 'a relative DetectionScript is not resolved against RootDir'
+}
+finally {
+    Get-ChildItem -LiteralPath $detWork -File -ErrorAction SilentlyContinue | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+    Remove-Item -LiteralPath $detWork -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $detWork) { $problems += "cleanup: $detWork is not empty" }
+}
 
 # 3) im deploy.ps1
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ('iw32h-defstamp-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -87,7 +118,7 @@ try {
 
     # 4) Inventar
     foreach ($n in 'Same', 'Changed', 'None') {
-        $null = New-Pkg $n $(switch ($n) { 'Same' { Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = 'Same'; Version = '1.0' }) } 'Changed' { 'aaaaaaaaaaaa' } default { '' } })
+        $null = New-Pkg $n $(switch ($n) { 'Same' { Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = 'Same'; Version = '1.0' }) -RootDir $rootDir } 'Changed' { 'aaaaaaaaaaaa' } default { '' } })
     }
     $null = New-Pkg 'Orphan' $reference
     $defs = @('Same', 'Changed', 'None', 'DefOnly') | ForEach-Object { [pscustomobject]@{ DisplayName = $_; Version = '1.0' } }

@@ -159,7 +159,7 @@ function Get-AppInventory {
         else {
             $definitionStamp = Get-PackageDefinitionFingerprint -DeployScriptPath $package.FullPath
             if (-not $definitionStamp)                                                       { $row.PackageDefinition = 'unknown' }
-            elseif ($definitionStamp -eq (Get-DefinitionFingerprint -Record $row.DefinitionRecord)) { $row.PackageDefinition = 'current' }
+            elseif ($definitionStamp -eq (Get-DefinitionFingerprint -Record $row.DefinitionRecord -RootDir $RootDir)) { $row.PackageDefinition = 'current' }
             else                                                                             { $row.PackageDefinition = 'changed' }
         }
     }
@@ -209,7 +209,7 @@ function Get-AppInventory {
             if ($row.HasDefinition -and $count -eq 1 -and $emptyCount -eq 0) {
                 $appStamp = Get-IntuneAppDefinitionFingerprint -App $same[0]
                 if (-not $appStamp)                                                            { $row.IntuneDefinition = 'unknown' }
-                elseif ($appStamp -eq (Get-DefinitionFingerprint -Record $row.DefinitionRecord)) { $row.IntuneDefinition = 'current' }
+                elseif ($appStamp -eq (Get-DefinitionFingerprint -Record $row.DefinitionRecord -RootDir $RootDir)) { $row.IntuneDefinition = 'current' }
                 else                                                                           { $row.IntuneDefinition = 'changed' }
             }
         }

@@ -246,7 +246,7 @@ list from the loader.
 
 ## Apps.csv
 
-Four columns beyond the obvious ones:
+Five columns beyond the obvious ones:
 
 | Column | Empty means |
 | --- | --- |
@@ -254,6 +254,7 @@ Four columns beyond the obvious ones:
 | `MinimumOS` | `W10_20H2` |
 | `Interactive` | silent install without ServiceUI |
 | `ArpName` | the `DisplayName` - the name under which the app appears in *Apps & features* |
+| `DetectionScript` | the detection script is generated from the template (see `ArpName`, or winget) |
 
 Both go into the app's requirement rule, so an ARM64 or x86 app and an app that needs a newer
 Windows no longer have to share one hard-coded rule. Values must be ones
@@ -272,6 +273,17 @@ Both use the **same** rule: an entry whose name *starts with* `ArpName`
 (`DisplayName -like "<ArpName>*"` and `Uninstall-ADTApplication -Name '<ArpName>*' -NameMatch
 'Wildcard'`). Set it when the Intune name differs from the product's entry in the program list, or
 to be more precise - `Git` also matches `GitHub Desktop`, and the uninstall removes **every** match.
+
+`DetectionScript` is the alternative to the program-list detection for an app that leaves no entry in *Apps & features* -
+a scheduled task, a service, a file, a registry value. Give the path of a **finished** detection script (absolute, or relative
+to the tool folder); **Build package** copies it unchanged (bytes, encoding) into the package as `detection.ps1`, and
+**Publish to Intune** uses it as the script detection rule. Intune reads exit code 0 plus any output as "installed".
+- The file must exist and parse; otherwise the build of that row fails with the reason and writes no `detection.ps1`.
+- The **content** of the script goes into the definition stamp: edit the script and the package shows
+  `Outdated, rebuild: definition changed`; **Build package** and **Publish to Intune** bring the app up to date in place
+  (assignments stay). Rows without a `DetectionScript` keep their stamp.
+- An app has one detection rule: `DetectionScript` together with `MsiProductCode` is refused by the editor and by the build.
+- `ArpName` still names the search for the derived uninstall; it no longer drives the detection.
 
 `Version = LatestAvailable` marks a WinGet app: the package is a thin wrapper that installs
 through `winget` on the endpoint. Its detection checks **both** that the package id is present
@@ -326,6 +338,7 @@ The behaviour tests in `Tests\Test-*.ps1` run on their own and need no tenant:
 | `Test-ErrorDetail.ps1` | an error message carries `(file:line)` of the failing call - also on the real path (the tenant read failing), without a location the message stays as it is |
 | `Test-TenantCheck.ps1` | "Check tenant" step by step with sign-in and Graph replaced: all OK; an incomplete entry never tries to sign in; a failing sign-in, a token that only reads, a failing read and a token of another tenant each fail their own step and skip what builds on it; a token without permission claims or no JWT is a remark, not a crash; a failed check restores the previous token |
 | `Test-InstallerSuggestion.ps1` | "From installer..." against small files with the marks of Inno, NSIS and Burn: switches and file name in the command, an unknown engine is a marked guess, typed name/publisher/version stay (also with a real version resource), the uninstall search follows DisplayName/ArpName, an MSI is zero-config, and the editor suggests exactly what the package build derives |
+| `Test-DetectionScript.ps1` | `DetectionScript`: the column survives save and read, the path is resolved (absolute / relative to the tool folder), `DetectionScript` + `MsiProductCode` is refused, the script is copied byte for byte as `detection.ps1` and a missing, empty or syntactically broken one is refused without leaving a `detection.ps1`, the editor hints follow the value; the definition stamp of a row without it is unchanged (pinned value) and with it follows path **and** content |
 | `Test-LogoAndHints.ps1` | logo search by related name (exact, trimmed, word-prefix both ways, longest wins, `PDF` never takes `PDF24 Creator`, `defaultlogo` never a candidate), an explicit URL beats a guess, the live hints of the editor (Version, MsiProductCode, logoURL, ArpName), `Set-PsadtLogPath` (read-only file and folder, BOM kept, pattern missing = `$false`, and the pattern is still in the installed PSAppDeployToolkit template) |
 | `Test-WinGetIndex.ps1` | the local winget index with a real (small) SQLite database: update takes `index.db` out of the msix and counts the packages right (a one-row result must not fall apart into its columns), reads the schema as major.minor, a broken download keeps the working index, fetched only when missing or older than a day, search by id / name / moniker / publisher (also one hit, an apostrophe, newest version first, `0.10` before `0.9`), curated hits on top with the version from the index, fallback to the module, writing `catalog.json` |
 | `Test-WinGetDialog.ps1` | the search dialog through UI Automation: every control has an AutomationId, the curated list is the front page, Search / Return search, no hits and a failing search are reported, Remember writes the package into `catalog.json` (and says "already there"), Next returns name / id / version / publisher, Cancel nothing |

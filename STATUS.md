@@ -5,7 +5,7 @@ Die `IntuneWin32Helper/README.md` sagt, **wie das Tool funktioniert**; `RELEASES
 ihrem Beleg**; diese Datei sagt, **wo es steht, was im Feld gelaufen ist, was offen ist und was entschieden ist**.
 Sie fasst zusammen und verweist, sie ersetzt `RELEASES.md` nicht.
 
-Stand: 2026-10-12
+Stand: 2026-11-04
 
 Zwei Prüfungen halten die Datei ehrlich (`Tests/Invoke-RepoChecks.ps1`, Prüfung 44): jeder Abschnitt von `RELEASES.md` mit
 „Nicht belegt“ oder einem offenen Kästchen ist unten über eine Quellenzeile erwähnt (das Wort „Quelle“, ein Doppelpunkt, dann
@@ -67,6 +67,8 @@ Quelle: Offene Feldprüfung: Deploy-Plan statt blindem Anlegen (Stufe 3, 2026-10
 - „From installer…“ mit einem echten Inno-/NSIS-Setup (getestet mit Dateien, die nur die Kennung tragen); Paketbau ohne `InstallCmd` und der MSI-Weg.
   Quelle: Editor: „From installer…“ (2026-10-11)
   Quelle: Offene Feldprüfung: Hauptfenster (Stufe 1, 2026-10-09)
+- `DetectionScript` (fertiges Erkennungsskript statt ARP/WinGet): Bau und Publish mit einer solchen Zeile gegen einen echten Tenant, das Feld im Editor von Hand; getestet nur auf Funktionsebene unter Linux.
+  Quelle: Eigenes Erkennungsskript: Apps.csv-Spalte `DetectionScript` (2026-11-04)
 - Fehlerfundstelle bei Fehlern aus Modul-Cmdlets (zeigt auf den Aufruf in unserem Skript, nicht ins Modul).
   Quelle: Fehlermeldungen mit Fundstelle (2026-10-11)
 - Zwei Versionen derselben App im Tenant (`yes` für beide, kein Dubletten-Hinweis).

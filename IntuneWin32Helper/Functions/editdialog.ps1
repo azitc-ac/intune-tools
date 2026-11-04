@@ -31,13 +31,14 @@ function Get-EditHint {
     <#
         Der Hinweis unter einem Feld, der dem aktuellen Wert FOLGT (Muster aus SCCMAppHelper): er sagt, was mit
         genau diesem Wert passieren wird, nicht nur, wofuer das Feld da ist. Eine Funktion ohne Fenster, damit
-        sie testbar ist. $Values: aktuelle Feldwerte (DisplayName, Version, ArpName, MsiProductCode, logoURL).
+        sie testbar ist. $Values: aktuelle Feldwerte (DisplayName, Version, ArpName, DetectionScript, MsiProductCode, logoURL).
         Gibt $null fuer ein Feld ohne lebenden Hinweis zurueck.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Values,
-        [string]$LogoDir = ''
+        [string]$LogoDir = '',
+        [string]$RootDir = ''
     )
 
     $get = { param([string]$k) if ($Values.Contains($k)) { ([string]$Values[$k]).Trim() } else { '' } }
@@ -54,7 +55,7 @@ function Get-EditHint {
         }
         'MsiProductCode' {
             [string]$code = & $get 'MsiProductCode'
-            if (-not $code) { return 'Empty: detection.ps1 decides (program list, see ArpName). With a product code Intune detects natively, version included.' }
+            if (-not $code) { return 'Empty: detection.ps1 decides (your DetectionScript, otherwise the program list, see ArpName). With a product code Intune detects natively, version included.' }
             if ($code -notmatch '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
                 return "'$code' is not a product code - expected a GUID in braces, e.g. {23170F69-40C1-2702-2409-000001000000}."
             }
@@ -70,7 +71,19 @@ function Get-EditHint {
         }
         'ArpName' {
             $search = Get-ArpSearchName -DisplayName $name -ArpName (& $get 'ArpName')
+            if (& $get 'DetectionScript') {
+                return ("Detection is your DetectionScript. The derived uninstall looks for programs whose name STARTS WITH '{0}' (empty ArpName = DisplayName) - it removes every match." -f $search)
+            }
             return ("Detection and uninstall look for programs whose name STARTS WITH '{0}'. Empty ArpName = DisplayName. Set it when the entry in Apps & features is named differently, or to be more precise - the uninstall removes every match." -f $search)
+        }
+        'DetectionScript' {
+            $script = & $get 'DetectionScript'
+            if (-not $script) { return 'Empty: detection.ps1 is generated from the template (program list by ArpName, or winget). Set a finished script to use it instead - absolute path, or relative to the tool folder.' }
+            if (& $get 'MsiProductCode') { return 'DetectionScript and MsiProductCode are both set - an app has one detection rule. Empty one of them.' }
+            if (-not $RootDir) { return ("Detection is the script {0}, copied into the package as detection.ps1 when it is built." -f $script) }
+            $path = Resolve-DetectionScriptPath -Path $script -RootDir $RootDir
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return ("Not found: {0} - Build package needs this file." -f $path) }
+            return ("Detection is the script {0}, copied into the package as detection.ps1 when it is built. Exit code 0 plus output = installed. Change it and the package is outdated: Build package again." -f $path)
         }
     }
     return $null
@@ -156,7 +169,7 @@ function Open-EditDialog {
         'Application'  = @('DisplayName', 'Publisher', 'Version')
         'Source'       = @('ProgramID', 'WinGetParams', 'SingleMSI', 'MsiProductCode', 'logoURL')
         'Installation' = @('InstallCmd', 'UninstallCmd', 'Interactive')
-        'Intune'       = @('Architecture', 'MinimumOS', 'ArpName')
+        'Intune'       = @('Architecture', 'MinimumOS', 'ArpName', 'DetectionScript')
     }
     $known = @($groups.Values | ForEach-Object { $_ })
     $other = @($keys | Where-Object { $known -notcontains $_ })
@@ -177,6 +190,7 @@ function Open-EditDialog {
         InstallCmd     = 'PSADT code for the install section. Empty: derived from the installer in Files\ when the package is built. "From installer..." fills in the same suggestion now, so you can read and change it.'
         UninstallCmd   = 'PSADT code for the uninstall section. Empty: derived like the install command.'
         Interactive    = 'Runs the setup AS SYSTEM IN THE USER SESSION. A setup that starts its app when it is done leaves it running as SYSTEM on the desktop. Leave off unless the package must show dialogs.'
+        DetectionScript = 'A finished detection script (absolute path, or relative to the tool folder) instead of the generated one. Empty: generated from the template.'
         Architecture   = 'Empty means x64.'
         MinimumOS      = 'Empty means W10_20H2.'
     }
@@ -396,11 +410,12 @@ function Open-EditDialog {
     if ($controls.Contains('Version')) { $controls['Version'].Add_TextChanged($syncWinGet) }
     & $syncWinGet
 
-    # Hinweise, die dem Wert folgen (Get-EditHint): ArpName, MsiProductCode, logoURL, Version. Jedes Feld, das
+    # Hinweise, die dem Wert folgen (Get-EditHint): ArpName, DetectionScript, MsiProductCode, logoURL, Version. Jedes Feld, das
     # in eine dieser Aussagen eingeht, baut sie neu.
     $logoDir = $(if ($rootDir) { Join-Path $rootDir 'Logos' } else { '' })
     $liveHints = @{
-        ArpName        = @('DisplayName', 'ArpName')
+        ArpName        = @('DisplayName', 'ArpName', 'DetectionScript')
+        DetectionScript = @('DetectionScript', 'MsiProductCode')
         MsiProductCode = @('MsiProductCode')
         logoURL        = @('DisplayName', 'logoURL')
         Version        = @('DisplayName', 'Version')
@@ -410,7 +425,7 @@ function Open-EditDialog {
         foreach ($k in $controls.Keys) { $values[$k] = [string](& $getValue $k) }
         foreach ($k in $liveHints.Keys) {
             if (-not $hintBlocks.ContainsKey($k)) { continue }
-            $text = Get-EditHint -Key $k -Values $values -LogoDir $logoDir
+            $text = Get-EditHint -Key $k -Values $values -LogoDir $logoDir -RootDir $rootDir
             if ($text) { $hintBlocks[$k].Text = $text }
         }
     }

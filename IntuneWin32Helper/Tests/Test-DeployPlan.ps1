@@ -51,7 +51,7 @@ function New-TestPackage([string]$name, [string]$version, [string]$definitionSta
     $folder = Join-Path $packets "$name - $version"
     $null = New-Item -ItemType Directory -Force -Path $folder
     # Ohne Angabe traegt das Paket den Stempel der Definition (Name, Version) - es spiegelt sie also
-    if (-not $definitionStamp) { $definitionStamp = Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = $version }) }
+    if (-not $definitionStamp) { $definitionStamp = Get-DefinitionFingerprint -Record ([pscustomobject]@{ DisplayName = $name; Version = $version }) -RootDir $rootDir }
     Write-DeployScript -AppFolder $folder -AppName $name -AppVersion $version -Publisher 'Test' -Description 'Installed using PSADT' `
         -RootDir $rootDir -ToolVersion '0.0.1' -Architecture 'x64' -MinimumOS 'W10_20H2' -MsiProductCode '' -DefinitionFingerprint $definitionStamp 6>$null
 }

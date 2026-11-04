@@ -169,7 +169,7 @@ foreach ($p in $parsed.Values) {
 $funcParams = @{}
 foreach ($p in $parsed.Values) {
     # Attrappen in Tests\ ueberdecken sonst die echte Signatur (je nach Reihenfolge im Hash gewann die eine oder die andere).
-    if ($p.File.DirectoryName -like '*\Tests') { continue }
+    if ($p.File.DirectoryName -match '[\\/]Tests$') { continue }
     $defs = $p.Ast.FindAll({
         param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]
     }, $true)
@@ -1702,7 +1702,7 @@ if ($functionsFile) {
 # ---------------------------------------------------------------------------
 $checked++
 foreach ($entry40 in $parsed.Values) {
-    if ($entry40.File.FullName -like '*\Tests\*') { continue }
+    if ($entry40.File.FullName -match '[\\/]Tests[\\/]') { continue }
     $boxes40 = $entry40.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.TypeExpressionAst] -and $n.TypeName.FullName -like '*MessageBox' }, $true)
     foreach ($box in $boxes40) {
         Add-Failure "MessageBox" ("{0}:{1} [MessageBox] - Meldungen und Rueckfragen gehen ueber Show-ConfirmDialog (per UI Automation bedienbar)" -f $entry40.File.Name, $box.Extent.StartLineNumber)
@@ -1744,7 +1744,7 @@ if ($start41 -and $functionsLoader) {
 $checked++
 $seen42 = @{}
 foreach ($entry42 in $parsed.Values) {
-    if ($entry42.File.DirectoryName -notlike '*\Functions') { continue }
+    if ($entry42.File.DirectoryName -notmatch '[\\/]Functions$') { continue }
     foreach ($def42 in $entry42.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
         if ($seen42.ContainsKey($def42.Name.ToLowerInvariant())) {
             Add-Failure "FunctionOnce" ("{0} steht in {1} und {2}" -f $def42.Name, $seen42[$def42.Name.ToLowerInvariant()], $entry42.File.Name)
@@ -1901,6 +1901,73 @@ if (Test-Path -LiteralPath $template47) {
             $found47 = $updateBody47.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq $needed47 }, $true)
             if (-not $found47) { Add-Failure "PublishOnePath" ("deploy_template.ps1: der Update-Zweig ruft {0} nicht auf - ein Update liesse die Definition der App in Intune unveraendert" -f $needed47) }
         }
+    }
+}
+# ---------------------------------------------------------------------------
+# 48) Ein fertiges Erkennungsskript (Apps.csv "DetectionScript") steht NEBEN der Vorlage, nicht daneben: detection.ps1
+#     entsteht nur in Build-AppPackage (Write-DetectionScript aus der Vorlage ODER Copy-DetectionScript aus der Spalte),
+#     eine App hat nur EINE Erkennungsregel (Get-DetectionConflict im Editor UND im Bau), und der Stempel der Definition
+#     schliesst den INHALT des Skripts ein (Get-DefinitionFingerprint -RootDir) - sonst bliebe ein geaendertes Skript
+#     als "Ready" mit dem alten detection.ps1 stehen. Die Spalte selbst braucht ihr Gegenstueck: Spaltenliste, Editor, README.
+# ---------------------------------------------------------------------------
+$checked++
+$notTests48 = { param($e) $e.File.DirectoryName -notmatch '[\\/]Tests$' }
+foreach ($entry48 in $parsed.Values) {
+    if (-not (& $notTests48 $entry48)) { continue }
+    foreach ($call48 in $entry48.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+        $name48 = $call48.GetCommandName()
+        if ($name48 -in 'Write-DetectionScript', 'Copy-DetectionScript') {
+            $owner48 = & $enclosingFunction $call48
+            if ($owner48 -ne 'Build-AppPackage') {
+                Add-Failure "DetectionScriptOnePath" ("{0} {1} in '{2}' - detection.ps1 entsteht nur beim Bau (Build-AppPackage)" -f (Get-NodePlace $call48), $name48, $owner48)
+            }
+        }
+        if ($name48 -eq 'Get-DefinitionFingerprint') {
+            $names48 = @($call48.CommandElements | Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] } | ForEach-Object { $_.ParameterName })
+            if ($names48 -notcontains 'RootDir') {
+                Add-Failure "DetectionScriptOnePath" ("{0} Get-DefinitionFingerprint ohne -RootDir - der Inhalt eines DetectionScript ginge nicht in den Stempel ein" -f (Get-NodePlace $call48))
+            }
+        }
+    }
+}
+foreach ($need48 in @(@('Build-AppPackage', 'Get-DetectionConflict'), @('Build-AppPackage', 'Copy-DetectionScript'), @('Build-AppPackage', 'Write-DetectionScript'), @('Test-AppRecord', 'Get-DetectionConflict'))) {
+    $fn48 = $null
+    foreach ($entry48 in $parsed.Values) {
+        if (-not (& $notTests48 $entry48)) { continue }
+        $hit48 = $entry48.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $need48[0] }, $true) | Select-Object -First 1
+        if ($hit48) { $fn48 = $hit48 }
+    }
+    if (-not $fn48) { Add-Failure "DetectionScriptOnePath" ("{0} fehlt" -f $need48[0]); continue }
+    if (-not $fn48.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq $need48[1] }, $true)) {
+        Add-Failure "DetectionScriptOnePath" ("{0} ruft {1} nicht auf" -f $need48[0], $need48[1])
+    }
+}
+# Der Bau muss den Widerspruch auch ABLEHNEN, nicht nur abfragen: ein if auf das Ergebnis von Get-DetectionConflict mit throw.
+$build48 = $null
+foreach ($entry48 in $parsed.Values) {
+    if (-not (& $notTests48 $entry48)) { continue }
+    $hit48 = $entry48.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Build-AppPackage' }, $true) | Select-Object -First 1
+    if ($hit48) { $build48 = $hit48 }
+}
+if ($build48) {
+    $rejects48 = @($build48.FindAll({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] }, $true) | Where-Object {
+        $_.Clauses[0].Item1.Extent.Text -match 'DetectionConflict' -and
+        $_.Clauses[0].Item2.FindAll({ param($t) $t -is [System.Management.Automation.Language.ThrowStatementAst] }, $true).Count -gt 0 })
+    if (-not $rejects48.Count) { Add-Failure "DetectionScriptOnePath" "Build-AppPackage lehnt DetectionScript + MsiProductCode nicht ab (kein if auf Get-DetectionConflict mit throw) - deploy.ps1 liesse still den ProductCode gewinnen" }
+}
+$fingerprintFn48 = $null
+foreach ($entry48 in $parsed.Values) {
+    if (-not (& $notTests48 $entry48)) { continue }
+    $hit48 = $entry48.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-DefinitionFingerprint' }, $true) | Select-Object -First 1
+    if ($hit48) { $fingerprintFn48 = $hit48 }
+}
+if (-not $fingerprintFn48 -or $fingerprintFn48.Extent.Text -notmatch 'DetectionScriptContent') {
+    Add-Failure "DetectionScriptOnePath" "Get-DefinitionFingerprint nimmt den Inhalt des DetectionScript nicht in den Stempel auf"
+}
+foreach ($pair48 in @(@('Functions/appscsv.ps1', "'DetectionScript'"), @('Functions/editdialog.ps1', "'DetectionScript'"), @('README.md', '`DetectionScript`'))) {
+    $path48 = Join-Path $RepoRoot $pair48[0]
+    if (-not (Test-Path -LiteralPath $path48) -or -not ([IO.File]::ReadAllText($path48)).Contains($pair48[1])) {
+        Add-Failure "DetectionScriptOnePath" ("{0} kennt {1} nicht - die Spalte DetectionScript braucht Spaltenliste, Editor und Beschreibung (kein Knopf ohne Gegenstueck)" -f $pair48[0], $pair48[1])
     }
 }
 # ---------------------------------------------------------------------------
