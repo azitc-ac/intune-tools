@@ -10,7 +10,6 @@
 #      ein bewusster Sprung auf 2.1.0 - bleibt unangetastet.
 #
 # Einmal je Clone aktivieren:  git config core.hooksPath .githooks
-# In Cloud-Sessions erledigt das .claude/hooks/git-identity.sh automatisch.
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
