@@ -22,6 +22,9 @@ Start-ADTProcess -FilePath $ps -ArgumentList ""-NoProfile -ExecutionPolicy Bypas
 "Microsoft.VisualStudioCode";"Microsoft Corporation";"Microsoft Visual Studio Code";"LatestAvailable";"""--scope=machine""";"";"";"";"https://th.bing.com/th?id=OSK.5f25043ca841aa65a571a3ddfd2b24a5&w=46&h=46&c=11&rs=1&qlt=80&o=6&dpr=2&pid=SANGAM";"";"";"";"";"";""
 "HenriWahl.Nagstamon";"Henri Wahl";"Nagstamon";"LatestAvailable";"";"";"";"";"";"";"";"";"";"";""
 "Notepad++.Notepad++";"Notepad++ Team";"Notepad++";"LatestAvailable";"""--scope=machine""";"";"";"";"https://i.pinimg.com/736x/f9/af/0f/f9af0f3a1e27c6c401747568827f5dfd.jpg";"";"";"";"";"";""
+"";"AZITC";"Notfall-Mail Edge-App";"1.0.0";"";"";"$ps = if ([Environment]::Is64BitProcess) { ""$envWinDir\System32\WindowsPowerShell\v1.0\powershell.exe"" } else { ""$envWinDir\Sysnative\WindowsPowerShell\v1.0\powershell.exe"" }
+Start-ADTProcess -FilePath $ps -ArgumentList ""-NoProfile -ExecutionPolicy Bypass -File `""$($adtSession.DirFiles)\install.ps1`"""" -WorkingDirectory $adtSession.DirFiles -WindowStyle Hidden";"$ps = if ([Environment]::Is64BitProcess) { ""$envWinDir\System32\WindowsPowerShell\v1.0\powershell.exe"" } else { ""$envWinDir\Sysnative\WindowsPowerShell\v1.0\powershell.exe"" }
+Start-ADTProcess -FilePath $ps -ArgumentList ""-NoProfile -ExecutionPolicy Bypass -File `""$($adtSession.DirFiles)\uninstall.ps1`"""" -WorkingDirectory $adtSession.DirFiles -WindowStyle Hidden";"";"x64";"";"";"";"";"C:\Users\alex\Alexander Zarenko\work - Pakete\_notfall-mail-edgeapp\1.0.0\detect.ps1"
 "";"Oracle Inc.";"Oracle_Database_Client";"19c x64";"";"";"Start-ADTProcess -FilePath ""setup.exe"" -ArgumentList ""-silent -waitforcompletion -responsefile $($adtSession.DirFiles)\client.rsp -nowait"" -WindowStyle 'Hidden'";"Remove-ADTFolder -Path ""C:\apps\client"";""
 Remove-ADTFolder -Path ""C:\Program Files (x86)\Oracle"";""
 Remove-ADTFolder -Path ""$envCommonStartMenuPrograms\Oracle - OraClient19Home1_32bit"";""
