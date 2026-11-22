@@ -139,7 +139,7 @@ Nicht ohne Grund neu aufrollen.
 | --- | --- | --- |
 | Test | `zarenko.onmicrosoft.com` | Feldtests, Testapps „ZZ IW32H …“, danach aufräumen |
 | Weitere | `3jr2s6t19s.onmicrosoft.com` | nur lesen (Tenant-Wechsel) |
-| Fremd | `prym.com` | nicht anfassen |
+| Fremd | Kundentenant (nur im privaten Gedächtnis benannt) | nicht anfassen |
 
 - Feldtests nur im Test-Tenant; Löschen gegen einen echten Tenant braucht die ausdrückliche Freigabe des Inhabers und eine Test-App.
 - `Config/config.json` enthält Client-Secrets und gehört nicht ins Repo; Kopien davon im Arbeitsverzeichnis werden gelöscht.
