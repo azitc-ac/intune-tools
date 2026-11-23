@@ -35,6 +35,7 @@ Remove-ADTRegistryKey -Key ""HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Service
 # Gruppen entfernen;""
 Get-LocalGroup ora* | Remove-LocalGroup";"https://5.imimg.com/data5/SELLER/Default/2022/7/FT/WW/IM/7756102/oracle-database-enterprise-edition-license-1-processor.png";"";"";"";"";"";""
 "geeksoftwareGmbH.PDF24Creator";"geek software GmbH";"PDF24 Creator";"LatestAvailable";"""--scope=machine""";"";"";"";"https://tools.pdf24.org/static/img/pageIcons/svg/default.svg?v=5cae54fd";"";"";"";"";"";""
+"geeksoftwareGmbH.PDF24Creator";"geek software GmbH";"PDF24 Creator (ARM64)";"LatestAvailable";"""--scope=machine""";"";"";"";"https://tools.pdf24.org/static/img/pageIcons/svg/default.svg?v=5cae54fd";"arm64";"";"";"";"";""
 "TrackerSoftware.PDF-XChangeEditor";"Tracker Software Products (Canada) Ltd.";"PDF-XChange Editor";"LatestAvailable";"""--scope=machine""";"";"";"";"https://pdf-xchange.de/wp-content/uploads/2025/05/cropped-box-version-6-klein.png";"";"";"";"";"";""
 "NGWIN.PicPick";"NGWIN";"PicPick";"LatestAvailable";"""--scope=machine""";"";"";"";"https://picpick.app/static/logo-74929f92cead79160a18846cfc0e703b.png";"";"";"";"";"";""
 "Microsoft.PowerShell";"Microsoft Corporation";"PowerShell";"LatestAvailable";"""--scope=machine""";"";"";"";"https://store-images.s-microsoft.com/image/apps.2475.13883721464006213.e7408f78-281f-4d17-9448-de93c5af760c.117a2901-b635-43e2-9ff1-38cbb11784ca?h=210";"";"";"";"";"";""
