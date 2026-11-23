@@ -162,8 +162,8 @@ function Build-AppPackage {
         $null = Insert-Commands -Uninstall $UninstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
     }
     if($AppVersion -eq "LatestAvailable"){
-        $InstallCmdInternal = Get-WinGetCommands -type Install -id $ProgramId -wgparams $winGetParams
-        $UninstallCmdInternal= Get-WinGetCommands -type Uninstall -id $ProgramId -wgparams $winGetParams
+        $InstallCmdInternal = Get-WinGetCommands -type Install -id $ProgramId -wgparams $winGetParams -Architecture ([string]$App.Architecture)
+        $UninstallCmdInternal= Get-WinGetCommands -type Uninstall -id $ProgramId -wgparams $winGetParams -Architecture ([string]$App.Architecture)
         $null = Insert-Commands -Install $InstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
         $null = Insert-Commands -Uninstall $UninstallCmdInternal -FilePath "$SourcePath\in\Invoke-AppDeployToolkit.ps1"
     }

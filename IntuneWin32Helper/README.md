@@ -260,6 +260,11 @@ Both go into the app's requirement rule, so an ARM64 or x86 app and an app that 
 Windows no longer have to share one hard-coded rule. Values must be ones
 `New-IntuneWin32AppRequirementRule` accepts.
 
+For a WinGet app (`LatestAvailable`), a single architecture (`arm64`, `x64`, `x86`) also becomes
+`--architecture <value>` on `winget install`, so winget takes that installer - never on `winget uninstall`,
+which does not accept the option. Empty and mixed values (`x64x86`, `AllWithARM64`) leave the choice to winget.
+`WinGetParams` still goes into both commands.
+
 `Interactive = true` is for the rare package that must show PSAppDeployToolkit dialogs - for
 example "close the running application first". Such a package gets `ServiceUI.exe` and runs
 without `-DeployMode Silent`. Everything else installs silently in session 0 and never touches the

@@ -319,12 +319,32 @@ function Insert-Commands {
     Write-Host "Code successfully added after: $($insertedMarkers.Keys -join ', ')"
 }
 
+function Get-WinGetArchitectureArgument {
+    <#
+        Das winget-Argument zur Spalte Architecture, oder '' wenn keins dazugehoert.
+        Nur eindeutige Werte gehen an winget (x64, x86, arm64). Leer (Anforderung x64,
+        aber keine Vorgabe an winget) und gemischte Werte (x64x86, AllWithARM64) lassen
+        winget selbst waehlen.
+        Gilt NUR fuer winget install: winget uninstall kennt --architecture nicht
+        (MS-Doku uninstall.md). Einziger Aufrufer: get-WinGetCommands, nur im Install-Teil.
+    #>
+    param([AllowEmptyString()][string]$Architecture = '')
+    switch (([string]$Architecture).Trim().ToLowerInvariant()) {
+        'x64'   { return '"--architecture", "x64"' }
+        'x86'   { return '"--architecture", "x86"' }
+        'arm64' { return '"--architecture", "arm64"' }
+        default { return '' }
+    }
+}
+
 function get-WinGetCommands{
     param(
         [ValidateSet("Install", "Uninstall")]
         [string]$type,
         [string]$id,
-        [string]$wgparams
+        [string]$wgparams,
+        # Spalte Architecture aus Apps.csv. Wirkt nur beim Install, beim Uninstall nie.
+        [AllowEmptyString()][string]$Architecture = ''
     )
 
 $WingetDefaultCmdsPart1= @'
@@ -356,7 +376,8 @@ $arguments = @(
     "--id", "<WINGETPROGRAMID>"
     "--silent"
     "--accept-source-agreements"
-    $accpackagree    
+    $accpackagree
+    <WINGETARCH>
 ) + "<WINGETPARAMS>"
 '@
 $WinGetUninstallArgs = @'
@@ -377,7 +398,8 @@ Write-ADTLogEntry $result
 '@
 
     $WingetDefaultCmdsPart1 = $WingetDefaultCmdsPart1 -replace "<ACT>", $type -replace "<WINGETPROGRAMID>", $id
-    $WinGetInstallArgs = $WinGetInstallArgs -replace "<WINGETPARAMS>", $wgparams -replace "<WINGETPROGRAMID>", $id -replace "<ACT>", $type
+    $WinGetInstallArgs = $WinGetInstallArgs -replace "<WINGETPARAMS>", $wgparams -replace "<WINGETPROGRAMID>", $id -replace "<ACT>", $type `
+        -replace "<WINGETARCH>", (Get-WinGetArchitectureArgument -Architecture $Architecture)
     $WinGetUninstallArgs = $WinGetUninstallArgs -replace "<WINGETPARAMS>", $wgparams -replace "<WINGETPROGRAMID>", $id -replace "<ACT>", $type
 
     switch ($type) {
