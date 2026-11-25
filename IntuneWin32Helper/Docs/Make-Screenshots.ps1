@@ -180,6 +180,6 @@ foreach ($shot in $shots) {
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', ('"{0}"' -f $PSCommandPath), '-Child', '-Scenario', $shot.Scenario, '-OutFile', ('"{0}"' -f $fresh))
     if (-not $process.WaitForExit(120000)) { Stop-Process -Id $process.Id -Force; throw "$($shot.Scenario): das Fenster schloss sich nicht" }
     if (-not (Test-Path -LiteralPath $fresh)) { throw "$($shot.Scenario): kein Bild entstanden, das alte bleibt (Exit $($process.ExitCode); 3 = das Fenster malte nichts, die Sitzung ist getrennt oder gesperrt)" }
-    Move-Item -LiteralPath $fresh -Destination $target -Force
+    Move-Item -LiteralPath $fresh -Destination $target -Force   # Datei, kein Ordner (Pruefung 49)
     '{0}: {1:N0} KB' -f $shot.File, ((Get-Item -LiteralPath $target).Length / 1KB)
 }

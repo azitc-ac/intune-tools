@@ -246,7 +246,7 @@ function Update-WinGetIndex {
         Remove-Item -LiteralPath $fresh -Force -ErrorAction SilentlyContinue
         throw ("The downloaded index could not be read: {0}" -f $_.Exception.Message)
     }
-    Move-Item -LiteralPath $fresh -Destination $target -Force
+    Move-Item -LiteralPath $fresh -Destination $target -Force   # Datei, kein Ordner (Pruefung 49)
 
     [pscustomobject]@{ downloaded = (Get-Date).ToString('o'); packages = $count; schema = $schema; source = $script:WinGetIndexUrl } |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $folder 'index.json') -Encoding UTF8

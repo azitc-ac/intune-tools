@@ -67,6 +67,52 @@ function Set-PsadtLogPath {
     return $true
 }
 
+function Move-IntoFolder {
+    <#
+        .SYNOPSIS
+        Verschiebt Dateien und Ordner in einen Zielordner - ganz oder gar nicht.
+
+        .DESCRIPTION
+        Move-Item auf einen Ordner ist unter Windows PowerShell 5.1 NICHT atomar: ist darin eine
+        Datei offen (FileShare Read, ohne Delete; z. B. der Virenscanner auf der frisch angelegten
+        Vorlage), wirft es, hat aber einen Teil schon verschoben. Ohne -ErrorAction Stop lief der
+        Bau dann sogar weiter und packte ein halbes Paket (gemessen 25.11.2026, claude-memory
+        _wissen/ps51-move-item-nicht-atomar.md).
+
+        Hier geht jeder Eintrag per [IO.Directory]::Move bzw. [IO.File]::Move - ein Umbenennen,
+        das ganz oder gar nicht gelingt. Quelle und Ziel liegen im selben Paketordner, also auf
+        demselben Volume. Scheitert ein Eintrag, werden die schon bewegten zurueckgelegt und es
+        wird geworfen. Geprueft: Tests/Test-MoveIntoFolder.ps1 (Windows PowerShell 5.1) und
+        Invoke-RepoChecks.ps1 Pruefung 49.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Items,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    $done = New-Object System.Collections.Generic.List[object]
+    try {
+        foreach ($item in $Items) {
+            $target = Join-Path $Destination $item.Name
+            if (Test-Path -LiteralPath $target) { throw "'$target' existiert schon" }
+            if ($item.PSIsContainer) { [System.IO.Directory]::Move($item.FullName, $target) }
+            else { [System.IO.File]::Move($item.FullName, $target) }
+            $done.Add([pscustomobject]@{ From = $item.FullName; To = $target; Dir = [bool]$item.PSIsContainer })
+        }
+    } catch {
+        $reason = $_.Exception.Message
+        $stuck = @()
+        for ($i = $done.Count - 1; $i -ge 0; $i--) {
+            $d = $done[$i]
+            try {
+                if ($d.Dir) { [System.IO.Directory]::Move($d.To, $d.From) } else { [System.IO.File]::Move($d.To, $d.From) }
+            } catch { $stuck += $d.To }
+        }
+        $state = if ($stuck) { " Nicht zurueckgelegt: $($stuck -join ', ')." } else { ' Alles liegt wieder am alten Platz.' }
+        throw "Verschieben nach '$Destination' gescheitert: $reason.$state"
+    }
+}
+
 function Build-AppPackage {
     <#
         .SYNOPSIS
@@ -113,10 +159,10 @@ function Build-AppPackage {
 
     # erstellen von \in und \out, move eine ebene tiefer nach \in,
     Write-Host "Moving data to .\in"
-    $psadtdirs = Get-ChildItem $SourcePath
+    $psadtdirs = @(Get-ChildItem -LiteralPath $SourcePath)
     $null = New-Item -ItemType Directory -Path "$SourcePath\in"
     $null = New-Item -ItemType Directory -Path "$SourcePath\out"
-    $psadtdirs | ForEach-Object { Move-Item -LiteralPath $_.FullName -Destination "$SourcePath\in" }
+    Move-IntoFolder -Items $psadtdirs -Destination "$SourcePath\in"
 
     # PSADT soll in die IME-Logs schreiben
     if (-not (Set-PsadtLogPath -ConfigFile "$SourcePath\in\Config\config.psd1")) {

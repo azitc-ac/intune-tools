@@ -1971,6 +1971,33 @@ foreach ($pair48 in @(@('Functions/appscsv.ps1', "'DetectionScript'"), @('Functi
     }
 }
 # ---------------------------------------------------------------------------
+# 49) Move-Item auf einen Ordner ist unter Windows PowerShell 5.1 nicht atomar: offene Datei im Ordner ->
+#     Fehler, aber ein Teil schon verschoben (gemessen 25.11.2026; Build-AppPackage packte so ein halbes
+#     Paket). Ordner gehen ueber Move-IntoFolder ([IO.Directory]::Move). Jedes Move-Item ausserhalb von
+#     Tests/ traegt am Zeilenende "# Datei, kein Ordner" - die Abwaegung steht an der Stelle, nicht im Kopf.
+#     Verhalten: Tests/Test-MoveIntoFolder.ps1.
+# ---------------------------------------------------------------------------
+$checked++
+foreach ($entry49 in $parsed.Values) {
+    if ($entry49.File.DirectoryName -match '[\\/]Tests$') { continue }
+    $lines49 = [IO.File]::ReadAllLines($entry49.File.FullName)
+    $moves49 = $entry49.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in @('Move-Item', 'move', 'mi', 'mv') }, $true)
+    foreach ($m49 in $moves49) {
+        if ($lines49[$m49.Extent.EndLineNumber - 1] -notmatch '#\s*Datei, kein Ordner') {
+            Add-Failure "NoFolderMoveItem" ("{0} Move-Item ohne Vermerk '# Datei, kein Ordner' - auf Ordnern ist es unter PS 5.1 nicht atomar; Ordner ueber Move-IntoFolder ([IO.Directory]::Move)" -f (Get-NodePlace $m49))
+        }
+    }
+}
+if ($functionsFile) {
+    $into49 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Move-IntoFolder' }, $true) | Select-Object -First 1
+    $build49 = $functionsFile.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Build-AppPackage' }, $true) | Select-Object -First 1
+    if (-not $into49) { Add-Failure "NoFolderMoveItem" "Move-IntoFolder fehlt" }
+    elseif (-not $into49.Extent.Text.Contains('[System.IO.Directory]::Move(')) { Add-Failure "NoFolderMoveItem" "Move-IntoFolder verschiebt Ordner nicht per [System.IO.Directory]::Move" }
+    if ($build49 -and -not $build49.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Move-IntoFolder' }, $true)) {
+        Add-Failure "NoFolderMoveItem" "Build-AppPackage legt die Vorlage nicht ueber Move-IntoFolder nach \in"
+    }
+}
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 Write-Host ""

@@ -96,7 +96,7 @@ function Resize-IconFile {
         }
         finally { $source.Dispose() }
 
-        Move-Item -LiteralPath $temp -Destination $Destination -Force
+        Move-Item -LiteralPath $temp -Destination $Destination -Force   # Datei, kein Ordner (Pruefung 49)
         Write-Host ("Icon normalised to {0}x{0}." -f $Size) -ForegroundColor DarkGray
         return $true
     }
